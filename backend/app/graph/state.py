@@ -152,7 +152,8 @@ class GraphState(TypedDict, total=False):
     intent_confidence: float            # 意图置信度（0.0~1.0）
     needs_clarification: bool           # 是否需要澄清
     clarification_question: str         # 澄清问题（needs_clarification=True 时）
-    pre_retrieval_results: list[dict[str, Any]]  # 预检索结果（Phase 1 返回空列表）
+    pre_retrieval_results: list[dict[str, Any]]  # RAG 预检索结果（Phase 2 由 rag_retrieval 节点写入）
+    rag_fallback_message: str                    # RAG 检索无结果时的降级提示文案
 
     # ============ Planner 输出 ============
     task_steps: list[TaskStep]          # 任务步骤列表
@@ -223,6 +224,7 @@ def create_initial_state(
         needs_clarification=False,
         clarification_question="",
         pre_retrieval_results=[],
+        rag_fallback_message="",
         task_steps=[],
         task_complexity=0.0,
         plan_reasoning="",

@@ -195,6 +195,56 @@ async def clarify_node(
 
 
 # ============================================================
+# RAG 检索节点（Phase 2）
+# ============================================================
+
+async def rag_retrieval_node(
+    state: GraphState,
+    vector_store: Any,
+    config: AppConfig,
+) -> dict[str, Any]:
+    """
+    RAG 预检索节点：在 Supervisor 之后、Planner 之前执行知识库检索。
+
+    根据意图从知识库中检索相关信息，注入到 state 的 pre_retrieval_results。
+    当 vector_store 为 None（L3 未启用）时，静默跳过。
+    """
+    if vector_store is None:
+        # L3 未启用，直接跳过
+        return {"pre_retrieval_results": []}
+
+    user_input = state.get("user_input", "")
+    user_id = state.get("user_id", "default")
+    intent = state.get("intent", "")
+
+    try:
+        from app.tools.rag.retriever import RAGRetriever
+
+        rag_config = {
+            "retrieval_top_k": config.memory.l3_knowledge.retrieval_top_k,
+            "importance_threshold": config.memory.l3_knowledge.importance_threshold,
+        }
+        retriever = RAGRetriever(vector_store, rag_config)
+        result = await retriever.retrieve_for_query(user_input, user_id, intent)
+
+        logger.info(
+            "RAG 检索完成",
+            mode=result.mode,
+            retrieval_count=result.retrieval_count,
+            latency_ms=result.latency_ms,
+            intent=intent,
+        )
+
+        return {
+            "pre_retrieval_results": result.context or [],
+            "rag_fallback_message": result.fallback_message,
+        }
+    except Exception as e:
+        logger.warning("RAG 检索失败，降级为空结果", error=str(e))
+        return {"pre_retrieval_results": []}
+
+
+# ============================================================
 # Graph 构建器
 # ============================================================
 
@@ -212,12 +262,14 @@ class GraphBuilder:
         tool_registry: Any,
         memory: Any,
         reflection_strategy: ReflectionStrategy,
+        vector_store: Any = None,
     ):
         self.config = config
         self.llm_factory = llm_factory
         self.tool_registry = tool_registry
         self.memory = memory
         self.reflection_strategy = reflection_strategy
+        self.vector_store = vector_store  # Phase 2: DirectVectorStore | None
 
         # 创建 Agent 实例
         from app.agents.factory import AgentFactory
@@ -253,8 +305,13 @@ class GraphBuilder:
         async def _clarify(state: GraphState) -> dict[str, Any]:
             return await clarify_node(state, self.config, self.llm_factory)
 
+        # Phase 2: RAG 检索节点
+        async def _rag_retrieval(state: GraphState) -> dict[str, Any]:
+            return await rag_retrieval_node(state, self.vector_store, self.config)
+
         workflow.add_node("chat_simple", _chat_simple)
         workflow.add_node("clarify", _clarify)
+        workflow.add_node("rag_retrieval", _rag_retrieval)
 
         # ============ 添加边 ============
 
@@ -268,13 +325,16 @@ class GraphBuilder:
             {
                 "chat_simple": "chat_simple",
                 "clarify": "clarify",
-                "planner": "planner",
+                "planner": "rag_retrieval",  # Phase 2: 非 chitchat/clarify → RAG → Planner
             },
         )
 
         # 闲聊/澄清 → Scribe（直接结束）
         workflow.add_edge("chat_simple", "scribe")
         workflow.add_edge("clarify", "scribe")
+
+        # RAG 检索 → Planner
+        workflow.add_edge("rag_retrieval", "planner")
 
         # Planner → Executor
         workflow.add_edge("planner", "executor")

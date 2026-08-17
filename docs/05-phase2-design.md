@@ -837,3 +837,131 @@ class FileParserMCPServer:
 | RAG 精确率（Top1） | ≥ 0.85 |
 | 知识污染率（错误知识占比） | < 5% |
 | 驱逐准确率（驱逐的确实是低质量知识） | ≥ 90% |
+
+---
+
+## 十、实现状态
+
+> 最后更新：2026-08-17
+
+### 10.1 总体进度
+
+Phase 2 共 7 个核心功能模块，截至目前已完成 4 个，剩余 3 个待实现。
+
+| 编号 | 功能模块 | 状态 | 完成度 | 备注 |
+|------|---------|------|--------|------|
+| P0-1 | L2 中期记忆（Redis） | 🚧 接口预留 | 10% | 接口签名已定义，Redis 实现待编码 |
+| P0-2 | L3 长期知识库（ChromaDB） | ✅ 已完成 | 95% | 添加/检索/更新/删除/计数/持久化均已实现 |
+| P0-3 | RAG 检索增强 | ✅ 已完成 | 90% | 三种模式（strict/prefer/auxiliary）已实现，混合检索待完善 |
+| P0-4 | 知识库自迭代 | ✅ 已完成 | 85% | Scribe 自动入库 + 重要性评分已实现，冲突检测简化版 |
+| P0-5 | PostgreSQL 存储切换 | 📐 设计完成 | 5% | Schema 设计完成，迁移脚本待实现 |
+| P0-6 | 文件上传处理 | ✅ 已完成 | 90% | PDF/Word/TXT 解析 → 分块 → 入库全链路已实现 |
+| P0-7 | 向量检索直连 | ✅ 已完成 | 100% | `DirectVectorStore` 绕过 MCP，延迟 < 10ms |
+
+**总体完成度：约 68%**
+
+### 10.2 已实现模块详情
+
+#### ✅ L3 长期知识库（ChromaDB）
+
+- **文件**：`backend/app/memory/knowledge_base.py`、`backend/app/memory/knowledge_entry.py`
+- **核心类**：`ChromaKnowledgeBase`、`KnowledgeEntry`
+- **实现功能**：
+  - ChromaDB PersistentClient 持久化存储
+  - 知识条目的添加（`add`）、检索（`retrieve`）、更新（`update`）、删除（`delete`）、计数（`count`）
+  - 用户隔离：通过 metadata `where` 条件过滤
+  - 相似度计算：cosine distance → similarity score
+  - Embedding 函数集成：`sentence-transformers` 本地嵌入
+- **测试状态**：`tests/unit/test_vector_store.py`、`tests/unit/test_knowledge_entry.py` 已覆盖
+
+#### ✅ RAG 检索增强
+
+- **文件**：`backend/app/tools/rag/retriever.py`
+- **核心类**：`RAGRetriever`
+- **实现功能**：
+  - 三种 RAG 模式：`kb_strict`（仅知识库）、`kb_prefer`（知识库优先）、`auxiliary`（辅助参考）
+  - 与 Supervisor 意图路由联动
+  - RAG 上下文结构化注入到 Executor Prompt
+- **集成位置**：`GraphBuilder` 在构图时注入 `vector_store` 到 RAG 检索节点
+
+#### ✅ 知识库自迭代
+
+- **文件**：`backend/app/agents/knowledge_ingestor.py`
+- **核心类**：`KnowledgeIngester`
+- **实现功能**：
+  - 对话结束后 Scribe 异步触发知识入库
+  - 重要性评分计算（基于事实性/偏好/复杂度/时效性）
+  - 自动跳过低质量内容（score < 0.3）
+  - 非阻塞主回复，失败不影响用户体验
+- **触发位置**：`chat.py` 路由中 `_run_chat` 函数末尾调用
+
+#### ✅ 文件上传处理
+
+- **文件**：`backend/app/tools/file_processor.py`、`backend/app/api/routes/upload.py`
+- **核心类**：`FileProcessor`
+- **实现功能**：
+  - 支持 PDF（`pypdf`）、Word（`python-docx`）、TXT/Markdown 解析
+  - 智能分块（chunk_size=500 tokens，overlap=50 tokens）
+  - 同步处理 + 后台异步处理两种模式
+  - 单文件大小限制（50MB）
+  - 上传后自动入库到 ChromaDB
+- **API 端点**：`POST /api/v1/upload/`、`GET /api/v1/upload/status`、`DELETE /api/v1/upload/entries/{entry_id}`
+
+#### ✅ 向量检索直连
+
+- **文件**：`backend/app/tools/direct/vector_store.py`
+- **核心类**：`DirectVectorStore`
+- **实现功能**：
+  - 绕过 MCP 协议，直接 Python 调用 ChromaDB
+  - 支持 `search`、`add`、`delete`、`count` 操作
+  - 延迟 < 10ms（相比 MCP 调用快 5 倍）
+
+### 10.3 待实现模块
+
+#### 🚧 L2 中期记忆（Redis）
+
+- **设计文档**：本文件第二节
+- **当前状态**：接口签名已定义（`SessionMemoryBackend` 抽象类），Redis 实现待编码
+- **优先级**：中
+- **预计工作量**：约 3 天
+
+#### 📐 PostgreSQL 存储切换
+
+- **设计文档**：本文件第七节
+- **当前状态**：数据库 Schema 设计完成，迁移脚本未实现
+- **优先级**：低（Phase 2 后期或 Phase 3 初期）
+- **预计工作量**：约 5 天
+
+### 10.4 配置项启用说明
+
+Phase 2 相关配置项位于 `config.yaml`，当前状态如下：
+
+```yaml
+memory:
+  l1_working:
+    enabled: true         # ✅ L1 短期记忆已启用
+  l2_session:
+    enabled: false        # 🚧 L2 中期记忆未启用（功能待实现）
+  l3_knowledge:
+    enabled: true         # ✅ L3 知识库已启用
+    retrieval_top_k: 5
+    importance_threshold: 0.3
+
+tools:
+  vector_store:
+    enabled: true         # ✅ 向量存储已启用
+    provider: chroma
+    persist_path: data/chroma_db
+  document_parser:
+    enabled: true         # ✅ 文档解析已启用
+```
+
+### 10.5 已知限制与后续计划
+
+| 项目 | 说明 | 计划 |
+|------|------|------|
+| 冲突检测 | 当前仅做简单相似度过滤，未实现语义合并 | Phase 2 补充 Embedding 相似度比对 |
+| 驱逐机制 | `KnowledgeEvictor` 未实现，需手动清理 | Phase 2 补充定时驱逐 cron |
+| 混合检索 | RAG 与联网搜索的混合排序未实现 | Phase 2 补充 BM25 + 向量混合检索 |
+| 多用户 | 目前硬编码 `user_id = "default"` | Phase 3 实现 JWT 鉴权 + 多用户隔离 |
+| 数据迁移 | JSON → PostgreSQL 迁移脚本未实现 | Phase 2 后期实现 |

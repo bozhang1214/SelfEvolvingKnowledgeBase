@@ -180,12 +180,12 @@ class KnowledgeBaseBackend(ABC):
     """
 
     @abstractmethod
-    async def add(self, entry: dict) -> str:
+    async def add(self, entry: Any) -> str:
         """
         添加知识条目。
 
         Args:
-            entry: 知识条目字典，应包含 content、metadata 等字段
+            entry: KnowledgeEntry 实例或可转换为 KnowledgeEntry 的字典
 
         Returns:
             新条目的 entry_id
@@ -198,7 +198,8 @@ class KnowledgeBaseBackend(ABC):
         query: str,
         user_id: str | None = None,
         top_k: int = 5,
-    ) -> list[dict]:
+        min_score: float = 0.3,
+    ) -> list[Any]:
         """
         检索相关知识条目。
 
@@ -206,9 +207,10 @@ class KnowledgeBaseBackend(ABC):
             query: 查询文本
             user_id: 用户 ID（用于权限过滤，可选）
             top_k: 返回的最相关条目数
+            min_score: 最小相似度阈值（0.0~1.0）
 
         Returns:
-            知识条目字典列表，按相关性倒序排列
+            KnowledgeEntry 列表，按相关性倒序排列
         """
         ...
 
@@ -219,5 +221,53 @@ class KnowledgeBaseBackend(ABC):
 
         Args:
             entry_id: 条目 ID
+        """
+        ...
+
+    @abstractmethod
+    async def count(self, user_id: str | None = None) -> int:
+        """
+        返回知识库中的条目总数。
+
+        Args:
+            user_id: 用户 ID（None 表示所有用户）
+
+        Returns:
+            条目总数
+        """
+        ...
+
+    @abstractmethod
+    async def get(self, entry_id: str) -> Any | None:
+        """
+        根据 ID 获取单个知识条目。
+
+        Args:
+            entry_id: 条目 ID
+
+        Returns:
+            KnowledgeEntry 实例，若条目不存在返回 None
+        """
+        ...
+
+    @abstractmethod
+    async def find_similar(
+        self,
+        query: str,
+        user_id: str | None = None,
+        threshold: float = 0.8,
+        top_k: int = 10,
+    ) -> list[Any]:
+        """
+        查找相似条目（用于冲突检测）。
+
+        Args:
+            query: 查询文本
+            user_id: 用户 ID
+            threshold: 最小相似度阈值
+            top_k: 返回最大条目数
+
+        Returns:
+            相似度 >= threshold 的 KnowledgeEntry 列表
         """
         ...

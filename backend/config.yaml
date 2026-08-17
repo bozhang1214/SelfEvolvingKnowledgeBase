@@ -24,43 +24,44 @@ llm:
   retry_backoff_seconds: [1, 2]
 
   roles:
-    supervisor:
+    supervisor:                        # 监督者：意图识别 + 路由决策（快思考，强制 JSON 输出）
       model: deepseek-chat
-      temperature: 0.1
-      max_tokens: 500
+      temperature: 0.1                 # 低温度保证分类稳定性
+      max_tokens: 500                  # 意图分类输出简短
       response_format: json
-    planner:
+    planner:                           # 规划者：任务拆解（慢思考，复杂 CoT 推理）
       model: deepseek-reasoner
-      temperature: 0.2
-      max_tokens: 2000
+      temperature: 0.2                 # 较低温度保证规划可控
+      max_tokens: 2000                 # Task List 可能较长
       response_format: json
-    executor:
+    executor:                          # 执行器：工具调用 + 草稿生成（快思考）
       model: deepseek-chat
-      temperature: 0.3
-      max_tokens: 2000
-    critic:
+      temperature: 0.3                 # 适度发散，生成自然答案
+      max_tokens: 2000                 # 草稿答案需要足够长度
+    critic:                            # 审查者（默认）：简单反思评估（快思考，省钱）
       model: deepseek-chat
-      temperature: 0.0
-      max_tokens: 1000
+      temperature: 0.0                 # 零温度保证评分一致性
+      max_tokens: 1000                 # 评分输出简短
       response_format: json
-    critic_complex:
+    critic_complex:                    # 审查者（复杂任务）：深度反思（慢思考，高幻觉检出）
       model: deepseek-reasoner
       temperature: 0.0
       max_tokens: 2000
       response_format: json
-    scribe:
+    scribe:                            # 记录员：摘要 + 重要性评分（快思考）
       model: deepseek-chat
       temperature: 0.2
-      max_tokens: 800
+      max_tokens: 800                  # 摘要控制在 200 字以内
       response_format: json
-    chat_simple:
+    chat_simple:                       # 闲聊直通：跳过 Plan/Do 节点
       model: deepseek-chat
-      temperature: 0.7
+      temperature: 0.7                 # 高温度保证闲聊自然度
       max_tokens: 1000
 
+  # 降级链：reasoner 不可用 → 降级 chat；chat 不可用 → 返回错误提示
   fallback:
-    reasoner_to_chat: true
-    chat_to_error: true
+    reasoner_to_chat: true             # 开启 reasoner → chat 自动降级
+    chat_to_error: true                # 开启 chat → 错误提示（触发限流/熔断）
 
 # ============ 意图路由 ============
 intent_routing:
@@ -85,154 +86,171 @@ intent_routing:
 
 # ============ 三层记忆 ============
 memory:
+  # L1 短期记忆：工作记忆，滑动窗口 + 触发压缩
   l1_working:
     enabled: true
-    max_turns: 8
-    max_tokens: 3000
-    hard_token_limit: 4000
-    compress_strategy: hierarchical
-    max_compressed_summaries: 3
+    max_turns: 8                        # 最多保留 8 轮对话
+    max_tokens: 3000                    # 软阈值：超过则触发压缩
+    hard_token_limit: 4000              # 硬上限：永不超过
+    compress_strategy: hierarchical     # 压缩策略：分层压缩
+    max_compressed_summaries: 3         # 最多保留 3 条历史摘要
+  # L2 中期记忆：跨会话偏好/历史话题（Phase 2 Redis 实现，当前预留）
   l2_session:
-    enabled: false
-    max_items: 50
-    eviction: lru
+    enabled: false                      # 当前未启用，接口已预留
+    max_items: 50                       # 每用户最多保存 50 条偏好
+    eviction: lru                       # 过期策略：最近最少使用
+  # L3 长期知识库：向量库 + 结构化索引
   l3_knowledge:
-    enabled: false
-    retrieval_top_k: 5
-    importance_threshold: 0.3
+    enabled: true                       # 已启用 ChromaDB
+    retrieval_top_k: 5                  # 检索返回 Top-5 结果
+    importance_threshold: 0.3           # 入库最低重要性阈值，低于此值跳过
     eviction:
-      max_items: 10000
-      stale_days: 7
-      similarity_merge_threshold: 0.95
+      max_items: 10000                  # 单用户最大知识条目数
+      stale_days: 7                     # 超过 7 天未访问视为陈旧
+      similarity_merge_threshold: 0.95  # 语义相似度 > 0.95 时自动合并
 
 # ============ 反思策略 ============
 reflection:
-  policy: always
-  max_replan: 2
-  model_switch_threshold: 0.7
-  adaptive:
-    skip_if_rag_hit_above: 0.95
-    skip_if_intent_in: [chitchat]
-  sampling:
-    rate: 0.5
+  policy: always                        # 默认每次必反思；可选：adaptive / sampling
+  max_replan: 2                         # 最大重规划次数，超限则标记低置信度直通
+  model_switch_threshold: 0.7           # 任务复杂度超过此阈值时切换 reasoner 做 Critic
+  adaptive:                             # 自适应策略配置（policy=adaptive 时生效）
+    skip_if_rag_hit_above: 0.95          # RAG 命中率 > 95% 时跳过反思
+    skip_if_intent_in: [chitchat]       # 闲聊意图跳过反思
+  sampling:                             # 采样策略配置（policy=sampling 时生效）
+    rate: 0.5                           # 50% 的对话随机采样反思
 
 # ============ 评估指标阈值 ============
 evaluation:
-  enabled: true
-  log_to_file: true
-  log_path: data/eval_logs
+  enabled: true                         # 是否启用评估日志
+  log_to_file: true                     # 指标是否写入日志文件
+  log_path: data/eval_logs              # 指标日志存放目录
+  # 各项指标的 good/warn 阈值：用于自动化质量判定
   metrics:
-    intent_confidence:
-      good: 0.9
-      warn: 0.7
-    plan_step_count:
-      good: 5
-      warn: 8
-    replan_count:
-      good: 0
-      warn: 2
-    tool_success_rate:
-      good: 0.9
-      warn: 0.7
-    answer_groundedness:
-      good: 0.8
-      warn: 0.6
-    critic_coherence_score:
-      good: 8.0
-      warn: 6.0
-    answer_relevance:
-      good: 0.8
-      warn: 0.6
-    e2e_latency_ms:
-      good: 5000
-      warn: 10000
+    intent_confidence:                   # 意图识别置信度
+      good: 0.9                         # ≥ 0.9 高可信
+      warn: 0.7                         # 0.7~0.9 需关注
+    plan_step_count:                    # 规划步数
+      good: 5                           # ≤ 5 合理
+      warn: 8                           # > 8 过度规划
+    replan_count:                       # 重规划次数
+      good: 0                           # 0 次最佳
+      warn: 2                           # ≥ 2 质量预警
+    tool_success_rate:                  # 工具调用成功率
+      good: 0.9                         # ≥ 90% 正常
+      warn: 0.7                         # 70%~90% 需关注
+    answer_groundedness:               # 答案锚定度（防幻觉核心）
+      good: 0.8                         # ≥ 0.8 良好
+      warn: 0.6                         # 0.6~0.8 一般
+    critic_coherence_score:             # 逻辑链自洽性（0~10）
+      good: 8.0                         # ≥ 8.0 良好
+      warn: 6.0                         # 6.0~8.0 可接受
+    answer_relevance:                   # 回答相关性
+      good: 0.8                         # ≥ 0.8 良好
+      warn: 0.6                         # 0.6~0.8 一般
+    e2e_latency_ms:                     # 端到端延迟（毫秒）
+      good: 5000                        # < 5s 良好
+      warn: 10000                       # 5~10s 可接受
+  # 回归判定：与 baseline 对比
   regression:
-    pass_rate_drop_threshold: 0.05
-    metric_drop_threshold: 0.05
+    pass_rate_drop_threshold: 0.05      # 通过率下降 > 5% 视为高危回归
+    metric_drop_threshold: 0.05         # 任一指标均值下降 > 5% 视为指标回归
 
 # ============ 成本控制 ============
 cost_control:
-  per_conversation_token_limit: 20000
-  daily_budget_usd: 1.0
-  reasoner_ratio_alert_above: 0.3
-  auto_downgrade_on_budget: true
+  per_conversation_token_limit: 20000   # 单对话 token 上限，超过强制结束
+  daily_budget_usd: 1.0                 # 每日总预算（美元），超过自动降级
+  reasoner_ratio_alert_above: 0.3       # reasoner 调用占比超过 30% 时告警
+  auto_downgrade_on_budget: true        # 预算超限时自动全链路降级到 chat
+  # DeepSeek 定价（美元/1K tokens）：用于成本归因
   pricing:
-    deepseek-chat:
-      input: 0.00014
-      output: 0.00028
-    deepseek-reasoner:
-      input: 0.00055
-      output: 0.00219
+    deepseek-chat:                      # 快思考模型定价
+      input: 0.00014                    # 输入 $0.14/1K tokens
+      output: 0.00028                   # 输出 $0.28/1K tokens
+    deepseek-reasoner:                  # 慢思考模型定价
+      input: 0.00055                    # 输入 $0.55/1K tokens
+      output: 0.00219                   # 输出 $2.19/1K tokens
 
 # ============ Tracing ============
 tracing:
-  provider: langsmith
-  fallback_to_local_on_failure: true
-  sample_rate: 1.0
+  provider: langsmith                    # 首选 LangSmith，失败降级本地 JSON
+  fallback_to_local_on_failure: true     # LangSmith 不可用时自动降级
+  sample_rate: 1.0                       # 采样率：1.0 表示全量采集
+  # LangSmith 配置（在线可视化）
   langsmith:
-    api_key: ${LANGSMITH_API_KEY}
-    project: self-evolving-kb
+    api_key: ${LANGSMITH_API_KEY}        # API Key，从环境变量读取
+    project: self-evolving-kb           # LangSmith 项目名
     endpoint: https://api.smith.langchain.com
+  # 本地 JSON Trace 降级配置
   local_json:
-    trace_dir: data/traces
-    max_file_size_mb: 10
+    trace_dir: data/traces               # Trace 文件存放目录
+    max_file_size_mb: 10                 # 单个 Trace 文件最大 10MB
 
 # ============ 工具层（MCP 协议） ============
 tools:
+  # 联网搜索：博查搜索 MCP Server（国内直连）
   web_search:
-    provider: bocha
-    api_key: ${BOCHA_API_KEY}
+    provider: bocha                      # 搜索服务提供商
+    api_key: ${BOCHA_API_KEY}            # API Key，从环境变量读取
     endpoint: https://api.bochaai.com/v1/web-search
-    max_results: 5
-    timeout_seconds: 10
-    max_retries: 2
+    max_results: 5                       # 每次搜索返回 Top-5 结果
+    timeout_seconds: 10                  # 搜索超时
+    max_retries: 2                       # 失败重试次数
+  # 文件系统访问（预留，当前未启用）
   filesystem:
     enabled: false
     allowed_paths: []
+  # 向量存储：ChromaDB 本地持久化
   vector_store:
-    enabled: false
-    provider: chroma
-    persist_path: data/chroma_db
+    enabled: true
+    provider: chroma                     # 向量库提供商
+    persist_path: data/chroma_db         # 持久化目录
+  # 文档解析器：PDF/Word/TXT 解析
   document_parser:
-    enabled: false
+    enabled: true
 
 # ============ 存储后端 ============
 storage:
-  backend: local_json
-  conversations_dir: data/conversations
-  index_file: data/index.json
+  backend: local_json                   # 当前使用本地 JSON；Phase 2 可切换 postgres
+  conversations_dir: data/conversations  # 会话 JSON 文件存放目录
+  index_file: data/index.json           # 会话索引文件（用于侧边栏快速加载）
+  # PostgreSQL 配置（Phase 2 迁移后启用）
   postgres:
-    url: ${DATABASE_URL}
-    pool_size: 10
+    url: ${DATABASE_URL}                # 数据库连接字符串，从环境变量读取
+    pool_size: 10                       # 连接池大小
 
 # ============ 安全 ============
 security:
-  pii_masking: true
-  prompt_injection_guard: true
-  max_input_length: 8000
+  pii_masking: true                     # 敏感信息脱敏（日志中自动遮盖 API Key 等）
+  prompt_injection_guard: true          # Prompt 注入防护（检测并拦截恶意指令）
+  max_input_length: 8000                 # 单次输入最大字符数
+  # Prompt 注入防护拦截模式（正则匹配）
   blocked_patterns:
-    - "ignore.*previous.*instruction"
-    - "disregard.*above"
+    - "ignore.*previous.*instruction"    # 忽略之前的指令
+    - "disregard.*above"                # 不管上文
 
 # ============ API 服务 ============
 api:
-  host: 0.0.0.0
-  port: 8000
+  host: 0.0.0.0                         # 监听地址（0.0.0.0 表示所有网卡）
+  port: 8000                            # 服务端口
+  # CORS 允许的前端源
   cors_origins:
-    - "http://localhost:3000"
-    - "http://localhost:5173"
+    - "http://localhost:3000"           # Next.js 开发服务器
+    - "http://localhost:5173"            # Vite 开发服务器
+  # API 限流（Phase 3 生产环境启用）
   rate_limit:
-    enabled: false
-    requests_per_minute: 60
+    enabled: false                      # 当前未启用，Phase 3 开启
+    requests_per_minute: 60             # 每IP每分钟请求数上限
 
 # ============ 日志 ============
 logging:
-  level: INFO
-  format: json
-  log_dir: data/logs
-  max_file_size_mb: 50
-  backup_count: 7
+  level: INFO                           # 日志级别：DEBUG / INFO / WARNING / ERROR
+  format: json                          # 输出格式：JSON Lines（便于结构化分析）
+  log_dir: data/logs                    # 日志文件存放目录
+  max_file_size_mb: 50                  # 单个日志文件最大 50MB
+  backup_count: 7                       # 保留 7 天历史日志
+  # 日志中需要脱敏的字段名（防止敏感信息泄露）
   redact_fields:
-    - api_key
-    - authorization
-    - token
+    - api_key                           # API 密钥
+    - authorization                     # 鉴权头
+    - token                             # Token

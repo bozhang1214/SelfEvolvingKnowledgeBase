@@ -65,6 +65,7 @@ class ChatResponse(BaseModel):
     intent_confidence: float = Field(0.0, description="意图置信度")
     metrics: dict = Field(default_factory=dict, description="量化指标")
     trace_id: str = Field(..., description="本次调用的 trace ID")
+    meta: dict = Field(default_factory=dict, description="扩展元信息（知识入库状态等）")
 
 
 # ============================================================
@@ -232,6 +233,33 @@ async def _run_chat(ctx: AppContext, request: ChatRequest) -> dict[str, Any]:
     except Exception as e:
         logger.warning("短期记忆压缩失败", error=str(e))
 
+    # Phase 2: 知识自迭代入库（不阻塞主回复，失败不影响用户收到答案）
+    ingest_status = "disabled"
+    ingest_reason = ""
+    if ctx.knowledge_ingester is not None and ctx.knowledge_base is not None:
+        try:
+            ingest_result = await ctx.knowledge_ingester.ingest_conversation(
+                user_input=user_input,
+                final_answer=answer,
+                summary=state_dict.get("summary", ""),
+                importance_score=state_dict.get("importance_score", 0.0),
+                conv_id=conv_id,
+                user_id=user_id,
+                knowledge_base=ctx.knowledge_base,
+            )
+            ingest_status = ingest_result.status
+            ingest_reason = ingest_result.reason
+            logger.info(
+                "知识自迭代入库完成",
+                ingest_status=ingest_status,
+                entry_id=ingest_result.entry_id,
+                conv_id=conv_id,
+            )
+        except Exception as e:
+            ingest_status = "error"
+            ingest_reason = str(e)
+            logger.warning("知识自迭代入库失败", error=str(e), conv_id=conv_id)
+
     return {
         "conversation_id": conv_id,
         "answer": answer,
@@ -240,6 +268,8 @@ async def _run_chat(ctx: AppContext, request: ChatRequest) -> dict[str, Any]:
         "metrics": metrics,
         "trace_id": trace_id,
         "latency_ms": latency_ms,
+        "ingest_status": ingest_status,
+        "ingest_reason": ingest_reason,
     }
 
 
@@ -293,6 +323,10 @@ async def chat(
         intent_confidence=result["intent_confidence"],
         metrics=result["metrics"],
         trace_id=result["trace_id"],
+        meta={
+            "ingest_status": result.get("ingest_status", "disabled"),
+            "ingest_reason": result.get("ingest_reason", ""),
+        },
     )
 
 
@@ -344,6 +378,8 @@ async def chat_stream(
             "metrics": result["metrics"],
             "trace_id": result["trace_id"],
             "latency_ms": result["latency_ms"],
+            "ingest_status": result.get("ingest_status", "disabled"),
+            "ingest_reason": result.get("ingest_reason", ""),
         }
         yield {
             "event": "message",

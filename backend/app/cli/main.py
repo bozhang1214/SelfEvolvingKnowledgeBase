@@ -75,6 +75,8 @@ def chat(
                 memory=ctx.memory,
                 storage=ctx.storage,
                 reflection_strategy=ctx.reflection_strategy,
+                knowledge_ingester=ctx.knowledge_ingester,
+                knowledge_base=ctx.knowledge_base,
             )
             await session.initialize()
             await session.run_interactive(initial_conv_id=conversation_id)

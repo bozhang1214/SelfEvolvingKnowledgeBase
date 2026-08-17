@@ -105,7 +105,8 @@ class ExecutorAgent(BaseAgent):
 
                 try:
                     output = await self._dispatch_tool(
-                        tool_name, tool_input, user_input
+                        tool_name, tool_input, user_input,
+                        pre_retrieval_results=state.get("pre_retrieval_results", []),
                     )
                     output_str = (
                         output if isinstance(output, str) else str(output)
@@ -151,12 +152,18 @@ class ExecutorAgent(BaseAgent):
                         error=str(e),
                     )
 
+            # 格式化 RAG 上下文（Phase 2：从 pre_retrieval_results 注入）
+            rag_context = self._format_rag_context(
+                state.get("pre_retrieval_results", [])
+            )
+
             # 生成草稿答案
             draft_answer = await self._generate_draft(
                 user_input=user_input,
                 task_steps=task_steps,
                 tool_results=execution_context,
                 conversation_context=conversation_context,
+                rag_context=rag_context,
             )
 
             self.logger.info(
@@ -192,6 +199,7 @@ class ExecutorAgent(BaseAgent):
         tool_name: str,
         tool_input: dict[str, Any],
         user_input: str,
+        pre_retrieval_results: list[dict[str, Any]] | None = None,
     ) -> str:
         """
         根据工具名分派到对应工具执行。
@@ -200,6 +208,7 @@ class ExecutorAgent(BaseAgent):
             tool_name: 工具名（web_search / rag_retrieve / llm_generate）
             tool_input: 工具输入参数
             user_input: 用户原始输入（兜底用）
+            pre_retrieval_results: RAG 预检索结果（由 graph 的 rag_retrieval 节点注入）
 
         Returns:
             工具输出字符串
@@ -222,11 +231,17 @@ class ExecutorAgent(BaseAgent):
                 ) from e
 
         elif tool_name == "rag_retrieve":
-            # Phase 1：知识库未启用，返回空
-            self.logger.info(
-                "rag_retrieve 在 Phase 1 返回空结果（知识库未启用）"
-            )
-            return "（Phase 1 知识库未启用，rag_retrieve 返回空结果）"
+            # Phase 2：RAG 结果已通过 rag_retrieval 节点注入到 pre_retrieval_results，
+            # 并由 _format_rag_context 格式化进 EXECUTOR_PROMPT 的 {rag_context} 段。
+            # 此处不再重复格式化，避免同一知识在 Prompt 中出现两遍。
+            pre_results = pre_retrieval_results or []
+            if pre_results:
+                return (
+                    f"知识库已检索到 {len(pre_results)} 条相关结果，"
+                    f"请参考系统提示中的「知识库参考」段落。"
+                )
+            self.logger.info("rag_retrieve 无预检索结果（知识库未启用或无匹配）")
+            return "（知识库中暂无相关信息）"
 
         elif tool_name == "llm_generate":
             query = str(tool_input.get("query", user_input))
@@ -267,12 +282,38 @@ class ExecutorAgent(BaseAgent):
                 tool_name="llm_generate",
             ) from e
 
+    def _format_rag_context(self, pre_retrieval_results: list[dict[str, Any]]) -> str:
+        """
+        将预检索结果格式化为可注入 Prompt 的知识库参考文本。
+
+        Args:
+            pre_retrieval_results: RAG 预检索结果列表
+
+        Returns:
+            格式化的知识库参考文本，无结果时返回空字符串
+        """
+        if not pre_retrieval_results:
+            return ""
+
+        lines: list[str] = []
+        for i, r in enumerate(pre_retrieval_results, 1):
+            score = r.get("score", 0.0)
+            content = r.get("content", "")
+            source = r.get("source", "")
+            importance = r.get("importance", 0.0)
+            lines.append(
+                f"[参考{i}]（相关度：{score:.2f}，重要性：{importance:.2f}，来源：{source}）\n{content}"
+            )
+
+        return "\n\n".join(lines)
+
     async def _generate_draft(
         self,
         user_input: str,
         task_steps: list[Any],
         tool_results: str,
         conversation_context: str,
+        rag_context: str = "",
     ) -> str:
         """
         用 EXECUTOR_PROMPT 生成草稿答案。
@@ -282,6 +323,7 @@ class ExecutorAgent(BaseAgent):
             task_steps: 任务步骤列表
             tool_results: 工具调用结果拼接
             conversation_context: 对话历史上下文
+            rag_context: RAG 检索的知识库参考上下文
 
         Returns:
             草稿答案字符串
@@ -300,6 +342,7 @@ class ExecutorAgent(BaseAgent):
             messages = EXECUTOR_PROMPT.format_messages(
                 tool_results=tool_results or "（无工具调用结果）",
                 conversation_context=conversation_context or "（无历史上下文）",
+                rag_context=rag_context or "（无知识库参考）",
                 user_input=user_input,
                 task_plan=task_plan,
             )

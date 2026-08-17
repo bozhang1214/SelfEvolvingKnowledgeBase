@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from app.agents.strategies.base import ReflectionStrategy
 from app.agents.strategies.factory import create_reflection_strategy
@@ -37,6 +37,12 @@ from app.tools.registry import ToolRegistry
 # GraphBuilder 延迟导入：与 EvalRunner._get_graph 保持一致，
 # 避免在模块加载阶段引入 langgraph 重依赖，便于 CLI 在未安装
 # langgraph 的环境中也能完成命令注册与帮助信息渲染。
+
+if TYPE_CHECKING:
+    # 仅用于类型注解，运行时通过延迟导入获取实际类，
+    # 避免 chromadb 未安装时导入失败影响整体启动。
+    from app.memory.base import KnowledgeBaseBackend
+    from app.tools.direct.vector_store import DirectVectorStore
 
 logger = get_logger(__name__)
 
@@ -54,6 +60,9 @@ class AppContext:
         tool_registry: 工具注册表实例
         reflection_strategy: 反思策略实例
         graph: 编译后的 LangGraph 工作流
+        knowledge_base: L3 长期知识库实例（Phase 2，可选）
+        vector_store: 向量检索直连实例（Phase 2，可选）
+        knowledge_ingester: 知识自迭代引擎实例（Phase 2，可选）
     """
 
     config: AppConfig
@@ -63,6 +72,12 @@ class AppContext:
     tool_registry: ToolRegistry
     reflection_strategy: ReflectionStrategy
     graph: Any
+    # L3 知识库相关组件：Phase 1 默认 None，仅当 memory.l3_knowledge.enabled=True 时装配
+    knowledge_base: KnowledgeBaseBackend | None = None
+    vector_store: DirectVectorStore | None = None
+    # 知识自迭代引擎实例（Phase 2，可选）
+    # 实际类型为 KnowledgeIngester | None，使用 Any 避免循环导入
+    knowledge_ingester: Any = None
 
 
 async def initialize_app(config_path: str = "config.yaml") -> AppContext:
@@ -79,6 +94,7 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         7. 创建并初始化工具注册表（启动 MCP Server 子进程）
         8. 创建反思策略
         9. 构建 LangGraph 工作流
+        10. 条件装配 L3 知识库（仅当 memory.l3_knowledge.enabled=True）
 
     Args:
         config_path: 配置文件路径，默认为 config.yaml
@@ -128,7 +144,45 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
     # 8. 创建反思策略
     reflection_strategy = create_reflection_strategy(config)
 
-    # 9. 构建 LangGraph 工作流（延迟导入，避免模块加载阶段引入 langgraph）
+    # 9. 条件装配 L3 知识库（延迟导入，避免 chromadb 未安装时整体启动失败）
+    # 必须在 Graph 构建之前完成，以便 vector_store 注入 RAG 检索节点
+    knowledge_base = None
+    vector_store = None
+    if config.memory.l3_knowledge.enabled:
+        try:
+            from app.memory.knowledge_base import ChromaKnowledgeBase
+            from app.tools.direct.vector_store import DirectVectorStore
+
+            knowledge_base = ChromaKnowledgeBase(
+                persist_path=config.tools.vector_store.persist_path,
+            )
+            vector_store = DirectVectorStore(knowledge_base)
+            logger.info(
+                "L3 知识库已启用",
+                persist_path=config.tools.vector_store.persist_path,
+            )
+        except ImportError as e:
+            logger.warning(
+                "L3 知识库启用失败：缺少依赖，已降级为未启用",
+                error=str(e),
+            )
+
+    # 10. 装配知识自迭代引擎（仅当 L3 知识库启用时）
+    # 复用 llm_factory 与 config，将对话知识自动入库
+    knowledge_ingester = None
+    if knowledge_base is not None:
+        try:
+            from app.agents.knowledge_ingestor import KnowledgeIngester
+
+            knowledge_ingester = KnowledgeIngester(
+                llm_factory=llm_factory, config=config
+            )
+            logger.info("知识自迭代引擎已启用")
+        except Exception as e:
+            logger.warning("KnowledgeIngester 初始化失败", error=str(e))
+            knowledge_ingester = None
+
+    # 11. 构建 LangGraph 工作流（延迟导入，避免模块加载阶段引入 langgraph）
     from app.graph.builder import GraphBuilder
 
     graph_builder = GraphBuilder(
@@ -137,6 +191,7 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         tool_registry=tool_registry,
         memory=memory,
         reflection_strategy=reflection_strategy,
+        vector_store=vector_store,  # Phase 2: 注入 RAG 检索器
     )
     graph = graph_builder.build()
 
@@ -150,6 +205,9 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         tool_registry=tool_registry,
         reflection_strategy=reflection_strategy,
         graph=graph,
+        knowledge_base=knowledge_base,
+        vector_store=vector_store,
+        knowledge_ingester=knowledge_ingester,
     )
 
 
@@ -159,6 +217,7 @@ async def shutdown_app(ctx: AppContext) -> None:
 
     主要清理：
         - 工具注册表：断开 MCP 连接、终止子进程
+        - L3 知识库：目前基于 ChromaDB PersistentClient，自动持久化，无需显式关闭
         - 其他组件目前无需显式清理
 
     可安全地多次调用。所有异常会被捕获并记录日志，不会向上抛出。
@@ -170,5 +229,10 @@ async def shutdown_app(ctx: AppContext) -> None:
         await ctx.tool_registry.shutdown()
     except Exception as e:
         logger.warning("工具注册表关闭异常", error=str(e))
+
+    # L3 知识库资源清理：ChromaDB PersistentClient 由磁盘自动持久化，
+    # 当前无需显式 close；若后续接入需要释放的资源，在此补充。
+    if ctx.knowledge_base is not None:
+        logger.info("L3 知识库已随应用关闭自动持久化")
 
     logger.info("应用已关闭")

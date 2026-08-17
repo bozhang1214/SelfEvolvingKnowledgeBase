@@ -75,6 +75,8 @@ class ChatSession:
         memory: ShortTermMemory,
         storage: JSONStorage,
         reflection_strategy: ReflectionStrategy,
+        knowledge_ingester: Any = None,
+        knowledge_base: Any = None,
     ) -> None:
         """
         初始化聊天会话。
@@ -86,6 +88,8 @@ class ChatSession:
             memory: L1 短期记忆实例
             storage: JSON 存储后端实例
             reflection_strategy: 反思策略实例
+            knowledge_ingester: 知识自迭代引擎实例（Phase 2，可选）
+            knowledge_base: L3 知识库实例（Phase 2，可选）
         """
         self.config: AppConfig = config
         self.llm_factory: LLMFactory = llm_factory
@@ -93,6 +97,9 @@ class ChatSession:
         self.memory: ShortTermMemory = memory
         self.storage: JSONStorage = storage
         self.reflection_strategy: ReflectionStrategy = reflection_strategy
+        # Phase 2: 知识自迭代相关组件，默认 None（未启用时跳过入库）
+        self.knowledge_ingester: Any = knowledge_ingester
+        self.knowledge_base: Any = knowledge_base
 
         # 编译后的 LangGraph 工作流（在 initialize 中构建）
         self._graph: Any = None
@@ -262,6 +269,32 @@ class ChatSession:
         except Exception as e:
             logger.warning("短期记忆压缩失败", error=str(e))
 
+        # Phase 2: 知识自迭代入库（不阻塞主回复，失败不影响用户收到答案）
+        ingest_status = "disabled"
+        if self.knowledge_ingester is not None and self.knowledge_base is not None:
+            try:
+                ingest_result = await self.knowledge_ingester.ingest_conversation(
+                    user_input=user_input,
+                    final_answer=answer,
+                    summary=final_state_dict.get("summary", ""),
+                    importance_score=final_state_dict.get("importance_score", 0.0),
+                    conv_id=self._conv_id,
+                    user_id=self.USER_ID,
+                    knowledge_base=self.knowledge_base,
+                )
+                ingest_status = ingest_result.status
+                logger.info(
+                    "知识自迭代入库完成",
+                    ingest_status=ingest_status,
+                    entry_id=ingest_result.entry_id,
+                    conv_id=self._conv_id,
+                )
+            except Exception as e:
+                ingest_status = "error"
+                logger.warning(
+                    "知识自迭代入库失败", error=str(e), conv_id=self._conv_id
+                )
+
         # 缓存元信息（包含重试/降级质量指标）
         self._last_meta = {
             "intent": final_state_dict.get("intent", ""),
@@ -278,6 +311,7 @@ class ChatSession:
             "llm_retry_count": metrics.get("llm_retry_count", 0),
             "llm_degraded": metrics.get("llm_degraded", False),
             "llm_degradation_count": metrics.get("llm_degradation_count", 0),
+            "ingest_status": ingest_status,
         }
         self._turn_count += 1
         return answer
