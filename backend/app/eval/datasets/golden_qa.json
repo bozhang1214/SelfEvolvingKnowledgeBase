@@ -1,0 +1,89 @@
+[
+  {
+    "test_id": "TC-01",
+    "description": "闲聊意图识别 - 验证 chitchat 意图且不调用工具",
+    "input": "你好啊，今天天气真好",
+    "expected": {
+      "intent": "chitchat",
+      "should_not_call_tools": true,
+      "intent_confidence_min": 0.7
+    }
+  },
+  {
+    "test_id": "TC-02",
+    "description": "知识库意图识别 - 命中 kb_strict 关键词，应严格基于知识库回答",
+    "input": "根据我的笔记讲讲 Python 的装饰器原理",
+    "expected": {
+      "intent": "kb_strict",
+      "intent_confidence_min": 0.7
+    }
+  },
+  {
+    "test_id": "TC-03",
+    "description": "联网意图识别 - 涉及实时信息，应调用 web_search 工具",
+    "input": "2026年诺贝尔奖得主是谁",
+    "expected": {
+      "intent": "web_default",
+      "should_call_web_search": true,
+      "intent_confidence_min": 0.7
+    }
+  },
+  {
+    "test_id": "TC-04",
+    "description": "复杂任务规划 - 对比类问题应触发 task_plan 多步规划",
+    "input": "对比 React 和 Vue 的优缺点，从性能、生态、学习曲线三个维度展开",
+    "expected": {
+      "intent": "task_plan",
+      "intent_confidence_min": 0.7
+    }
+  },
+  {
+    "test_id": "TC-05",
+    "description": "反思重试 - 逻辑陷阱问题，验证 replan_count 控制在合理范围",
+    "input": "请证明：所有乌鸦都是黑色的。然后用反例推翻你的证明。",
+    "expected": {
+      "max_replan": 2
+    }
+  },
+  {
+    "test_id": "TC-M01",
+    "description": "指标验证 - 意图置信度阈值检查（应 >= 0.9 视为 good）",
+    "input": "帮我总结一下今天会议的要点",
+    "expected": {
+      "intent_confidence_min": 0.7
+    }
+  },
+  {
+    "test_id": "TC-M02",
+    "description": "指标验证 - 端到端延迟不超过 10 秒（warn 阈值）",
+    "input": "什么是机器学习？",
+    "expected": {
+      "max_latency_ms": 10000
+    }
+  },
+  {
+    "test_id": "TC-M03",
+    "description": "指标验证 - 答案锚定度（groundedness）应达到 good 阈值",
+    "input": "根据我的知识库说明，LangChain 的核心组件有哪些？",
+    "expected": {
+      "intent": "kb_strict",
+      "min_groundedness": 0.6
+    }
+  },
+  {
+    "test_id": "TC-M04",
+    "description": "指标验证 - 工具调用成功率，调用 web_search 时应成功",
+    "input": "2026 年最新的 AI 模型排行榜是什么",
+    "expected": {
+      "should_call_web_search": true
+    }
+  },
+  {
+    "test_id": "TC-M05",
+    "description": "指标验证 - 重规划次数不超过 2 次（与 config.reflection.max_replan 一致）",
+    "input": "请用三种不同的方法解决同一个问题：计算斐波那契数列第 10 项",
+    "expected": {
+      "max_replan": 2
+    }
+  }
+]

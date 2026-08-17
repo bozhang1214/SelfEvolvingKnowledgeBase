@@ -1,0 +1,70 @@
+# ============================================================
+# 自迭代个人知识库 Agent - .gitignore
+# ============================================================
+
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ============ 虚拟环境 ============
+venv/
+env/
+ENV/
+.venv/
+.env
+
+# ============ IDE ============
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ============ 测试 ============
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+tests/reports/
+
+# ============ 运行时数据 ============
+backend/data/
+!backend/data/.gitkeep
+
+# ============ 环境变量 ============
+.env
+.env.local
+.env.*.local
+
+# ============ Docker ============
+deploy/certs/
+
+# ============ 前端 ============
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ============ 日志 ============
+*.log
+logs/
