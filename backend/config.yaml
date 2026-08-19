@@ -237,10 +237,17 @@ api:
   cors_origins:
     - "http://localhost:3000"           # Next.js 开发服务器
     - "http://localhost:5173"            # Vite 开发服务器
+    - "http://localhost:3004"            # Phase 3 Vite (PROJECT_ID=4)
   # API 限流（Phase 3 生产环境启用）
   rate_limit:
     enabled: false                      # 当前未启用，Phase 3 开启
     requests_per_minute: 60             # 每IP每分钟请求数上限
+  # 鉴权配置（Phase 3）
+  auth:
+    token_expire_hours: 72
+    jwt_secret: "${JWT_SECRET:-sekb-dev-secret-change-in-production}"
+    password_min_length: 8
+    rate_limit_login_per_minute: 5
 
 # ============ 日志 ============
 logging:

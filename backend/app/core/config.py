@@ -272,6 +272,7 @@ class ToolsConfig(BaseModel):
 class StorageConfig(BaseModel):
     """存储后端配置"""
     backend: str = "local_json"
+    data_dir: str = ""
     conversations_dir: str = "data/conversations"
     index_file: str = "data/index.json"
     postgres: dict[str, Any] = {}
@@ -291,12 +292,21 @@ class RateLimitConfig(BaseModel):
     requests_per_minute: int = 60
 
 
+class AuthConfig(BaseModel):
+    """鉴权配置"""
+    token_expire_hours: int = 72
+    jwt_secret: str = ""
+    password_min_length: int = 8
+    rate_limit_login_per_minute: int = 5
+
+
 class ApiConfig(BaseModel):
     """API 服务配置"""
     host: str = "0.0.0.0"
     port: int = 8000
     cors_origins: list[str] = []
     rate_limit: RateLimitConfig = RateLimitConfig()
+    auth: AuthConfig = AuthConfig()
 
 
 class LoggingConfig(BaseModel):

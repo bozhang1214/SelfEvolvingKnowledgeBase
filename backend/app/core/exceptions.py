@@ -116,3 +116,11 @@ class BudgetExceededError(SEKBError):
 
 class SecurityError(SEKBError):
     """安全相关错误（如 Prompt 注入检测）"""
+
+
+class AuthError(Exception):
+    """鉴权相关错误"""
+    def __init__(self, message: str = "鉴权失败", status_code: int = 401):
+        self.message = message
+        self.status_code = status_code
+        super().__init__(self.message)

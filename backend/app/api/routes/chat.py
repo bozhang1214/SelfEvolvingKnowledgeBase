@@ -24,9 +24,9 @@ import uuid
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
-from sse_starlette.sse import EventSourceResponse
 
 from app.api.server import get_app_context
 from app.core.bootstrap import AppContext
@@ -334,7 +334,7 @@ async def chat(
 async def chat_stream(
     request: ChatRequest,
     ctx: AppContext = Depends(get_app_context),
-) -> EventSourceResponse:
+) -> StreamingResponse:
     """
     发送消息（SSE 流式响应）。
 
@@ -344,31 +344,37 @@ async def chat_stream(
         ``data: {"type": "done", "meta": {"intent": "...", "metrics": {...}}}``
 
     出错时推送 ``error`` 事件并结束流。
+
+    使用 FastAPI 原生 ``StreamingResponse`` 手动格式化 SSE 事件，
+    避免 sse-starlette 的缓冲行为导致浏览器端无法流式接收。
     """
-    async def event_generator() -> AsyncIterator[dict[str, str]]:
+    async def event_generator() -> AsyncIterator[bytes]:
         try:
             result = await _run_chat(ctx, request)
         except HTTPException as e:
-            yield {"event": "error", "data": json.dumps(
+            payload = json.dumps(
                 {"type": "error", "detail": e.detail}, ensure_ascii=False
-            )}
+            )
+            yield f"data: {payload}\n\n".encode("utf-8")
             return
         except SEKBError as e:
             logger.warning("流式聊天处理失败", error=str(e), exc_info=True)
-            yield {"event": "error", "data": json.dumps(
+            payload = json.dumps(
                 {"type": "error", "detail": e.message}, ensure_ascii=False
-            )}
+            )
+            yield f"data: {payload}\n\n".encode("utf-8")
             return
         except Exception as e:
             logger.error("流式聊天意外异常", error=str(e), exc_info=True)
-            yield {"event": "error", "data": json.dumps(
+            payload = json.dumps(
                 {"type": "error", "detail": f"内部错误: {e}"}, ensure_ascii=False
-            )}
+            )
+            yield f"data: {payload}\n\n".encode("utf-8")
             return
 
         # 逐 token 推送
         async for token_data in _stream_tokens(result["answer"]):
-            yield {"event": "message", "data": token_data}
+            yield f"data: {token_data}\n\n".encode("utf-8")
 
         # done 事件携带元信息
         meta = {
@@ -381,11 +387,19 @@ async def chat_stream(
             "ingest_status": result.get("ingest_status", "disabled"),
             "ingest_reason": result.get("ingest_reason", ""),
         }
-        yield {
-            "event": "message",
-            "data": json.dumps(
-                {"type": "done", "meta": meta}, ensure_ascii=False
-            ),
-        }
+        done_payload = json.dumps(
+            {"type": "done", "meta": meta}, ensure_ascii=False
+        )
+        yield f"data: {done_payload}\n\n".encode("utf-8")
 
-    return EventSourceResponse(event_generator())
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            # 禁用 nginx/uvicorn 等中间层缓冲
+            "Transfer-Encoding": "chunked",
+        },
+    )

@@ -23,9 +23,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.middleware import setup_cors, RateLimitMiddleware
 from app.core.bootstrap import AppContext, initialize_app, shutdown_app
 from app.core.config import AppConfig, get_config
 from app.core.exceptions import (
@@ -180,14 +180,16 @@ def create_app() -> FastAPI:
     )
 
     # ---------- CORS 中间件 ----------
-    cors_origins = config.api.cors_origins or ["*"]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    setup_cors(app)
+
+    # NOTE: 限流中间件临时禁用（排查 SSE 流式问题）
+    # app.add_middleware(
+    #     RateLimitMiddleware,
+    #     default_limit=60,
+    #     default_window_seconds=60,
+    #     route_limits={"/api/v1/auth/login": 5, "/api/v1/auth/register": 3},
+    # )
+
 
     # ---------- 全局异常处理器：SEKBError ----------
     @app.exception_handler(SEKBError)
@@ -227,20 +229,24 @@ def create_app() -> FastAPI:
 
     # ---------- 注册路由 ----------
     # 延迟导入：避免在模块加载阶段触发路由对 get_app_context 的解析失败
+    from app.api.routes.auth import router as auth_router
     from app.api.routes.chat import router as chat_router
     from app.api.routes.conversations import router as conv_router
     from app.api.routes.health import router as health_router
+    from app.api.routes.knowledge import router as knowledge_router
     from app.api.routes.upload import router as upload_router
 
+    app.include_router(auth_router)
     app.include_router(chat_router)
     app.include_router(conv_router)
     app.include_router(health_router)
+    app.include_router(knowledge_router)
     app.include_router(upload_router)
 
     logger.info(
         "FastAPI 路由注册完成",
-        routers=["chat", "conversations", "health", "upload"],
-        cors_origins=cors_origins,
+        routers=["auth", "chat", "conversations", "health", "knowledge", "upload"],
+        cors_origins=config.api.cors_origins or ["*"],
     )
 
     return app

@@ -15,6 +15,15 @@ echo "🚀 启动后端服务 (项目 ID=$PROJECT_ID)"
 echo "后端端口: $BACKEND_PORT"
 
 cd backend
+
+# 激活虚拟环境（如果存在）
+if [ -f ".venv/bin/activate" ]; then
+    echo "激活 Python 虚拟环境..."
+    source .venv/bin/activate
+else
+    echo "⚠️  .venv 不存在，使用系统 Python"
+fi
+
 # 安装依赖（如果 requirements.txt 存在）
 if [ -f "requirements.txt" ]; then
     echo "安装 Python 依赖..."

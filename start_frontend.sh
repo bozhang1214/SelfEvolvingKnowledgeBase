@@ -11,9 +11,13 @@ FRONTEND_PORT=$((3000 + PROJECT_ID))
 BACKEND_PORT=$((8000 + PROJECT_ID))   # 计算后端端口
 echo "项目 ID: $PROJECT_ID, 前端端口: $FRONTEND_PORT, 后端端口: $BACKEND_PORT"
 
-# 设置 Next.js 构建时环境变量（会被前端代码读取）
-export NEXT_PUBLIC_API_BASE="http://localhost:${BACKEND_PORT}"
-echo "NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE"
+# 设置 Vite 环境变量（VITE_ 前缀才会暴露给前端代码）
+export VITE_API_BASE="http://localhost:${BACKEND_PORT}"
+export VITE_BACKEND_PORT="$BACKEND_PORT"
+export VITE_FRONTEND_PORT="$FRONTEND_PORT"
+echo "VITE_API_BASE=$VITE_API_BASE"
+echo "VITE_BACKEND_PORT=$VITE_BACKEND_PORT"
+echo "VITE_FRONTEND_PORT=$VITE_FRONTEND_PORT"
 
 echo "当前目录: $(pwd)"
 echo "切换到 frontend 目录..."

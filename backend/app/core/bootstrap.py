@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from app.agents.strategies.base import ReflectionStrategy
@@ -32,6 +33,7 @@ from app.core.logging import get_logger, setup_logging
 from app.core.tracing import setup_tracing
 from app.memory.short_term import ShortTermMemory
 from app.storage.json_storage import JSONStorage
+from app.storage.user_storage import UserStorage
 from app.tools.registry import ToolRegistry
 
 # GraphBuilder 延迟导入：与 EvalRunner._get_graph 保持一致，
@@ -75,6 +77,8 @@ class AppContext:
     # L3 知识库相关组件：Phase 1 默认 None，仅当 memory.l3_knowledge.enabled=True 时装配
     knowledge_base: KnowledgeBaseBackend | None = None
     vector_store: DirectVectorStore | None = None
+    # 用户存储（Phase 3，可选）
+    user_storage: UserStorage | None = None
     # 知识自迭代引擎实例（Phase 2，可选）
     # 实际类型为 KnowledgeIngester | None，使用 Any 避免循环导入
     knowledge_ingester: Any = None
@@ -182,7 +186,11 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
             logger.warning("KnowledgeIngester 初始化失败", error=str(e))
             knowledge_ingester = None
 
-    # 11. 构建 LangGraph 工作流（延迟导入，避免模块加载阶段引入 langgraph）
+    # 11. 初始化用户存储（Phase 3 鉴权系统）
+    storage_dir = config.storage.data_dir or str(Path(config_path).parent / "data")
+    user_storage = UserStorage(storage_dir)
+
+    # 12. 构建 LangGraph 工作流（延迟导入，避免模块加载阶段引入 langgraph）
     from app.graph.builder import GraphBuilder
 
     graph_builder = GraphBuilder(
@@ -197,7 +205,9 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
 
     logger.info("应用初始化完成")
 
-    return AppContext(
+    # 保存全局上下文引用
+    global _app_context
+    _app_context = AppContext(
         config=config,
         llm_factory=llm_factory,
         storage=storage,
@@ -207,8 +217,17 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         graph=graph,
         knowledge_base=knowledge_base,
         vector_store=vector_store,
+        user_storage=user_storage,
         knowledge_ingester=knowledge_ingester,
     )
+    return _app_context
+
+
+def get_app_context() -> AppContext:
+    """获取全局应用上下文（供 API 路由等延迟初始化场景使用）。"""
+    if _app_context is None:
+        raise RuntimeError("应用尚未初始化，请先调用 initialize_app()")
+    return _app_context
 
 
 async def shutdown_app(ctx: AppContext) -> None:
