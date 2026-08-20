@@ -1,0 +1,52 @@
+# ============================================================
+# Prometheus 采集配置
+# ============================================================
+# 挂载到 prometheus 容器 /etc/prometheus/prometheus.yml
+# 告警规则文件 alerts.yml 与本文件同目录，通过相对路径引用
+# ============================================================
+
+global:
+  scrape_interval: 15s          # 默认采集间隔
+  evaluation_interval: 15s      # 告警规则评估间隔
+  external_labels:
+    monitor: "sekb-monitor"
+    env: "production"
+
+# 告警规则文件
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# 告警推送目标（Alertmanager）
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# 采集目标
+scrape_configs:
+  # ---------- 后端 FastAPI 应用 ----------
+  - job_name: "backend"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]
+        labels:
+          service: "backend"
+          app: "self-evolving-kb"
+    # 采集超时（后端首次启动加载 embedding 模型较慢，给予宽松超时）
+    scrape_timeout: 10s
+
+  # ---------- 后端健康检查（独立 job，更短间隔） ----------
+  - job_name: "backend-health"
+    metrics_path: /api/v1/health
+    scrape_interval: 30s
+    scrape_timeout: 5s
+    static_configs:
+      - targets: ["backend:8000"]
+        labels:
+          service: "backend-health"
+
+  # ---------- Prometheus 自身 ----------
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

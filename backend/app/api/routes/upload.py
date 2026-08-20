@@ -20,7 +20,9 @@ L3 长期知识库（ChromaDB），实现 RAG 检索增强：
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from fastapi import (
@@ -39,6 +41,7 @@ from app.core.bootstrap import AppContext
 from app.core.exceptions import SEKBError
 from app.core.logging import get_logger
 from app.tools.file_processor import FileProcessor
+from app.tools.image_processor import SUPPORTED_IMAGE_EXTENSIONS
 
 logger = get_logger(__name__)
 
@@ -49,10 +52,49 @@ _DEFAULT_USER_ID = "default"
 
 # 文档来源标记与默认重要性评分
 _DOCUMENT_SOURCE = "document"
+_IMAGE_SOURCE = "image"
 _DEFAULT_IMPORTANCE_SCORE = 0.5
 
 # 单文件最大大小（50MB），超过则拒绝
 _MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
+
+# 图片原图保存目录
+_IMAGE_UPLOAD_DIR = Path("data/uploads/images")
+
+
+def _get_image_config() -> dict[str, Any]:
+    """从环境变量读取图片处理配置（vision LLM + OCR）。"""
+    return {
+        "enabled": os.getenv("IMAGE_ANALYSIS_ENABLED", "true").lower() == "true",
+        "vision_llm": {
+            "base_url": os.getenv("VISION_LLM_BASE_URL", ""),
+            "api_key": os.getenv("VISION_LLM_API_KEY", ""),
+            "model": os.getenv("VISION_LLM_MODEL", "qwen-vl-plus"),
+        },
+        "ocr": {
+            "enabled": os.getenv("OCR_ENABLED", "true").lower() == "true",
+            "lang": os.getenv("OCR_LANG", "ch"),
+        },
+    }
+
+
+def _is_image_file(file_name: str) -> bool:
+    """判断文件是否为图片格式。"""
+    ext = Path(file_name).suffix.lower()
+    return ext in SUPPORTED_IMAGE_EXTENSIONS
+
+
+def _save_image_original(src_path: str, file_name: str) -> str:
+    """保存图片原图到持久化目录，返回保存后的路径。"""
+    _IMAGE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    # 避免文件名冲突：添加时间戳前缀
+    import time
+    timestamp = int(time.time())
+    dest_name = f"{timestamp}_{file_name}"
+    dest_path = _IMAGE_UPLOAD_DIR / dest_name
+    shutil.copy2(src_path, dest_path)
+    logger.info("图片原图已保存", file_name=file_name, saved_path=str(dest_path))
+    return str(dest_path)
 
 
 # ============================================================
@@ -115,11 +157,12 @@ async def _ingest_chunks(
     chunks: list[str],
     user_id: str,
     file_name: str,
+    source: str = _DOCUMENT_SOURCE,
 ) -> tuple[list[str], str]:
     """
     将分块批量入库到知识库。
 
-    为每个分块创建 KnowledgeEntry，source="document"，
+    为每个分块创建 KnowledgeEntry，
     importance_score 默认 0.5，source_id 记录原文件名以便溯源。
 
     Args:
@@ -127,6 +170,7 @@ async def _ingest_chunks(
         chunks: 文本分块列表
         user_id: 用户 ID
         file_name: 原文件名，写入 source_id 用于溯源
+        source: 来源标记（"document" 或 "image"）
 
     Returns:
         (entry_ids, error_message) 二元组；全部成功时 error_message 为空串
@@ -141,7 +185,7 @@ async def _ingest_chunks(
             entry_id = await vector_store.add(
                 content=chunk,
                 user_id=user_id,
-                source=_DOCUMENT_SOURCE,
+                source=source,
                 source_id=file_name,
                 importance_score=_DEFAULT_IMPORTANCE_SCORE,
             )
@@ -171,9 +215,19 @@ async def _process_and_ingest(
     执行 解析 → 分块 → 入库 完整流程并构造响应。
 
     被 POST /api/v1/upload 主流程与 BackgroundTasks 后台任务共用。
+    图片文件会额外保存原图到持久化目录。
     """
     vector_store = _require_vector_store(ctx)
-    processor = FileProcessor()
+    image_config = _get_image_config()
+    processor = FileProcessor(image_config=image_config)
+
+    # 图片文件：保存原图到持久化目录
+    is_image = _is_image_file(file_name)
+    if is_image:
+        try:
+            _save_image_original(file_path, file_name)
+        except Exception as e:
+            logger.warning("图片原图保存失败", file_name=file_name, error=str(e))
 
     result = await processor.process_file(
         file_path=file_path,
@@ -206,11 +260,14 @@ async def _process_and_ingest(
             status="success",
         )
 
+    # 图片使用 "image" 来源标记，文档使用 "document"
+    source = _IMAGE_SOURCE if is_image else _DOCUMENT_SOURCE
     entry_ids, error_msg = await _ingest_chunks(
         ctx=ctx,
         chunks=result.chunks,
         user_id=user_id,
         file_name=file_name,
+        source=source,
     )
 
     if error_msg:

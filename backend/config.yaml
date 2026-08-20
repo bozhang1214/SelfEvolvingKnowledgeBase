@@ -208,6 +208,23 @@ tools:
   # 文档解析器：PDF/Word/TXT 解析
   document_parser:
     enabled: true
+  # 图片处理：OCR 文字提取 + 多模态 LLM 打标签
+  image_analysis:
+    enabled: true                        # 是否启用图片分析
+    # 视觉模型配置（OpenAI 兼容接口，支持通义千问 VL/GPT-4o 等）
+    # 未配置 api_key 时降级为基于 OCR 文本的简单标签
+    vision_llm:
+      base_url: ${VISION_LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api_key: ${VISION_LLM_API_KEY:}
+      model: ${VISION_LLM_MODEL:qwen-vl-plus}
+    # PaddleOCR 配置
+    ocr:
+      enabled: true
+      lang: ch                           # 识别语言：ch(中英文)/en(英文)
+    # 图片原图保存目录
+    storage:
+      save_original: true
+      path: data/uploads/images
 
 # ============ 存储后端 ============
 storage:

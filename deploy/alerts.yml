@@ -1,0 +1,156 @@
+# ============================================================
+# Prometheus 告警规则
+# ============================================================
+# 覆盖 Phase 4 设计中的核心告警场景：
+#   - 服务可用性：服务不可达、健康检查降级
+#   - 性能：P95 延迟过高
+#   - 成本：日预算超限
+#   - 质量：反思重试率过高、答案锚定度低
+#   - 工具：调用失败率高
+# 挂载到 prometheus 容器 /etc/prometheus/alerts.yml
+# ============================================================
+
+groups:
+  # ============ 服务可用性告警 ============
+  - name: service_availability
+    rules:
+      # 服务完全不可达（1 分钟内无指标采集）
+      - alert: BackendDown
+        expr: up{job="backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: backend
+        annotations:
+          summary: "后端服务不可达"
+          description: "后端 {{ $labels.instance }} 已离线超过 1 分钟"
+
+      # 综合健康检查降级（LLM 或 Graph 不可用）
+      - alert: BackendDegraded
+        expr: sekb_service_health == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "后端服务降级"
+          description: "核心依赖（LLM 或 Graph）不可用，请检查 /api/v1/health"
+
+      # 单个子系统故障
+      - alert: SubsystemUnhealthy
+        expr: sekb_service_subsystem_health == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "子系统 {{ $labels.subsystem }} 不健康"
+          description: "子系统已不健康超过 3 分钟"
+
+  # ============ 性能告警 ============
+  - name: performance
+    rules:
+      # P95 端到端延迟超过 15 秒
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, rate(sekb_e2e_latency_seconds_bucket[5m])) > 15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 延迟超过 15 秒"
+          description: "当前 P95 延迟 {{ $value | printf \"%.2f\" }} 秒"
+
+      # P99 端到端延迟超过 60 秒（严重）
+      - alert: VeryHighLatencyP99
+        expr: histogram_quantile(0.99, rate(sekb_e2e_latency_seconds_bucket[5m])) > 60
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "P99 延迟超过 60 秒"
+          description: "当前 P99 延迟 {{ $value | printf \"%.2f\" }} 秒，严重影响用户体验"
+
+  # ============ 成本告警 ============
+  - name: cost
+    rules:
+      # 日预算超限
+      - alert: BudgetExceeded
+        expr: sekb_daily_cost_usd > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "日预算超过 $5"
+          description: "当前日累计成本 ${{ $value | printf \"%.2f\" }}"
+
+      # 单次请求成本异常高（可能是 reasoner 滥用）
+      - alert: HighPerRequestCost
+        expr: rate(sekb_llm_cost_usd_total[5m]) / rate(sekb_messages_total[5m]) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "单次请求平均成本异常"
+          description: "近 5 分钟单请求平均成本 ${{ $value | printf \"%.4f\" }}"
+
+  # ============ 质量告警 ============
+  - name: quality
+    rules:
+      # 反思重试率过高（> 0.5 次/秒）
+      - alert: ReflectionFailureHigh
+        expr: rate(sekb_replan_count_total[5m]) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "反思重试率过高"
+          description: "重规划速率 {{ $value | printf \"%.2f\" }}/s"
+
+      # 答案锚定度持续偏低（防幻觉）
+      - alert: LowGroundedness
+        expr: sekb_answer_groundedness < 0.6
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "答案锚定度偏低"
+          description: "近 15 分钟答案锚定度均低于 0.6，可能存在幻觉风险"
+
+      # LLM 降级频繁
+      - alert: LLMDegradationHigh
+        expr: rate(sekb_llm_degradations_total[10m]) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM 降级频繁"
+          description: "reasoner → chat 降级速率 {{ $value | printf \"%.2f\" }}/s"
+
+  # ============ 工具告警 ============
+  - name: tools
+    rules:
+      # 工具调用失败率 > 10%
+      - alert: ToolFailureHigh
+        expr: |
+          sum(rate(sekb_tool_call_total{status="failed"}[5m])) by (tool)
+          / sum(rate(sekb_tool_call_total[5m])) by (tool) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "工具 {{ $labels.tool }} 调用失败率超过 10%"
+          description: "当前失败率 {{ $value | humanizePercentage }}"
+
+  # ============ 业务告警 ============
+  - name: business
+    rules:
+      # 错误率超过 5%
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(sekb_messages_total{status="error"}[5m]))
+          / sum(rate(sekb_messages_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "请求错误率超过 5%"
+          description: "当前错误率 {{ $value | humanizePercentage }}"

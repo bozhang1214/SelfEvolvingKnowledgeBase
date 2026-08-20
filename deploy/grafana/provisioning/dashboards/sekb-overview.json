@@ -1,0 +1,160 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "消息处理速率（QPS）",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(rate(sekb_messages_total[5m]))",
+          "legendFormat": "QPS"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "reqps", "decimals": 2}
+      }
+    },
+    {
+      "title": "错误率",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(rate(sekb_messages_total{status=\"error\"}[5m])) / sum(rate(sekb_messages_total[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 0.02}, {"color": "red", "value": 0.05}]}}
+      }
+    },
+    {
+      "title": "日累计成本（USD）",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0},
+      "targets": [
+        {"expr": "sekb_daily_cost_usd"}
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "currencyusd", "decimals": 4, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 3}, {"color": "red", "value": 5}]}}
+      }
+    },
+    {
+      "title": "服务健康状态",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0},
+      "targets": [
+        {"expr": "sekb_service_health", "legendFormat": "整体"}
+      ],
+      "fieldConfig": {
+        "defaults": {"mappings": [{"options": {"0": {"text": "降级", "color": "red"}, "1": {"text": "健康", "color": "green"}}, "type": "value"}]}
+      }
+    },
+    {
+      "title": "端到端延迟分布（秒）",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+      "targets": [
+        {"expr": "histogram_quantile(0.5, rate(sekb_e2e_latency_seconds_bucket[5m]))", "legendFormat": "P50"},
+        {"expr": "histogram_quantile(0.95, rate(sekb_e2e_latency_seconds_bucket[5m]))", "legendFormat": "P95"},
+        {"expr": "histogram_quantile(0.99, rate(sekb_e2e_latency_seconds_bucket[5m]))", "legendFormat": "P99"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
+    },
+    {
+      "title": "消息按意图分布",
+      "type": "piechart",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+      "targets": [
+        {"expr": "sum by (intent) (increase(sekb_messages_total[1h]))", "legendFormat": "{{intent}}"}
+      ]
+    },
+    {
+      "title": "LLM 调用次数（按模型）",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "targets": [
+        {"expr": "sum by (model) (rate(sekb_llm_calls_total[5m]))", "legendFormat": "{{model}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "title": "LLM Token 用量（按方向）",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "targets": [
+        {"expr": "sum by (direction) (rate(sekb_llm_tokens_total[5m]))", "legendFormat": "{{direction}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "title": "LLM 成本累计（USD，按模型）",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 22},
+      "targets": [
+        {"expr": "sum by (model) (sekb_llm_cost_usd_total)", "legendFormat": "{{model}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "currencyusd"}}
+    },
+    {
+      "title": "重试与降级事件",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 22},
+      "targets": [
+        {"expr": "rate(sekb_llm_retries_total[5m])", "legendFormat": "重试"},
+        {"expr": "rate(sekb_llm_degradations_total[5m])", "legendFormat": "降级"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "title": "知识入库状态分布",
+      "type": "bargauge",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 30},
+      "targets": [
+        {"expr": "sum by (status) (increase(sekb_knowledge_ingest_total[1h]))", "legendFormat": "{{status}}"}
+      ]
+    },
+    {
+      "title": "子系统健康状态",
+      "type": "bargauge",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 30},
+      "targets": [
+        {"expr": "sekb_service_subsystem_health", "legendFormat": "{{subsystem}}"}
+      ],
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "故障", "color": "red"}, "1": {"text": "正常", "color": "green"}}, "type": "value"}]}}
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["sekb", "overview"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "SEKB 系统总览",
+  "uid": "sekb-overview",
+  "version": 1,
+  "weekStart": ""
+}

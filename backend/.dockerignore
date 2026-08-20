@@ -1,0 +1,66 @@
+# ============================================================
+# 后端 Docker 构建上下文排除清单
+# ============================================================
+# 排除无关文件，减小发送到 Docker daemon 的上下文体积，
+# 加速镜像构建并避免将敏感信息/缓存打包进镜像。
+# ============================================================
+
+# ---- Python 缓存与构建产物 ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- 测试相关（生产镜像不需要）----
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+tests/reports/
+
+# ---- 运行时数据（由卷挂载提供，不打包进镜像）----
+data/
+!data/.gitkeep
+
+# ---- IDE / 编辑器 ----
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ---- 环境变量与密钥（绝不打包进镜像）----
+.env
+.env.local
+.env.*.local
+.env.project
+
+# ---- 日志 ----
+*.log
+logs/
+
+# ---- 版本控制 ----
+.git/
+.gitignore
+.gitattributes
+
+# ---- 文档（镜像中不需要）----
+../docs/
+
+# ---- 脚本（非运行时需要）----
+scripts/

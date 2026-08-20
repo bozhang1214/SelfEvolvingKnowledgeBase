@@ -1,0 +1,82 @@
+# ============================================================
+# Promtail 日志采集配置
+# ============================================================
+# 挂载到 promtail 容器 /etc/promtail/config.yml
+# 采集后端容器 stdout/stderr 日志并推送到 Loki
+# ============================================================
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    # 批量推送配置，平衡延迟与吞吐
+    batchwait: 1s
+    batchsize: 1048576  # 1MB
+
+scrape_configs:
+  # ---------- 采集后端容器日志 ----------
+  # 通过 docker logs driver 收集，需在 docker-compose 中为后端容器
+  # 配置 logging 标签：sekb-logs=backend
+  - job_name: backend-logs
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["sekb-logs=backend"]
+    relabel_configs:
+      # 提取容器名作为标签
+      - source_labels: ["__meta_docker_container_name"]
+        regex: '/(.*)'
+        target_label: container_name
+      # 服务名
+      - target_label: service
+        replacement: backend
+      # 应用名
+      - target_label: app
+        replacement: self-evolving-kb
+      # 环境标记
+      - target_label: env
+        replacement: production
+    # 日志解析：后端使用 structlog JSON 输出
+    pipeline_stages:
+      # 尝试解析 JSON 日志
+      - json:
+          expressions:
+            level: level
+            event: event
+            trace_id: trace_id
+            user_id: user_id
+            error: error
+      # 提取日志级别作为标签
+      - labels:
+          level:
+      # 提取事件类型作为标签（如 chat_request、llm_call 等）
+      - labels:
+          event:
+
+  # ---------- 采集前端 nginx 容器日志 ----------
+  - job_name: frontend-logs
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["sekb-logs=frontend"]
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_name"]
+        regex: '/(.*)'
+        target_label: container_name
+      - target_label: service
+        replacement: frontend
+    pipeline_stages:
+      # nginx access log 解析（sekb_main 格式）
+      - regex:
+          expression: '^(?P<remote_addr>\S+) - (?P<remote_user>\S+) \[(?P<time_local>[^\]]+)\] "(?P<request>[^"]*)" (?P<status>\d+) (?P<body_bytes_sent>\d+) "(?P<referer>[^"]*)" "(?P<user_agent>[^"]*)" rt=(?P<request_time>\S+)'
+      - labels:
+          status:

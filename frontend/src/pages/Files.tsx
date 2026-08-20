@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Upload, Button, Typography, message, Progress, Space, Popconfirm, Tag } from 'antd';
-import { InboxOutlined, DeleteOutlined, FileOutlined } from '@ant-design/icons';
+import { InboxOutlined, DeleteOutlined, FileOutlined, FileImageOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import { listFiles, deleteFile, uploadFile, FileInfo } from '@/services/file';
+
+// 支持的图片扩展名
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'];
 
 const { Title } = Typography;
 const { Dragger } = Upload;
@@ -68,12 +71,16 @@ const Files: React.FC = () => {
       title: '文件名',
       dataIndex: 'file_name',
       key: 'file_name',
-      render: (name: string) => (
-        <Space>
-          <FileOutlined />
-          {name}
-        </Space>
-      ),
+      render: (name: string) => {
+        const ext = name.substring(name.lastIndexOf('.')).toLowerCase();
+        const isImage = IMAGE_EXTENSIONS.includes(ext);
+        return (
+          <Space>
+            {isImage ? <FileImageOutlined /> : <FileOutlined />}
+            {name}
+          </Space>
+        );
+      },
     },
     {
       title: '大小',
@@ -132,7 +139,7 @@ const Files: React.FC = () => {
 
       <div style={{ marginBottom: 24 }}>
         <Dragger
-          accept=".pdf,.docx,.txt,.md"
+          accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.webp,.bmp,.gif"
           beforeUpload={handleUpload as any}
           showUploadList={false}
           disabled={uploading}
@@ -142,7 +149,11 @@ const Files: React.FC = () => {
           </p>
           <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
           <p className="ant-upload-hint">
-            支持 PDF、Word(.docx)、TXT、Markdown，单个文件不超过 50MB
+            支持 PDF、Word、TXT、Markdown、图片(JPG/PNG/WebP 等)，单文件不超过 50MB
+            <br />
+            <span style={{ color: '#999', fontSize: 12 }}>
+              图片将自动 OCR 提取文字并打标签入库
+            </span>
           </p>
         </Dragger>
         {uploading && Object.entries(uploadProgress).map(([name, progress]) => (

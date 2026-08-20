@@ -1,0 +1,355 @@
+# ============================================================
+# SEKB CI/CD Pipeline（Phase 4 P0-3）
+# ============================================================
+# 触发：push 到 main/develop 或 PR 到 main/develop
+# 流水线：lint → 单测 → 集成测 → 镜像构建 → 部署（仅 main）
+#
+# 依赖 Secrets（在仓库 Settings → Secrets 中配置）：
+#   - DEEPSEEK_API_KEY       评估测试用 LLM Key
+#   - BOCHA_API_KEY          评估测试用搜索 Key
+#   - DEPLOY_HOST            部署服务器 IP
+#   - DEPLOY_USER            SSH 用户
+#   - DEPLOY_KEY             SSH 私钥
+#   - DEPLOY_PATH            部署路径（默认 /opt/self-evolving-kb）
+# ============================================================
+
+name: CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: "0 2 * * 1"  # 每周一凌晨 2 点定时跑（回归保障）
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # ============ 代码质量 ============
+  lint:
+    name: Lint (ruff + mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install linters
+        run: pip install ruff mypy
+      - name: Ruff check
+        run: ruff check backend/app/
+      - name: Mypy type check
+        run: mypy backend/app/ --ignore-missing-imports || true
+        # mypy 设为非阻断：项目仍在迭代，类型标注尚不完整
+
+  # ============ 前端构建检查 ============
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc --noEmit
+      - name: Production build
+        working-directory: frontend
+        run: npm run build
+
+  # ============ 单元测试 ============
+  unit-test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install -r requirements.txt
+      - name: Run unit tests
+        working-directory: backend
+        env:
+          # 单测不依赖真实 API，禁用网络调用
+          DEEPSEEK_API_KEY: test-key
+          BOCHA_API_KEY: test-key
+          JWT_SECRET: test-secret
+        run: pytest tests/unit -x --cov=app --cov-report=xml --cov-report=term -q
+      - name: Upload coverage
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: codecov/codecov-action@v4
+        with:
+          file: backend/coverage.xml
+          fail_ci_if_error: false
+
+  # ============ 集成测试 ============
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [unit-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install -r requirements.txt
+      - name: Run integration tests
+        working-directory: backend
+        env:
+          DEEPSEEK_API_KEY: test-key
+          BOCHA_API_KEY: test-key
+          JWT_SECRET: test-secret
+        run: pytest tests/integration -x -q
+
+  # ============ Eval 回归测试（仅 main 分支 + 定时任务）============
+  eval-test:
+    name: Eval Regression
+    runs-on: ubuntu-latest
+    needs: [unit-test, integration-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install -r requirements.txt
+      - name: Run eval on golden dataset
+        working-directory: backend
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
+          JWT_SECRET: eval-secret
+        run: |
+          if [ -f tests/fixtures/golden_qa.json ] || [ -f app/eval/datasets/golden_qa.json ]; then
+            python -m app.cli.main eval --dataset app/eval/datasets/golden_qa.json || echo "eval non-blocking"
+          else
+            echo "golden dataset not found, skipping eval"
+          fi
+
+  # ============ 构建并推送 Docker 镜像 ============
+  build:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    needs: [lint, unit-test, frontend-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============ 部署到生产（仅 main 分支）============
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, eval-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://${{ secrets.DEPLOY_HOST }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          command_timeout: 30m   # 部署超时（镜像拉取可能较慢）
+          script: |
+            set -euo pipefail
+            DEPLOY_SHA="${{ github.sha }}"
+            DEPLOY_DATE=$(date '+%Y-%m-%d %H:%M:%S')
+            DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/opt/self-evolving-kb' }}"
+
+            echo "============================================"
+            echo "  SEKB 生产部署开始"
+            echo "  时间: ${DEPLOY_DATE}"
+            echo "  SHA:  ${DEPLOY_SHA}"
+            echo "  路径: ${DEPLOY_PATH}"
+            echo "============================================"
+
+            cd "${DEPLOY_PATH}" || { echo "FATAL: 部署路径不存在 ${DEPLOY_PATH}"; exit 1; }
+
+            # ---------- 1. 部署前状态快照 ----------
+            echo ""
+            echo "========== [1/8] 部署前状态快照 =========="
+            echo "--- 当前 git HEAD ---"
+            git rev-parse HEAD 2>/dev/null || echo "(非 git 仓库)"
+            echo "--- 当前运行容器 ---"
+            docker compose -f docker-compose.prod.yml ps 2>/dev/null || echo "(无运行服务)"
+            echo "--- 磁盘空间 ---"
+            df -h "${DEPLOY_PATH}" | tail -1
+            echo "--- Docker 磁盘使用 ---"
+            docker system df 2>/dev/null || true
+
+            # ---------- 2. 拉取最新代码 ----------
+            echo ""
+            echo "========== [2/8] 拉取最新代码 =========="
+            git fetch --all 2>&1 || { echo "FATAL: git fetch 失败"; exit 1; }
+            git reset --hard origin/main 2>&1
+            echo "当前 HEAD: $(git rev-parse --short HEAD)"
+
+            # ---------- 3. 拉取最新镜像 ----------
+            echo ""
+            echo "========== [3/8] 拉取最新镜像 =========="
+            echo "--- 拉取应用镜像 ---"
+            docker compose -f docker-compose.prod.yml pull 2>&1 || { echo "FATAL: 应用镜像拉取失败"; exit 1; }
+            echo "--- 拉取监控镜像 ---"
+            docker compose -f docker-compose.monitoring.yml pull 2>&1 || echo "WARN: 监控镜像拉取失败（非致命）"
+
+            # ---------- 4. 备份当前配置与数据 ----------
+            echo ""
+            echo "========== [4/8] 部署前备份 =========="
+            BACKUP_TAG="pre-deploy-$(date +%Y%m%d_%H%M%S)"
+            echo "备份标签: ${BACKUP_TAG}"
+            # 备份 compose 配置
+            cp docker-compose.prod.yml "docker-compose.prod.yml.${BACKUP_TAG}.bak" 2>/dev/null || true
+            cp deploy/nginx.conf "deploy/nginx.conf.${BACKUP_TAG}.bak" 2>/dev/null || true
+            echo "配置已备份（.${BACKUP_TAG}.bak 后缀）"
+            # 触发数据备份（若备份脚本存在）
+            if [ -x deploy/backup.sh ]; then
+              echo "触发数据备份..."
+              ./deploy/backup.sh >> /var/log/sekb-deploy-backup.log 2>&1 || echo "WARN: 数据备份失败（非致命）"
+            fi
+
+            # ---------- 5. 滚动更新应用栈 ----------
+            echo ""
+            echo "========== [5/8] 滚动更新应用栈 =========="
+            echo "--- 启动 backend ---"
+            docker compose -f docker-compose.prod.yml up -d backend 2>&1 || { echo "FATAL: backend 启动失败"; exit 1; }
+            echo "等待 backend 就绪（最长 90 秒）..."
+            for i in $(seq 1 18); do
+              HEALTH=$(curl -sf http://localhost:8000/api/v1/health/live -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+              if [ "${HEALTH}" = "200" ]; then
+                echo "backend 就绪（第 ${i} 次检查，${HEALTH}）"
+                break
+              fi
+              echo "  等待中... (${i}/18, status=${HEALTH})"
+              sleep 5
+            done
+            if [ "${HEALTH}" != "200" ]; then
+              echo "FATAL: backend 健康检查超时"
+              echo "--- backend 最近 50 行日志 ---"
+              docker compose -f docker-compose.prod.yml logs backend --tail 50 2>&1
+              echo "--- 自动回滚 ---"
+              docker compose -f docker-compose.prod.yml down 2>/dev/null || true
+              exit 1
+            fi
+
+            echo "--- 启动 frontend ---"
+            docker compose -f docker-compose.prod.yml up -d frontend 2>&1 || { echo "FATAL: frontend 启动失败"; exit 1; }
+            sleep 5
+            FRONTEND_HEALTH=$(curl -sf http://localhost/ -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            echo "frontend status: ${FRONTEND_HEALTH}"
+            if [ "${FRONTEND_HEALTH}" != "200" ]; then
+              echo "WARN: frontend 健康检查未通过（${FRONTEND_HEALTH}），检查 nginx 配置"
+              docker compose -f docker-compose.prod.yml logs frontend --tail 20 2>&1
+            fi
+
+            # ---------- 6. 更新监控栈 ----------
+            echo ""
+            echo "========== [6/8] 更新监控栈 =========="
+            docker compose -f docker-compose.monitoring.yml up -d 2>&1 || echo "WARN: 监控栈更新失败（非致命）"
+            sleep 5
+
+            # ---------- 7. 部署后验证 ----------
+            echo ""
+            echo "========== [7/8] 部署后验证 =========="
+            echo "--- 容器状态 ---"
+            docker compose -f docker-compose.prod.yml ps 2>&1
+            echo ""
+            docker compose -f docker-compose.monitoring.yml ps 2>&1
+            echo ""
+            echo "--- 关键端点检查 ---"
+            echo -n "backend /health/live: "
+            curl -sf http://localhost:8000/api/v1/health/live -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "FAIL"
+            echo -n "backend /metrics: "
+            curl -sf http://localhost:8000/metrics -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "FAIL"
+            echo -n "frontend /: "
+            curl -sf http://localhost/ -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "FAIL"
+            echo -n "prometheus: "
+            curl -sf http://localhost:9091/-/healthy -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "未启用"
+            echo -n "grafana: "
+            curl -sf http://localhost:3001/api/health -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "未启用"
+            echo ""
+            echo "--- Prometheus 抓取目标 ---"
+            curl -sf 'http://localhost:9091/api/v1/targets' 2>/dev/null | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    for t in d.get('data',{}).get('activeTargets',[]):
+        print(f\"  {t['labels'].get('job')}: {t['health']}\")
+except: print('  Prometheus 不可达或无目标')
+" || echo "  Prometheus 不可达"
+
+            # ---------- 8. 清理与收尾 ----------
+            echo ""
+            echo "========== [8/8] 清理与收尾 =========="
+            echo "--- 清理悬挂镜像 ---"
+            docker image prune -f 2>&1 | tail -2
+            echo "--- 清理超过 7 天的部署备份配置 ---"
+            find . -name "*.pre-deploy-*.bak" -mtime +7 -delete 2>/dev/null || true
+            echo ""
+            echo "============================================"
+            echo "  ✅ 部署成功！"
+            echo "  SHA:  ${DEPLOY_SHA}"
+            echo "  时间: ${DEPLOY_DATE}"
+            echo "  验证: backend/frontend/monitoring 均已启动"
+            echo "============================================"

@@ -1,9 +1,9 @@
 # 自迭代个人知识库 Agent — 文档工程
 
 > 项目代号：SelfEvolvingKnowledgeBase
-> 当前阶段：Phase 1 设计阶段（文档评审中，未开始编码）
-> 文档版本：v1.0.0
-> 最后更新：2026-08-12
+> 当前阶段：Phase 1~4 均已实现，生产部署就绪
+> 文档版本：v1.1.0
+> 最后更新：2026-08-19
 
 ---
 
@@ -33,6 +33,14 @@
 | [05-phase2-design.md](./05-phase2-design.md) | Phase 2 详细设计：L2/L3 记忆、ChromaDB、RAG 检索增强、知识库自迭代、文件上传处理、PostgreSQL 迁移 | Phase 2 开发者 |
 | [06-phase3-design.md](./06-phase3-design.md) | Phase 3 详细设计：前端 UI（聊天/文件/知识库/设置）、多用户系统、JWT 鉴权、API 路由、安全设计 | Phase 3 开发者 |
 | [07-phase4-design.md](./07-phase4-design.md) | Phase 4 详细设计：Docker 部署、Nginx 配置、Prometheus+Grafana 监控、CI/CD Pipeline、灰度发布、备份恢复、应急响应 | 运维与 DevOps |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | **项目操作手册**：从零到上线的完整指南，含本地开发、API 使用、CLI 使用、前端使用、Docker 部署、运维 | 所有用户必读 |
+| [PRODUCTION-DEPLOY.md](./PRODUCTION-DEPLOY.md) | **线上部署手册**：生产服务器部署实战指南，含 HTTPS、CI/CD、监控告警、备份、安全加固 | 运维与 DevOps |
+| [CLOUD-DEPLOY.md](./CLOUD-DEPLOY.md) | **云平台部署手册**：国内轻量应用服务器低成本部署，含腾讯云/阿里云选型、备案、成本优化 | 个人 / 小团队 |
+| [TENCENT-CLOUD-DEPLOY.md](./TENCENT-CLOUD-DEPLOY.md) | **腾讯云部署手册**：基于腾讯云轻量 2核4G 套餐的完整部署指南，含前置项清单、购买、初始化、域名备案、HTTPS | 个人 / 小团队 |
+| [PRE-DEPLOY-CHECKLIST.md](./PRE-DEPLOY-CHECKLIST.md) | **部署前检查清单**：8 大类检查项 + 一键检查脚本，确保上线前所有前置条件已满足 | 运维与 DevOps |
+| [ALERTING-TROUBLESHOOTING.md](./ALERTING-TROUBLESHOOTING.md) | 告警模块故障排查指南：Alertmanager + feishu-webhook 常见故障与解决步骤 | 运维与 DevOps |
+| [testCase/TEST-CASES.md](./testCase/TEST-CASES.md) | 测试用例汇总：单元测试、集成测试、评估黄金数据集、测试数据、自动化测试指南 | 测试与开发 |
+| [python311-upgrade-plan.md](./python311-upgrade-plan.md) | Python 3.11 升级计划 | 开发 |
 
 ---
 
@@ -51,10 +59,10 @@
 
 | 阶段 | 目标 | 状态 |
 |---|---|---|
-| **Phase 1** | 多 Agent 聊天核心 + L1 记忆 + 本地 JSON 存储 + 评估体系 + CLI/FastAPI 双入口 | 设计评审中 |
-| Phase 2 | L2/L3 记忆 + 向量库 + RAG + 知识库自迭代机制 | 未启动 |
-| Phase 3 | 前端（聊天 UI + 文件上传） + 多用户 + 鉴权 | 未启动 |
-| Phase 4 | 生产部署（Docker/K8s、监控、CI/CD、灰度） | 未启动 |
+| **Phase 1** | 多 Agent 聊天核心 + L1 记忆 + 本地 JSON 存储 + 评估体系 + CLI/FastAPI 双入口 | ✅ 已实现 |
+| **Phase 2** | L3 记忆（ChromaDB）+ RAG 检索增强 + 知识库自迭代 + 文件上传 | ✅ 已实现（L2 中期记忆与 PostgreSQL 迁移预留接口） |
+| **Phase 3** | 前端 UI（聊天/文件/知识库/设置）+ 多用户 + JWT 鉴权 + API 安全 | ✅ 已实现 |
+| **Phase 4** | 生产部署（Docker、监控、CI/CD、灰度发布、备份恢复、安全加固） | ✅ 已实现 |
 
 ---
 

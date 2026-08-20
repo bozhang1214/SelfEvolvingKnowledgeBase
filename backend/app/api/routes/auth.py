@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.core.audit import AuditAction, audit_log, get_client_ip
 from app.core.auth import (
     create_jwt,
     get_current_user,
@@ -37,13 +38,16 @@ def _get_user_storage() -> UserStorage:
 
 
 @router.post("/register", response_model=LoginResponse)
-async def register(body: RegisterRequest):
+async def register(body: RegisterRequest, request: Request):
     """用户注册"""
     storage = _get_user_storage()
+    client_ip = get_client_ip(request)
 
     # 检查邮箱是否已注册
     existing = storage.find_by_email(body.email)
     if existing:
+        audit_log(AuditAction.REGISTER, success=False, ip=client_ip,
+                  detail={"email": body.email, "reason": "email_exists"})
         raise HTTPException(400, "该邮箱已被注册")
 
     # 创建用户
@@ -57,27 +61,35 @@ async def register(body: RegisterRequest):
     # 生成 JWT
     token = create_jwt(user.user_id)
     logger.info("用户注册成功", extra={"user_id": user.user_id, "email": user.email})
+    audit_log(AuditAction.REGISTER, user_id=user.user_id, success=True, ip=client_ip,
+              detail={"email": user.email})
     return LoginResponse(user=storage.to_public(user), token=token)
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(body: LoginRequest):
+async def login(body: LoginRequest, request: Request):
     """用户登录"""
     storage = _get_user_storage()
+    client_ip = get_client_ip(request)
 
     user = storage.find_by_email(body.email)
     if not user or not verify_password(body.password, user.password_hash):
+        audit_log(AuditAction.LOGIN_FAILED, success=False, ip=client_ip,
+                  detail={"email": body.email})
         raise HTTPException(401, "邮箱或密码错误")
 
     token = create_jwt(user.user_id)
     logger.info("用户登录成功", extra={"user_id": user.user_id})
+    audit_log(AuditAction.LOGIN, user_id=user.user_id, success=True, ip=client_ip)
     return LoginResponse(user=storage.to_public(user), token=token)
 
 
 @router.post("/logout")
-async def logout(user_id: str = Depends(get_current_user)):
+async def logout(request: Request, user_id: str = Depends(get_current_user)):
     """用户登出（客户端清除 token 即可）"""
+    client_ip = get_client_ip(request)
     logger.info("用户登出", extra={"user_id": user_id})
+    audit_log(AuditAction.LOGOUT, user_id=user_id, success=True, ip=client_ip)
     return {"status": "ok"}
 
 
@@ -92,9 +104,10 @@ async def get_me(user_id: str = Depends(get_current_user)):
 
 
 @router.patch("/me", response_model=UserPublic)
-async def update_me(body: dict, user_id: str = Depends(get_current_user)):
+async def update_me(body: dict, request: Request, user_id: str = Depends(get_current_user)):
     """更新当前用户信息"""
     storage = _get_user_storage()
+    client_ip = get_client_ip(request)
 
     # 只允许更新特定字段
     allowed_fields = {"name", "avatar_url", "settings"}
@@ -103,4 +116,6 @@ async def update_me(body: dict, user_id: str = Depends(get_current_user)):
     user = storage.update(user_id, updates)
     if not user:
         raise HTTPException(404, "用户不存在")
+    audit_log(AuditAction.USER_UPDATE, user_id=user_id, success=True, ip=client_ip,
+              detail={"fields": list(updates.keys())})
     return storage.to_public(user)

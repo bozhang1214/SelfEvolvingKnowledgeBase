@@ -234,6 +234,7 @@ def create_app() -> FastAPI:
     from app.api.routes.conversations import router as conv_router
     from app.api.routes.health import router as health_router
     from app.api.routes.knowledge import router as knowledge_router
+    from app.api.routes.metrics import router as metrics_router
     from app.api.routes.upload import router as upload_router
 
     app.include_router(auth_router)
@@ -241,11 +242,12 @@ def create_app() -> FastAPI:
     app.include_router(conv_router)
     app.include_router(health_router)
     app.include_router(knowledge_router)
+    app.include_router(metrics_router)
     app.include_router(upload_router)
 
     logger.info(
         "FastAPI 路由注册完成",
-        routers=["auth", "chat", "conversations", "health", "knowledge", "upload"],
+        routers=["auth", "chat", "conversations", "health", "knowledge", "metrics", "upload"],
         cors_origins=config.api.cors_origins or ["*"],
     )
 

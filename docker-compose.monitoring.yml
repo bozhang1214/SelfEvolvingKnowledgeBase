@@ -1,0 +1,216 @@
+# ============================================================
+# 自迭代个人知识库 Agent - 监控栈（Phase 4 P0-4/P0-5/P0-6）
+# ============================================================
+# 独立监控栈，通过 external 网络连接到主 compose 的应用容器
+# 提供：Prometheus（指标采集）+ Grafana（可视化）+ Loki（日志聚合）+ Promtail（日志采集）
+#
+# 使用方式：
+#   1. 先启动应用栈（会在主 compose 中创建 sekb_network 网络）：
+#        docker compose -f docker-compose.prod.yml up -d
+#   2. 启动监控栈：
+#        docker compose -f docker-compose.monitoring.yml up -d
+#   3. 访问 Grafana：http://localhost:3001（默认账号 admin/admin）
+#      数据源与 SEKB 系统总览看板已自动 provisioning
+#   4. 访问 Prometheus：http://localhost:9091
+#   5. 停止监控栈：
+#        docker compose -f docker-compose.monitoring.yml down
+#
+# 与主 compose 解耦：
+#   - 不修改 docker-compose.prod.yml，保持应用栈纯净
+#   - 通过 external 网络 sekb_network 连接 backend 容器采集指标
+#   - 监控数据独立持久化卷，应用栈重建不影响监控历史
+# ============================================================
+
+services:
+  # ============ Prometheus：指标采集与告警评估 ============
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: sekb-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"        # 指标保留 30 天
+      - "--storage.tsdb.retention.size=10GB"       # 最大 10GB
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"                   # 启用 /-/reload 热加载
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+    networks:
+      - sekb_network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+  # ============ Grafana：可视化与看板 ============
+  grafana:
+    image: grafana/grafana:latest
+    container_name: sekb-grafana
+    restart: unless-stopped
+    environment:
+      # 管理员账号（生产环境务必修改 GF_SECURITY_ADMIN_PASSWORD）
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # 允许匿名查看（可选，生产可关闭）
+      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANONYMOUS:-false}
+      # 自动 provisioning
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+      # 看板默认刷新间隔
+      GF_DASHBOARDS_DEFAULT_REFRESH: 15s
+    volumes:
+      # 数据源与看板 provisioning 配置
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/provisioning/dashboards:/var/lib/grafana/dashboards:ro
+      # Grafana 持久化数据（用户、看板修改等）
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    networks:
+      - sekb_network
+    depends_on:
+      - prometheus
+      - loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  # ============ Loki：日志聚合 ============
+  loki:
+    image: grafana/loki:latest
+    container_name: sekb-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./deploy/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "${LOKI_PORT:-3101}:3100"
+    networks:
+      - sekb_network
+    # Loki 官方镜像为 distroless（无 /bin/sh、wget 等工具），无法使用 CMD-SHELL 健康检查。
+    # 服务可用性由 Prometheus 抓取目标状态间接保障（Loki 不在线时抓取失败会告警）。
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+  # ============ Promtail：日志采集 ============
+  promtail:
+    image: grafana/promtail:latest
+    container_name: sekb-promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./deploy/promtail-config.yml:/etc/promtail/config.yml:ro
+      # 采集容器日志：挂载 docker socket 与日志目录
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - promtail_data:/tmp
+    networks:
+      - sekb_network
+    depends_on:
+      - loki
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.3"
+
+  # ============ Alertmanager：告警通知路由 ============
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: sekb-alertmanager
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ./deploy/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    networks:
+      - sekb_network
+    depends_on:
+      - feishu-webhook
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.3"
+
+  # ============ 飞书 Webhook 中转服务 ============
+  feishu-webhook:
+    build:
+      context: ./deploy/feishu-webhook
+      dockerfile: Dockerfile
+    image: sekb-feishu-webhook:${TAG:-latest}
+    container_name: sekb-feishu-webhook
+    restart: unless-stopped
+    environment:
+      # 飞书机器人 webhook 地址（在 .env.prod 中配置）
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+      FEISHU_SECRET: ${FEISHU_SECRET:-}
+    ports:
+      - "${FEISHU_GATEWAY_PORT:-5001}:5001"
+    networks:
+      - sekb_network
+    healthcheck:
+      # python:3.11-slim 镜像无 wget，改用 python urllib 检查健康端点
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:5001/health')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.2"
+
+# ============ 网络：复用主 compose 的 sekb_network ============
+networks:
+  sekb_network:
+    # external: true 表示使用已存在的网络（由 docker-compose.prod.yml 创建）
+    # 若未启动应用栈，监控栈将无法采集到指标，但容器仍可启动
+    external: true
+    name: sekb_network
+
+# ============ 持久化卷 ============
+volumes:
+  prometheus_data:
+    name: sekb_prometheus_data
+  grafana_data:
+    name: sekb_grafana_data
+  loki_data:
+    name: sekb_loki_data
+  promtail_data:
+    name: sekb_promtail_data
+  alertmanager_data:
+    name: sekb_alertmanager_data

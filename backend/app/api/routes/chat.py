@@ -32,6 +32,7 @@ from app.api.server import get_app_context
 from app.core.bootstrap import AppContext
 from app.core.exceptions import SEKBError
 from app.core.logging import bind_context, clear_context, get_logger
+from app.core.metrics import record_chat_error, record_chat_metrics
 from app.graph.state import create_initial_state
 
 logger = get_logger(__name__)
@@ -302,19 +303,25 @@ async def chat(
     try:
         result = await _run_chat(ctx, request)
     except HTTPException:
+        record_chat_error()
         raise
     except SEKBError as e:
         logger.warning("聊天处理失败", error=str(e), exc_info=True)
+        record_chat_error()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=e.message,
         ) from e
     except Exception as e:
         logger.error("聊天意外异常", error=str(e), exc_info=True)
+        record_chat_error()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"内部错误: {e}",
         ) from e
+
+    # 记录 Prometheus 指标（埋点失败不影响主流程）
+    record_chat_metrics(result)
 
     return ChatResponse(
         conversation_id=result["conversation_id"],
@@ -352,6 +359,7 @@ async def chat_stream(
         try:
             result = await _run_chat(ctx, request)
         except HTTPException as e:
+            record_chat_error()
             payload = json.dumps(
                 {"type": "error", "detail": e.detail}, ensure_ascii=False
             )
@@ -359,6 +367,7 @@ async def chat_stream(
             return
         except SEKBError as e:
             logger.warning("流式聊天处理失败", error=str(e), exc_info=True)
+            record_chat_error()
             payload = json.dumps(
                 {"type": "error", "detail": e.message}, ensure_ascii=False
             )
@@ -366,11 +375,15 @@ async def chat_stream(
             return
         except Exception as e:
             logger.error("流式聊天意外异常", error=str(e), exc_info=True)
+            record_chat_error()
             payload = json.dumps(
                 {"type": "error", "detail": f"内部错误: {e}"}, ensure_ascii=False
             )
             yield f"data: {payload}\n\n".encode("utf-8")
             return
+
+        # 记录 Prometheus 指标（埋点失败不影响主流程）
+        record_chat_metrics(result)
 
         # 逐 token 推送
         async for token_data in _stream_tokens(result["answer"]):

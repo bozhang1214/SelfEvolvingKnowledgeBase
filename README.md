@@ -67,7 +67,7 @@
 | P0-9 | CLI + FastAPI 双入口 | `sekb chat` 交互聊天 + REST API（含 SSE 流式） |
 | P0-10 | 测试金字塔 | 单元测试 + 集成测试 + Eval 集，覆盖核心模块 |
 
-### Phase 2 — 记忆系统 + RAG + 知识库（部分实现 🚧）
+### Phase 2 — 记忆系统 + RAG + 知识库（已实现 ✅）
 
 | 编号 | 功能 | 状态 |
 |------|------|------|
@@ -78,6 +78,30 @@
 | P0-5 | PostgreSQL 存储切换 | 设计完成，待实现迁移脚本 |
 | P0-6 | 文件上传处理 | ✅ 已实现：PDF/Word/TXT 解析 → 分块 → 入库 |
 | P0-7 | 向量检索直连 | ✅ 已实现：`DirectVectorStore` 绕过 MCP，<10ms |
+
+### Phase 3 — 前端 + 多用户 + 鉴权（已实现 ✅）
+
+| 编号 | 功能 | 说明 |
+|------|------|------|
+| P0-1 | React SPA 前端 | 聊天/文件上传/知识库管理/设置 4 个页面 |
+| P0-2 | 用户注册/登录 | JWT 鉴权，PBKDF2-SHA256 密码哈希 |
+| P0-3 | 会话管理 API | 列表/详情/重命名/删除/消息反馈 |
+| P0-4 | 知识库管理 API | 搜索/列表/删除知识条目 |
+| P0-5 | API 安全 | CORS + 速率限制 + 审计日志 |
+| P0-6 | SSE 流式聊天 | 前端实时流式渲染助手回复 |
+
+### Phase 4 — 生产部署 + 监控 + CI/CD（已实现 ✅）
+
+| 编号 | 功能 | 说明 |
+|------|------|------|
+| P0-1 | Docker 容器化 | 后端 + 前端 + 数据库一键部署 |
+| P0-2 | 监控栈 | Prometheus + Grafana + Loki + Alertmanager |
+| P0-3 | CI/CD Pipeline | GitHub Actions：lint → 测试 → 构建 → 部署 |
+| P0-4 | 告警通知 | Alertmanager + 飞书 Webhook 中转 |
+| P0-5 | 灰度发布 | Nginx 流量分流 + 自动回滚监控 |
+| P0-6 | 备份恢复 | PostgreSQL/Redis/ChromaDB/配置 定时备份 |
+| P0-7 | 安全加固 | CSP 安全头 + SSL/TLS + 审计日志 |
+| P0-8 | HTTPS 支持 | Let's Encrypt 证书 + Nginx SSL 配置 |
 
 ---
 
@@ -289,6 +313,16 @@ with requests.post(f"{BASE_URL}/chat/stream", json={
 
 ## API 端点列表
 
+### 认证（Auth）— Phase 3
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/v1/auth/register` | 用户注册 |
+| `POST` | `/api/v1/auth/login` | 用户登录，返回 JWT |
+| `POST` | `/api/v1/auth/logout` | 用户登出 |
+| `GET` | `/api/v1/auth/me` | 获取当前用户信息 |
+| `PATCH` | `/api/v1/auth/me` | 更新当前用户信息 |
+
 ### 聊天（Chat）
 
 | 方法 | 路径 | 说明 |
@@ -313,6 +347,20 @@ with requests.post(f"{BASE_URL}/chat/stream", json={
 | `POST` | `/api/v1/upload/` | 上传文件并入库到知识库（支持同步/异步处理） |
 | `GET` | `/api/v1/upload/status` | 查询知识库状态（条目总数 + L3 启用状态） |
 | `DELETE` | `/api/v1/upload/entries/{entry_id}` | 删除指定知识条目 |
+
+### 知识库管理（Knowledge）— Phase 3
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/v1/knowledge/` | 知识条目列表（分页） |
+| `GET` | `/api/v1/knowledge/search` | 知识库搜索（`?q=关键词`） |
+| `DELETE` | `/api/v1/knowledge/{entry_id}` | 删除指定知识条目 |
+
+### 监控指标（Metrics）— Phase 4
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/metrics` | Prometheus 指标端点 |
 
 ### 健康检查（Health）
 
@@ -357,7 +405,7 @@ with requests.post(f"{BASE_URL}/chat/stream", json={
 ```
 SelfEvolvingKnowledgeBase/
 ├── README.md                           # 项目根说明（本文件）
-├── docs/                               # 设计文档
+├── docs/                               # 设计文档与操作手册
 │   ├── README.md                       # 文档工程导航
 │   ├── 01-architecture.md              # 总体架构、技术栈、ADR
 │   ├── 02-phase1-design.md             # Phase 1 详细设计
@@ -365,7 +413,11 @@ SelfEvolvingKnowledgeBase/
 │   ├── 04-config-reference.md          # 配置参考
 │   ├── 05-phase2-design.md             # Phase 2 详细设计
 │   ├── 06-phase3-design.md             # Phase 3 详细设计
-│   └── 07-phase4-design.md             # Phase 4 详细设计
+│   ├── 07-phase4-design.md             # Phase 4 详细设计
+│   ├── DEPLOYMENT.md                   # 项目操作手册（从零到上线）
+│   ├── ALERTING-TROUBLESHOOTING.md     # 告警模块故障排查
+│   └── testCase/                       # 测试用例
+│       └── TEST-CASES.md               # 测试用例汇总与自动化指南
 │
 ├── backend/                            # Python 后端
 │   ├── app/
@@ -444,7 +496,28 @@ SelfEvolvingKnowledgeBase/
 │   ├── requirements.txt                # 依赖清单
 │   └── pyproject.toml                  # 项目元数据
 │
-├── frontend/                           # 前端（Phase 3）
+├── frontend/                           # 前端（Phase 3，React + Vite）
+├── deploy/                             # 部署配置（Phase 4）
+│   ├── nginx.conf                      #   Nginx 反向代理配置
+│   ├── nginx-ssl.conf                  #   HTTPS SSL 配置
+│   ├── nginx-canary.conf               #   灰度发布 Nginx 配置
+│   ├── prometheus.yml                  #   Prometheus 采集配置
+│   ├── alerts.yml                      #   告警规则
+│   ├── alertmanager.yml                #   Alertmanager 路由配置
+│   ├── loki-config.yml                 #   Loki 日志聚合配置
+│   ├── promtail-config.yml             #   Promtail 日志采集配置
+│   ├── backup.sh                       #   数据备份脚本
+│   ├── restore.sh                      #   数据恢复脚本
+│   ├── canary_monitor.sh               #   灰度监控与自动回滚
+│   ├── pre-deploy-check.sh             #   部署前一键检查脚本
+│   ├── deploy.sh                       #   一键部署脚本
+│   ├── .env.prod.example               #   生产环境变量模板
+│   ├── grafana/                        #   Grafana 看板 provisioning
+│   └── feishu-webhook/                 #   飞书告警通知中转服务
+│
+├── .github/workflows/ci.yml            # CI/CD Pipeline（GitHub Actions）
+├── docker-compose.prod.yml             # 生产部署 Compose 文件
+├── docker-compose.monitoring.yml       # 监控栈 Compose 文件
 ├── start_backend.sh                    # 后端启动脚本
 ├── start_frontend.sh                   # 前端启动脚本
 ├── .gitignore
@@ -563,6 +636,7 @@ sekb eval --dataset app/eval/datasets/golden_qa.json
 
 | 文档 | 内容 |
 |------|------|
+| [docs/README.md](docs/README.md) | 文档工程导航与项目定位 |
 | [docs/01-architecture.md](docs/01-architecture.md) | 总体架构、技术栈、ADR |
 | [docs/02-phase1-design.md](docs/02-phase1-design.md) | Phase 1 详细设计 |
 | [docs/03-evaluation-and-testing.md](docs/03-evaluation-and-testing.md) | 评估体系与测试 |
@@ -570,6 +644,11 @@ sekb eval --dataset app/eval/datasets/golden_qa.json
 | [docs/05-phase2-design.md](docs/05-phase2-design.md) | Phase 2 详细设计 |
 | [docs/06-phase3-design.md](docs/06-phase3-design.md) | Phase 3 详细设计 |
 | [docs/07-phase4-design.md](docs/07-phase4-design.md) | Phase 4 详细设计 |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | **项目操作手册**：从零到上线的完整指南 |
+| [docs/PRODUCTION-DEPLOY.md](docs/PRODUCTION-DEPLOY.md) | **线上部署手册**：生产服务器部署实战指南 |
+| [docs/CLOUD-DEPLOY.md](docs/CLOUD-DEPLOY.md) | **云平台部署手册**：国内轻量应用服务器低成本部署 |
+| [docs/ALERTING-TROUBLESHOOTING.md](docs/ALERTING-TROUBLESHOOTING.md) | 告警模块故障排查指南 |
+| [docs/testCase/TEST-CASES.md](docs/testCase/TEST-CASES.md) | 测试用例汇总与自动化测试指南 |
 
 ---
 

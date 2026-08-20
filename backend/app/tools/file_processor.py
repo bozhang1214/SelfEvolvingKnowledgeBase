@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.logging import get_logger
+from app.tools.image_processor import SUPPORTED_IMAGE_EXTENSIONS, ImageProcessor
 
 logger = get_logger(__name__)
 
@@ -47,8 +48,10 @@ logger = get_logger(__name__)
 # - 英文 .!? 后跟空白时切分（消费空白），避免误切 "3.14"、"U.S." 等无空白场景
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？])|(?<=[.!?])\s+")
 
-# 默认支持的文件扩展名（小写、含点号）
-_DEFAULT_SUPPORTED_EXTENSIONS: list[str] = [".txt", ".md", ".markdown", ".pdf", ".docx"]
+# 默认支持的文件扩展名（小写、含点号），含图片格式
+_DEFAULT_SUPPORTED_EXTENSIONS: list[str] = [
+    ".txt", ".md", ".markdown", ".pdf", ".docx",
+] + SUPPORTED_IMAGE_EXTENSIONS
 
 
 # ============================================================
@@ -196,22 +199,32 @@ class FileProcessor:
     文件处理器。
 
     根据文件扩展名选择对应的解析器，提取纯文本后交由 ``chunk_text`` 分块。
-    支持 .txt / .md / .markdown / .pdf / .docx，其他类型抛出 ValueError。
+    支持 .txt / .md / .markdown / .pdf / .docx 以及图片格式(.jpg/.png/.webp 等)。
+    图片通过 ImageProcessor 进行 OCR 文字提取和多模态标签生成。
 
     PDF 与 Word 依赖（pypdf、python-docx）采用懒导入，未安装时抛出友好错误，
     不影响模块本身加载与其他格式解析。
     """
 
-    def __init__(self, supported_extensions: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        supported_extensions: list[str] | None = None,
+        image_config: dict[str, Any] | None = None,
+        image_save_dir: str = "data/uploads/images",
+    ) -> None:
         """
         初始化文件处理器。
 
         Args:
             supported_extensions: 支持的扩展名列表（小写、含点号）。
-                为 None 时使用默认列表 ``[".txt", ".md", ".markdown", ".pdf", ".docx"]``。
+                为 None 时使用默认列表（含图片格式）。
+            image_config: 图片处理配置（vision_llm + ocr），来自 config.yaml。
+            image_save_dir: 图片 OCR 文本保存目录。
         """
         exts = supported_extensions if supported_extensions is not None else _DEFAULT_SUPPORTED_EXTENSIONS
         self.supported_extensions: list[str] = [ext.lower() for ext in exts]
+        self._image_processor = ImageProcessor(vision_config=image_config)
+        self._image_save_dir = image_save_dir
 
     async def parse_file(self, file_path: str) -> str:
         """
@@ -251,6 +264,11 @@ class FileProcessor:
             parser = self._parse_markdown
         elif ext == ".txt":
             parser = self._parse_txt
+        elif ext in SUPPORTED_IMAGE_EXTENSIONS:
+            # 图片在 process_file 中走专用流程，parse_file 不处理
+            raise ValueError(
+                f"图片格式 {ext} 请通过 process_file 处理（含 OCR + 标签）"
+            )
         else:
             # 扩展名在支持列表中但未实现解析器（用户自定义扩展名时可能命中）
             raise ValueError(f"扩展名 {ext} 暂无解析器实现")
@@ -292,6 +310,10 @@ class FileProcessor:
             file_size = path.stat().st_size
         except OSError:
             file_size = 0
+
+        # 图片走专用处理流程（OCR + 多模态标签）
+        if path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+            return await self._process_image_file(file_path, user_id, metadata)
 
         try:
             content = await self.parse_file(file_path)
@@ -385,3 +407,91 @@ class FileProcessor:
         doc = Document(file_path)
         paragraphs = [p.text for p in doc.paragraphs if p.text and p.text.strip()]
         return "\n\n".join(paragraphs)
+
+    # ------------------------------------------------------------
+    # 图片处理（委托给 ImageProcessor）
+    # ------------------------------------------------------------
+
+    async def _process_image_file(
+        self,
+        file_path: str,
+        user_id: str,
+        metadata: dict[str, Any],
+    ) -> ProcessResult:
+        """
+        图片处理流程：OCR 提取文字 + 多模态标签 + 保存文本。
+
+        处理后的内容（OCR 文本 + 标签 + 描述）作为 chunks 返回，
+        供上层入库到知识库。
+        """
+        path = Path(file_path)
+        try:
+            file_size = path.stat().st_size
+        except OSError:
+            file_size = 0
+
+        try:
+            result = await self._image_processor.process_image(
+                image_path=file_path,
+                user_id=user_id,
+                save_dir=self._image_save_dir,
+            )
+
+            if result.status == "error":
+                return ProcessResult(
+                    file_path=str(path),
+                    file_name=path.name,
+                    file_size=file_size,
+                    content_length=0,
+                    chunks=[],
+                    chunks_count=0,
+                    status="error",
+                    error=result.error,
+                )
+
+            # 构造入库内容：OCR 文本 + 标签 + 描述
+            chunks: list[str] = []
+            if result.description:
+                chunks.append(f"图片描述：{result.description}")
+            if result.tags:
+                chunks.append(f"图片标签：{', '.join(result.tags)}")
+            if result.ocr_text.strip():
+                ocr_chunks = chunk_text(result.ocr_text)
+                chunks.extend(ocr_chunks)
+
+            logger.info(
+                "图片文件处理完成",
+                file_path=str(path),
+                user_id=user_id,
+                tags=result.tags,
+                ocr_length=len(result.ocr_text),
+                chunks_count=len(chunks),
+            )
+
+            return ProcessResult(
+                file_path=str(path),
+                file_name=path.name,
+                file_size=file_size,
+                content_length=len(result.ocr_text),
+                chunks=chunks,
+                chunks_count=len(chunks),
+                status="success",
+            )
+        except Exception as e:
+            logger.error(
+                "图片文件处理失败",
+                file_path=str(path),
+                user_id=user_id,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            return ProcessResult(
+                file_path=str(path),
+                file_name=path.name,
+                file_size=file_size,
+                content_length=0,
+                chunks=[],
+                chunks_count=0,
+                status="error",
+                error=str(e),
+            )

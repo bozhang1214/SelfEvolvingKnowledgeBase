@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.server import get_app_context
 from app.core.bootstrap import AppContext
+from app.core.metrics import service_health, service_subsystem_health
 
 router = APIRouter(prefix="/api/v1/health", tags=["health"])
 
@@ -73,6 +74,16 @@ async def health_check(ctx: AppContext = Depends(get_app_context)) -> dict:
     # 聚合：核心依赖（LLM + Graph）任一不可用即 degraded
     overall_ok = llm_ok and graph_ok
     overall_status = "ok" if overall_ok else "degraded"
+
+    # 更新 Prometheus 服务健康指标（供监控看板与告警使用）
+    try:
+        service_health.set(1 if overall_ok else 0)
+        service_subsystem_health.labels(subsystem="llm").set(1 if llm_ok else 0)
+        service_subsystem_health.labels(subsystem="tools").set(1 if all_tools_ok else 0)
+        service_subsystem_health.labels(subsystem="storage").set(1 if storage_ok else 0)
+        service_subsystem_health.labels(subsystem="graph").set(1 if graph_ok else 0)
+    except Exception:
+        pass
 
     return {
         "status": overall_status,

@@ -1,0 +1,80 @@
+# ============================================================
+# Alertmanager 告警通知配置（Phase 4 P0-6）
+# ============================================================
+# 挂载到 alertmanager 容器 /etc/alertmanager/alertmanager.yml
+# 通知渠道：飞书 Webhook + 邮件
+#
+# 配置说明：
+#   - 飞书 Webhook 在 .env.prod 中通过 FEISHU_WEBHOOK_URL 注入
+#   - 邮件 SMTP 在 .env.prod 中通过 SMTP_* 注入
+#   - 告警分级路由：critical 立即推送，warning 聚合后推送
+# ============================================================
+
+global:
+  # SMTP 配置（邮件通知）
+  # 注意：Alertmanager 不支持 ${VAR:default} 语法，使用直接值
+  # 生产部署时通过挂载自定义 alertmanager.yml 覆盖
+  smtp_smarthost: "localhost:25"
+  smtp_from: "alert@sekb.local"
+  smtp_auth_username: ""
+  smtp_auth_password: ""
+  resolve_timeout: 5m
+
+# 告警模板
+templates:
+  - /etc/alertmanager/templates/*.tmpl
+
+# 告警路由规则
+route:
+  group_by: ["alertname", "severity", "service"]
+  group_wait: 30s          # 同组告警聚合等待时间
+  group_interval: 5m       # 同组告警发送间隔
+  repeat_interval: 4h      # 重复告警发送间隔
+  receiver: "default"
+  routes:
+    # critical 级别立即推送
+    - matchers:
+        - severity="critical"
+      receiver: "feishu-critical"
+      group_wait: 10s
+      repeat_interval: 1h
+    # warning 级别聚合后推送
+    - matchers:
+        - severity="warning"
+      receiver: "feishu-warning"
+      group_wait: 1m
+      repeat_interval: 4h
+
+# 抑制规则：critical 触发时抑制同类 warning
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ["alertname", "service"]
+
+# 接收器定义
+receivers:
+  # 默认接收器（飞书 + 邮件）
+  - name: "default"
+    webhook_configs:
+      - url: "http://feishu-webhook:5001/webhook"
+        send_resolved: true
+    email_configs:
+      - to: "admin@sekb.local"
+        send_resolved: true
+
+  # critical 告警接收器
+  - name: "feishu-critical"
+    webhook_configs:
+      - url: "http://feishu-webhook:5001/webhook"
+        send_resolved: true
+    email_configs:
+      - to: "admin@sekb.local"
+        send_resolved: true
+
+  # warning 告警接收器
+  - name: "feishu-warning"
+    webhook_configs:
+      - url: "http://feishu-webhook:5001/webhook"
+        send_resolved: true
