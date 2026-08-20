@@ -103,13 +103,24 @@ else
     fail "CPU 核数不足: $CPU_COUNT" "至少需要 2 核"
 fi
 
-# 1.3 内存
-MEM_TOTAL=$(free -m 2>/dev/null | awk '/^Mem:/ {print $2}')
+# 1.3 内存（阈值 3600MB，预留系统开销；优先读 /proc/meminfo 总内存）
+MEM_TOTAL=""
+if [ -r "/proc/meminfo" ]; then
+    # Linux：从 /proc/meminfo 读取总内存（KB），转 MB
+    MEM_KB=$(grep "^MemTotal:" /proc/meminfo 2>/dev/null | awk '{print $2}')
+    if [ -n "$MEM_KB" ]; then
+        MEM_TOTAL=$((MEM_KB / 1024))
+    fi
+fi
+# 降级：用 free 命令
+if [ -z "$MEM_TOTAL" ]; then
+    MEM_TOTAL=$(free -m 2>/dev/null | awk '/^Mem:/ {print $2}')
+fi
 if [ -n "$MEM_TOTAL" ]; then
-    if [ "$MEM_TOTAL" -ge 4096 ]; then
+    if [ "$MEM_TOTAL" -ge 3600 ]; then
         pass "内存: ${MEM_TOTAL}MB"
     else
-        fail "内存不足: ${MEM_TOTAL}MB" "至少需要 4096MB（4GB）"
+        fail "内存不足: ${MEM_TOTAL}MB" "至少需要 3600MB（推荐 4GB），当前可用内存偏低"
     fi
 else
     warn "无法检测内存"
