@@ -5,6 +5,9 @@
 #   stage 1 (builder): node 环境，安装依赖并执行生产构建
 #   stage 2 (runtime): nginx:alpine，仅托管 dist 静态资源 + 反向代理配置
 #
+# 构建参数（通过 --build-arg 或 docker-compose.yml args 传入）：
+#   NPM_REGISTRY  npm 镜像源（默认淘宝源）
+#
 # 生产部署架构：
 #   - Nginx 托管 SPA 静态文件（/usr/share/nginx/html）
 #   - Nginx 反向代理 /api/* 到后端容器
@@ -22,6 +25,9 @@
 # --------------- stage 1: builder ---------------
 FROM node:20-alpine AS builder
 
+# npm 镜像源参数（默认淘宝源）
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
 WORKDIR /app
 
 # 启用 pnpm 长缓存（可选）
@@ -31,7 +37,9 @@ ENV CI=true
 COPY package.json package-lock.json* ./
 
 # 安装依赖（使用 npm ci 保证可复现构建；若无 lock 文件则回退到 npm install）
-RUN if [ -f package-lock.json ]; then \
+# 使用国内 npm 镜像源加速下载
+RUN npm config set registry ${NPM_REGISTRY} && \
+    if [ -f package-lock.json ]; then \
         npm ci --no-audit --no-fund; \
     else \
         npm install --no-audit --no-fund; \

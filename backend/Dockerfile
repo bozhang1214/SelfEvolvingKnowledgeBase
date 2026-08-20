@@ -5,8 +5,15 @@
 #   stage 1 (builder): 安装 Python 依赖到独立目录
 #   stage 2 (runtime): 仅复制依赖与应用代码，最小化镜像体积
 #
+# 构建参数（通过 --build-arg 或 docker-compose.yml args 传入）：
+#   APT_MIRROR  apt 镜像源（默认阿里云；腾讯云用 mirrors.cloud.tencent.com）
+#   PIP_INDEX   pip 镜像源（默认阿里云；腾讯云用 https://mirrors.cloud.tencent.com/pypi/simple/）
+#
 # 构建示例：
 #   docker build -t self-evolving-kb-backend:latest ./backend
+#   docker build --build-arg APT_MIRROR=mirrors.cloud.tencent.com \
+#                --build-arg PIP_INDEX=https://mirrors.cloud.tencent.com/pypi/simple/ \
+#                -t self-evolving-kb-backend:latest ./backend
 #
 # 运行示例：
 #   docker run --rm -p 8000:8000 \
@@ -20,7 +27,15 @@
 # --------------- stage 1: builder ---------------
 FROM python:3.11-slim AS builder
 
+# 镜像源参数（默认阿里云；腾讯云构建时传腾讯云内网源）
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG PIP_INDEX=https://mirrors.aliyun.com/pypi/simple/
+
 WORKDIR /app
+
+# 替换为国内镜像源，加速 apt 下载
+RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true
 
 # 安装编译依赖（构建期临时使用）
 # - gcc/build-essential: 编译 psycopg2、tiktoken、orjson 等 C 扩展
@@ -35,18 +50,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 升级 pip 并安装 wheel 加速后续安装
-RUN pip install --no-cache-dir --upgrade pip wheel setuptools
+# --trusted-host 避免 SSL 证书验证失败 fallback 到官方源
+# --timeout 120 防止单个包下载超时卡住整个构建
+RUN pip install --no-cache-dir -i ${PIP_INDEX} \
+        --trusted-host mirrors.cloud.tencent.com \
+        --trusted-host mirrors.aliyun.com \
+        --timeout 120 --retries 3 \
+        --upgrade pip wheel setuptools
 
 # 先复制依赖清单，利用 Docker 层缓存（依赖变化少时跳过重装）
 COPY requirements.txt ./
 
 # 安装依赖到独立前缀目录，便于 stage 2 整体复制
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/install \
+        -i ${PIP_INDEX} \
+        --trusted-host mirrors.cloud.tencent.com \
+        --trusted-host mirrors.aliyun.com \
+        --timeout 120 --retries 3 \
+        -r requirements.txt
 
 # --------------- stage 2: runtime ---------------
 FROM python:3.11-slim
 
+# 镜像源参数（需在每个 stage 重新声明）
+ARG APT_MIRROR=mirrors.aliyun.com
+
 WORKDIR /app
+
+# 替换为国内镜像源，加速 apt 下载
+RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true
 
 # 安装运行期系统依赖：
 # - libpq5: PostgreSQL 客户端运行库（asyncpg/psycopg2 运行期依赖）

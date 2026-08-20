@@ -179,18 +179,41 @@ step "阶段 2/7：构建镜像"
 if [ "$SKIP_BUILD" = true ]; then
     warn "跳过镜像构建（--skip-build）"
 else
-    info "构建后端镜像（首次约 10-15 分钟）..."
-    if run "docker compose -f docker-compose.prod.yml --env-file .env.prod build backend"; then
-        success "后端镜像构建完成"
+    # 构建前网络预检测：测试镜像源连通性
+    info "检测镜像源连通性..."
+    if curl -sf --connect-timeout 5 -o /dev/null https://mirrors.cloud.tencent.com/ 2>/dev/null; then
+        success "腾讯云镜像源可用（VPC 内自动走内网，构建最快）"
+    elif curl -sf --connect-timeout 5 -o /dev/null https://mirrors.aliyun.com/ 2>/dev/null; then
+        warn "腾讯云源不可达，将使用阿里云源（可能较慢）"
     else
-        fail "后端镜像构建失败" "检查 Dockerfile 和网络连接"
+        warn "镜像源连通性检测失败，构建可能较慢（请检查网络或配置 Docker 镜像加速器）"
+        echo "        参考：sudo tee /etc/docker/daemon.json <<'EOF'"
+        echo '        {"registry-mirrors":["https://mirror.ccs.tencentyun.com","https://docker.mirrors.ustc.edu.cn"]}'
+        echo "        EOF && sudo systemctl restart docker"
     fi
 
+    echo ""
+    info "构建后端镜像（首次约 5-8 分钟，已配置腾讯云镜像源）..."
+    echo "        如需查看实时进度：另开 SSH 会话执行 docker compose logs -f backend"
+    echo "        如构建卡住超过 15 分钟：Ctrl+C 中止，检查网络和镜像源配置"
+    # 使用 timeout 防止无限等待（20 分钟超时）
+    if run "timeout 1200 docker compose -f docker-compose.prod.yml --env-file .env.prod build --progress=plain backend"; then
+        success "后端镜像构建完成"
+    else
+        fail "后端镜像构建失败" "1. 检查网络: curl -I https://mirrors.cloud.tencent.com/
+        2. 检查 Docker 加速: cat /etc/docker/daemon.json
+        3. 查看构建日志: docker compose -f docker-compose.prod.yml logs backend
+        4. 重试: docker compose -f docker-compose.prod.yml --env-file .env.prod build --no-cache backend"
+    fi
+
+    echo ""
     info "构建前端镜像（约 2-3 分钟）..."
-    if run "docker compose -f docker-compose.prod.yml --env-file .env.prod build frontend"; then
+    if run "timeout 600 docker compose -f docker-compose.prod.yml --env-file .env.prod build --progress=plain frontend"; then
         success "前端镜像构建完成"
     else
-        fail "前端镜像构建失败" "检查 frontend/Dockerfile 和 package.json"
+        fail "前端镜像构建失败" "1. 检查 frontend/Dockerfile
+        2. 查看日志: docker compose -f docker-compose.prod.yml logs frontend
+        3. 重试: docker compose -f docker-compose.prod.yml --env-file .env.prod build --no-cache frontend"
     fi
 fi
 

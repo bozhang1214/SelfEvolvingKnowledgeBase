@@ -38,6 +38,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        # 腾讯云镜像源（公网统一域名，VPC 内自动走内网，不消耗公网带宽）
+        # 换到其他平台时改为 mirrors.aliyun.com / https://mirrors.aliyun.com/pypi/simple/
+        APT_MIRROR: mirrors.cloud.tencent.com
+        PIP_INDEX: https://mirrors.cloud.tencent.com/pypi/simple/
     image: self-evolving-kb-backend:${TAG:-latest}
     container_name: sekb-backend
     restart: unless-stopped
@@ -87,6 +92,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # npm 镜像源（淘宝源，国内通用）
+        NPM_REGISTRY: https://registry.npmmirror.com
     image: self-evolving-kb-frontend:${TAG:-latest}
     container_name: sekb-frontend
     restart: unless-stopped
