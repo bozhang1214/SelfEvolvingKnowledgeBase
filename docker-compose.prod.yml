@@ -67,11 +67,14 @@ services:
       # 数据持久化：会话/索引/向量库/日志/trace 全部写入挂载卷
       - sekb_data:/app/data
     # 资源限制：保护单机不被单容器打爆
+    # 注意：cpus 上限必须 ≤ 宿主机实际核数，否则容器无法启动
+    # 2 核服务器推荐 "1.5"：给系统/SSH/frontend 预留 0.5 核，避免 backend 高峰时 SSH 卡顿
+    # 4 核及以上服务器可放宽到 "3.0" ~ "4.0"
     deploy:
       resources:
         limits:
           memory: 4G
-          cpus: "4.0"
+          cpus: "1.5"
         reservations:
           memory: 1G
           cpus: "1.0"
