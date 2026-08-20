@@ -249,7 +249,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 ```bash
 # 实时查看后端启动日志
-docker compose -f docker-compose.prod.yml logs -f backend
+docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f backend
 
 # 看到以下日志表示启动成功：
 #   INFO: Uvicorn running on http://0.0.0.0:8000
@@ -271,7 +271,7 @@ docker compose -f docker-compose.monitoring.yml up -d
 
 ```bash
 # 查看应用栈
-docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml --env-file .env.prod ps
 
 # 查看监控栈
 docker compose -f docker-compose.monitoring.yml ps
@@ -291,7 +291,7 @@ HTTP 明文传输不安全，生产环境**必须**启用 HTTPS。
 
 ```bash
 # 验证域名解析
-dig +short your-domain.com
+dig +short bos-studio.tech
 # 应返回服务器公网 IP
 ```
 
@@ -302,14 +302,14 @@ dig +short your-domain.com
 sudo apt update && sudo apt install -y certbot
 
 # 申请证书前先停止占用 80 端口的服务
-docker compose -f docker-compose.prod.yml stop frontend
+docker compose -f docker-compose.prod.yml --env-file .env.prod stop frontend
 
 # 申请 Let's Encrypt 证书
-sudo certbot certonly --standalone -d your-domain.com
+sudo certbot certonly --standalone -d bos-studio.tech
 
 # 证书文件位置：
-#   /etc/letsencrypt/live/your-domain.com/fullchain.pem
-#   /etc/letsencrypt/live/your-domain.com/privkey.pem
+#   /etc/letsencrypt/live/bos-studio.tech/fullchain.pem
+#   /etc/letsencrypt/live/bos-studio.tech/privkey.pem
 ```
 
 ### 5.3 切换 Nginx 配置为 HTTPS
@@ -321,8 +321,8 @@ cp deploy/nginx.conf deploy/nginx.conf.http.bak
 # 复制 HTTPS 配置模板
 cp deploy/nginx-ssl.conf deploy/nginx.conf
 
-# 编辑证书路径（将 your-domain.com 替换为真实域名）
-sed -i 's/your-domain.com/your-real-domain.com/g' deploy/nginx.conf
+# 编辑证书路径（将 bos-studio.tech 替换为真实域名）
+sed -i 's/your-domain.com/bos-studio.tech/g' deploy/nginx.conf
 ```
 
 ### 5.4 挂载证书到前端容器
@@ -344,14 +344,14 @@ sed -i 's/your-domain.com/your-real-domain.com/g' deploy/nginx.conf
 
 ```bash
 # 重启前端应用 HTTPS 配置
-docker compose -f docker-compose.prod.yml up -d frontend
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d frontend
 
 # 验证 HTTPS 访问
-curl -I https://your-domain.com/
+curl -I https://bos-studio.tech/
 # 期望返回 HTTP/2 200
 
 # 验证 HTTP 自动跳转
-curl -I http://your-domain.com/
+curl -I http://bos-studio.tech/
 # 期望返回 301 Location: https://...
 ```
 
@@ -410,7 +410,7 @@ curl -X POST http://localhost:8000/api/v1/chat/ \
 # 期望返回 {"conversation_id":"...","message":"..."}
 
 # 4. 验证前端页面
-# 浏览器访问 http://your-domain.com/
+# 浏览器访问 http://bos-studio.tech/
 # 应显示登录页面
 ```
 
@@ -429,7 +429,7 @@ for t in d['data']['activeTargets']:
 curl -s http://localhost:9093/api/v2/alerts | python3 -m json.tool
 
 # 访问 Grafana
-# 浏览器访问 http://your-domain.com:3001（或通过 SSH 隧道）
+# 浏览器访问 http://bos-studio.tech:3001（或通过 SSH 隧道）
 # 默认账号：admin / admin（首次登录后立即修改密码）
 ```
 
@@ -679,7 +679,7 @@ aws s3 ls s3://your-backup-bucket/sekb-backups/
 
 ```bash
 # 查看后端日志
-docker compose -f docker-compose.prod.yml logs backend --tail 50
+docker compose -f docker-compose.prod.yml --env-file .env.prod logs backend --tail 50
 
 # 常见原因：
 # 1. DEEPSEEK_API_KEY / BOCHA_API_KEY / JWT_SECRET 未设置或仍为占位符
@@ -708,7 +708,7 @@ docker exec sekb-frontend wget -qO- http://backend:8000/api/v1/health/live
 ```bash
 # 后端镜像构建需要下载 torch 和 sentence-transformers
 # 若网络超时，可配置 pip 镜像源：
-docker compose -f docker-compose.prod.yml build --no-cache backend \
+docker compose -f docker-compose.prod.yml --env-file .env.prod build --no-cache backend \
   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 或使用 HF 镜像加速模型下载（已在 compose 中配置）
@@ -749,7 +749,7 @@ docker exec sekb-alertmanager amtool check-config /etc/alertmanager/alertmanager
 # 1. SSH 到服务器查看后端日志
 ssh deploy@your-server-ip
 cd /opt/self-evolving-kb
-docker compose -f docker-compose.prod.yml logs backend --tail 100
+docker compose -f docker-compose.prod.yml --env-file .env.prod logs backend --tail 100
 
 # 2. 若需手动回滚到上个版本
 git log --oneline -5                        # 查看历史提交
@@ -765,15 +765,15 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 ### 12.1 基础服务
 
-- [ ] `docker compose -f docker-compose.prod.yml ps` 所有容器 Up (healthy)
+- [ ] `docker compose -f docker-compose.prod.yml --env-file .env.prod ps` 所有容器 Up (healthy)
 - [ ] `docker compose -f docker-compose.monitoring.yml ps` 所有容器 Up
 - [ ] `curl http://localhost:8000/api/v1/health/live` 返回 200
 - [ ] `curl http://localhost/` 返回 200（前端页面）
 
 ### 12.2 HTTPS
 
-- [ ] `curl -I https://your-domain.com/` 返回 HTTP/2 200
-- [ ] `curl -I http://your-domain.com/` 返回 301 跳转
+- [ ] `curl -I https://bos-studio.tech/` 返回 HTTP/2 200
+- [ ] `curl -I http://bos-studio.tech/` 返回 301 跳转
 - [ ] 证书自动续期 cron 已配置
 
 ### 12.3 功能验证
@@ -811,6 +811,8 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 ## 附录：完整部署命令速查
 
+> ⚠ 以下所有 docker compose 命令均需添加 --env-file .env.prod 参数，下文为简洁已省略
+
 ```bash
 # ============ 首次部署 ============
 git clone https://github.com/your-org/SelfEvolvingKnowledgeBase.git .
@@ -825,19 +827,19 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 docker compose -f docker-compose.monitoring.yml up -d
 
 # ============ 启用 HTTPS ============
-docker compose -f docker-compose.prod.yml stop frontend
-sudo certbot certonly --standalone -d your-domain.com
+docker compose -f docker-compose.prod.yml --env-file .env.prod stop frontend
+sudo certbot certonly --standalone -d bos-studio.tech
 cp deploy/nginx-ssl.conf deploy/nginx.conf
-sed -i 's/your-domain.com/your-real-domain.com/g' deploy/nginx.conf
+sed -i 's/your-domain.com/bos-studio.tech/g' deploy/nginx.conf
 # 编辑 docker-compose.prod.yml 挂载证书 + 开放 443 端口
-docker compose -f docker-compose.prod.yml up -d frontend
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d frontend
 
 # ============ 停止服务 ============
-docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml --env-file .env.prod down
 docker compose -f docker-compose.monitoring.yml down
 
 # ============ 查看日志 ============
-docker compose -f docker-compose.prod.yml logs -f backend
-docker compose -f docker-compose.prod.yml logs -f frontend
+docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f backend
+docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f frontend
 docker compose -f docker-compose.monitoring.yml logs -f prometheus
 ```

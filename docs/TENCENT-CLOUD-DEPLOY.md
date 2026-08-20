@@ -426,7 +426,7 @@ curl http://localhost:8000/api/v1/health/live
 验证解析：
 
 ```bash
-dig +short your-domain.com
+dig +short bos-studio.tech
 # 应返回 43.136.xx.xx
 ```
 
@@ -439,15 +439,15 @@ dig +short your-domain.com
 sudo apt update && sudo apt install -y certbot
 
 # 申请证书前先停止占用 80 端口的服务
-docker compose -f docker-compose.prod.yml stop frontend
+docker compose -f docker-compose.prod.yml --env-file .env.prod stop frontend
 
 # 申请 Let's Encrypt 证书
-sudo certbot certonly --standalone -d your-domain.com -d www.your-domain.com
+sudo certbot certonly --standalone -d bos-studio.tech -d www.bos-studio.tech
 # 按提示输入邮箱、同意条款
 
 # 证书文件位置：
-#   /etc/letsencrypt/live/your-domain.com/fullchain.pem
-#   /etc/letsencrypt/live/your-domain.com/privkey.pem
+#   /etc/letsencrypt/live/bos-studio.tech/fullchain.pem
+#   /etc/letsencrypt/live/bos-studio.tech/privkey.pem
 ```
 
 ### 5.4 启用 HTTPS
@@ -457,7 +457,7 @@ sudo certbot certonly --standalone -d your-domain.com -d www.your-domain.com
 cp deploy/nginx-ssl.conf deploy/nginx.conf
 
 # 2. 替换域名占位符
-sed -i 's/your-domain.com/你的真实域名.com/g' deploy/nginx.conf
+sed -i 's/your-domain.com/bos-studio.tech/g' deploy/nginx.conf
 
 # 3. 编辑 docker-compose.prod.yml，frontend 服务添加证书挂载
 #    找到 frontend 服务，修改为：
@@ -470,7 +470,7 @@ sed -i 's/your-domain.com/你的真实域名.com/g' deploy/nginx.conf
 nano docker-compose.prod.yml
 
 # 4. 重启前端应用 HTTPS 配置
-docker compose -f docker-compose.prod.yml up -d frontend
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d frontend
 
 # 5. 验证 HTTPS
 curl -I https://你的域名.com/
@@ -497,26 +497,28 @@ sudo crontab -e
 
 ### 6.1 常用命令
 
+> ⚠ 以下所有 docker compose 命令均需添加 --env-file .env.prod 参数，下文为简洁已省略
+
 ```bash
 cd /opt/self-evolving-kb
 
 # 查看服务状态
-docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml --env-file .env.prod ps
 docker compose -f docker-compose.monitoring.yml ps
 
 # 查看日志
-docker compose -f docker-compose.prod.yml logs -f backend
-docker compose -f docker-compose.prod.yml logs -f frontend
+docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f backend
+docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f frontend
 
 # 重启单个服务
-docker compose -f docker-compose.prod.yml restart backend
+docker compose -f docker-compose.prod.yml --env-file .env.prod restart backend
 
 # 更新代码并重新部署
 git pull origin main
 bash deploy/deploy.sh --skip-check
 
 # 停止所有服务
-docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml --env-file .env.prod down
 docker compose -f docker-compose.monitoring.yml down
 
 # 启动所有服务
@@ -672,7 +674,7 @@ curl http://localhost:8000/api/v1/health/live
 docker exec sekb-frontend nginx -t
 
 # 查看 nginx 日志
-docker compose -f docker-compose.prod.yml logs frontend --tail 20
+docker compose -f docker-compose.prod.yml --env-file .env.prod logs frontend --tail 20
 ```
 
 ### 8.4 域名无法访问
@@ -680,11 +682,11 @@ docker compose -f docker-compose.prod.yml logs frontend --tail 20
 ```bash
 # 1. 检查备案状态（国内服务器必须备案）
 # 2. 检查 DNS 解析
-dig your-domain.com
+dig bos-studio.tech
 # 3. 检查云防火墙是否开放 80/443 端口
 # 4. 检查证书是否过期
 sudo openssl x509 -enddate -noout \
-  -in /etc/letsencrypt/live/your-domain.com/fullchain.pem
+  -in /etc/letsencrypt/live/bos-studio.tech/fullchain.pem
 ```
 
 ### 8.5 SSH 隧道访问监控失败
@@ -764,7 +766,7 @@ ssh -i ~/.ssh/sekb_tencent_key \
 # 浏览器：http://localhost:3001（Grafana）
 
 # ============ 停止服务 ============
-docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml --env-file .env.prod down
 docker compose -f docker-compose.monitoring.yml down
 ```
 

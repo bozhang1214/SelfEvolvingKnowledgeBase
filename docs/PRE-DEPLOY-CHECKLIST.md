@@ -62,7 +62,7 @@
 
 - [ ] **域名已解析到服务器 IP**
   ```bash
-  dig +short your-domain.com
+  dig +short bos-studio.tech
   # 应返回服务器公网 IP
   ```
 
@@ -150,14 +150,14 @@
 
 - [ ] **SSL 证书已申请**
   ```bash
-  sudo ls /etc/letsencrypt/live/your-domain.com/
+  sudo ls /etc/letsencrypt/live/bos-studio.tech/
   # 应包含 fullchain.pem 和 privkey.pem
   ```
 
 - [ ] **证书未过期**
   ```bash
   sudo openssl x509 -enddate -noout \
-    -in /etc/letsencrypt/live/your-domain.com/fullchain.pem
+    -in /etc/letsencrypt/live/bos-studio.tech/fullchain.pem
   # 检查日期是否在未来
   ```
 
@@ -170,7 +170,7 @@
 
 - [ ] **证书路径已替换为真实域名**
   ```bash
-  grep "your-domain.com" deploy/nginx.conf
+  grep "bos-studio.tech" deploy/nginx.conf
   # 应无输出（已替换为真实域名）
   grep "ssl_certificate" deploy/nginx.conf
   # 应显示真实域名路径

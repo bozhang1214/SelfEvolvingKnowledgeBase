@@ -48,10 +48,10 @@ services:
       # 仅暴露给 frontend 容器内部网络；若需外部直连调试，取消下行注释
       - "8000:8000"
     environment:
-      # ---- 必需密钥 ----
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      BOCHA_API_KEY: ${BOCHA_API_KEY}
-      JWT_SECRET: ${JWT_SECRET}
+      # ---- 必需密钥（运行时必须提供，stop/restart 时不强制）----
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      BOCHA_API_KEY: ${BOCHA_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-}
       # ---- 可选 Tracing ----
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
       # ---- 运行环境标记 ----
@@ -125,7 +125,7 @@ services:
     profiles: ["with-db"]
     environment:
       POSTGRES_USER: ${DB_USER:-sekb}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required when using with-db profile}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-change-me-to-a-strong-db-password}
       POSTGRES_DB: ${DB_NAME:-sekb}
     volumes:
       - pg_data:/var/lib/postgresql/data

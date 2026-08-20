@@ -876,7 +876,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 ```bash
 # 检查容器状态
-docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml --env-file .env.prod ps
 
 # 验证后端健康
 curl http://localhost:8000/api/v1/health/live
@@ -908,13 +908,13 @@ Grafana 首次登录后请立即修改密码。
 
 ```bash
 # 1. 申请 Let's Encrypt 证书
-sudo certbot certonly --standalone -d your-domain.com
+sudo certbot certonly --standalone -d bos-studio.tech
 
 # 2. 复制 SSL 配置
 cp deploy/nginx-ssl.conf deploy/nginx.conf
 
 # 3. 修改证书路径（编辑 deploy/nginx.conf）
-#    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+#    ssl_certificate /etc/letsencrypt/live/bos-studio.tech/fullchain.pem;
 
 # 4. 在 docker-compose.prod.yml 中挂载证书目录
 #    volumes:
@@ -922,7 +922,7 @@ cp deploy/nginx-ssl.conf deploy/nginx.conf
 #      - /etc/letsencrypt:/etc/letsencrypt:ro
 
 # 5. 重启前端
-docker compose -f docker-compose.prod.yml restart frontend
+docker compose -f docker-compose.prod.yml --env-file .env.prod restart frontend
 ```
 
 ---
@@ -930,6 +930,8 @@ docker compose -f docker-compose.prod.yml restart frontend
 ## 8. 日常运维
 
 ### 8.1 启动 / 停止 / 重启
+
+> ⚠ 以下所有 docker compose 命令均需添加 --env-file .env.prod 参数，下文为简洁已省略
 
 ```bash
 # 启动全部
@@ -1042,7 +1044,7 @@ crontab -e
 **⚠️ 恢复前注意事项**：
 - 恢复会覆盖现有数据
 - 建议在低峰期执行
-- 恢复前先停止后端：`docker compose -f docker-compose.prod.yml stop backend`
+- 恢复前先停止后端：`docker compose -f docker-compose.prod.yml --env-file .env.prod stop backend`
 - 恢复脚本会自动停止/启动后端
 
 ---
@@ -1184,7 +1186,7 @@ docker run --rm -v sekb_data:/data alpine cat /data/audit/audit.log | tail -20
 
 ```bash
 # 查看后端日志
-docker compose -f docker-compose.prod.yml logs backend --tail 50
+docker compose -f docker-compose.prod.yml --env-file .env.prod logs backend --tail 50
 
 # 常见原因：
 # 1. DEEPSEEK_API_KEY / BOCHA_API_KEY / JWT_SECRET 未设置
@@ -1321,11 +1323,11 @@ mkdir -p backend/data/conversations
 
 ```bash
 # 停止并删除所有容器（保留数据卷）
-docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml --env-file .env.prod down
 docker compose -f docker-compose.monitoring.yml down
 
 # 彻底清理（包括数据卷，谨慎操作！）
-docker compose -f docker-compose.prod.yml down -v
+docker compose -f docker-compose.prod.yml --env-file .env.prod down -v
 docker compose -f docker-compose.monitoring.yml down -v
 docker volume rm sekb_data sekb_prometheus_data sekb_grafana_data sekb_loki_data
 
