@@ -206,20 +206,24 @@ else
     fail ".env.prod 文件不存在" "cp deploy/.env.prod.example .env.prod"
 fi
 
-# 2.4 .env.prod 必填项检查
+# 2.4 .env.prod 必填项检查（只检查对应密钥行，避免注释或其他行误判）
 if [ -f ".env.prod" ]; then
-    # DEEPSEEK_API_KEY
-    if grep -q "^DEEPSEEK_API_KEY=sk-" .env.prod && ! grep -q "change-me" .env.prod; then
+    # DEEPSEEK_API_KEY（只取该行，检查是否以 sk- 开头且无占位符）
+    DEEPSEEK_LINE=$(grep -E "^DEEPSEEK_API_KEY=" .env.prod | head -1)
+    if [ -n "$DEEPSEEK_LINE" ] && echo "$DEEPSEEK_LINE" | grep -qE "^DEEPSEEK_API_KEY=sk-" \
+        && ! echo "$DEEPSEEK_LINE" | grep -qE "change-me|please-change|your-real"; then
         pass "DEEPSEEK_API_KEY 已配置"
     else
-        fail "DEEPSEEK_API_KEY 未配置或仍为占位符" "编辑 .env.prod 填入真实密钥"
+        fail "DEEPSEEK_API_KEY 未配置或仍为占位符" "编辑 .env.prod 填入真实密钥（sk- 开头）"
     fi
 
     # BOCHA_API_KEY
-    if grep -q "^BOCHA_API_KEY=sk-" .env.prod && ! grep -q "change-me" .env.prod; then
+    BOCHA_LINE=$(grep -E "^BOCHA_API_KEY=" .env.prod | head -1)
+    if [ -n "$BOCHA_LINE" ] && echo "$BOCHA_LINE" | grep -qE "^BOCHA_API_KEY=sk-" \
+        && ! echo "$BOCHA_LINE" | grep -qE "change-me|please-change|your-real"; then
         pass "BOCHA_API_KEY 已配置"
     else
-        fail "BOCHA_API_KEY 未配置或仍为占位符" "编辑 .env.prod 填入真实密钥"
+        fail "BOCHA_API_KEY 未配置或仍为占位符" "编辑 .env.prod 填入真实密钥（sk- 开头）"
     fi
 
     # JWT_SECRET
@@ -230,8 +234,9 @@ if [ -f ".env.prod" ]; then
         fail "JWT_SECRET 未配置或长度不足" "openssl rand -hex 32 生成密钥"
     fi
 
-    # 无遗留占位符
-    if grep -vE "^#|^$" .env.prod | grep -qE "change-me|please-change|your-real"; then
+    # 无遗留占位符（只检查值行，跳过注释和空行）
+    # 排除 DB_PASSWORD（可选配置，不强制要求修改）
+    if grep -vE "^#|^$|^DB_PASSWORD=" .env.prod | grep -qE "=.*(change-me|please-change|your-real)"; then
         fail ".env.prod 含有占位符" "替换所有 change-me/please-change 占位符"
     else
         pass ".env.prod 无占位符"
@@ -372,11 +377,21 @@ echo -e "${BLUE}========== 6. 监控告警 ==========${NC}"
 
 # Alertmanager 配置校验
 if [ -f "deploy/alertmanager.yml" ]; then
-    if docker run --rm -v "$PROJECT_ROOT/deploy/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
-        prom/alertmanager:latest amtool check-config /etc/alertmanager/alertmanager.yml &>/dev/null 2>&1; then
-        pass "alertmanager.yml 配置校验通过"
+    # 先检查 Docker 是否运行
+    if ! docker info &>/dev/null; then
+        warn "Docker 未运行，跳过 alertmanager.yml 校验" "启动 Docker 后重新执行检查"
     else
-        fail "alertmanager.yml 配置校验失败" "检查语法，注意不支持 \${VAR:default} 语法"
+        # 捕获 amtool 输出，便于排查具体错误
+        AMTOOL_OUTPUT=$(docker run --rm -v "$PROJECT_ROOT/deploy/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
+            prom/alertmanager:latest amtool check-config /etc/alertmanager/alertmanager.yml 2>&1)
+        AMTOOL_EXIT=$?
+        if [ "$AMTOOL_EXIT" -eq 0 ]; then
+            pass "alertmanager.yml 配置校验通过"
+        else
+            fail "alertmanager.yml 配置校验失败" "查看下方详细输出"
+            echo -e "    ${YELLOW}--- amtool 输出 ---${NC}"
+            echo "$AMTOOL_OUTPUT" | head -20 | sed 's/^/    /'
+        fi
     fi
 else
     warn "deploy/alertmanager.yml 不存在"
