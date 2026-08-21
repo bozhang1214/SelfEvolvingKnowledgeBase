@@ -9,7 +9,7 @@
  * - TC-014-U：连续失败退避（5 次失败后 60s 暂停）
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { logger, maskEmail, maskToken } from '../logger';
+import { logger, maskEmail, maskToken } from '@/utils/logger';
 
 describe('logger', () => {
   describe('TC-007-U: 日志级别路由与格式', () => {
@@ -92,7 +92,7 @@ describe('logger', () => {
 
       // 重新 import 模块以使新环境变量生效
       vi.resetModules();
-      const { logger: freshLogger } = await import('../logger');
+      const { logger: freshLogger } = await import('@/utils/logger');
 
       const sendBeaconSpy = vi.spyOn(navigator, 'sendBeacon');
       const fetchSpy = vi.spyOn(globalThis, 'fetch');
@@ -118,7 +118,7 @@ describe('logger', () => {
 
       // 重新加载模块以拿到全新内部状态
       vi.resetModules();
-      const { logger: freshLogger } = await import('../logger');
+      const { logger: freshLogger } = await import('@/utils/logger');
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 

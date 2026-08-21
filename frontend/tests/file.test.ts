@@ -7,7 +7,7 @@
  * - TC-018-U：413 错误处理（"文件过大"提示）
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { uploadFile } from '../file';
+import { uploadFile } from '@/services/file';
 
 /**
  * Mock XMLHttpRequest 的最小实现。
