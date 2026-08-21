@@ -36,11 +36,12 @@ ENV CI=true
 # 先复制依赖清单，利用 Docker 层缓存
 COPY package.json package-lock.json* ./
 
-# 安装依赖（使用 npm ci 保证可复现构建；若无 lock 文件则回退到 npm install）
+# 安装依赖：优先 npm ci 保证可复现构建；若 lock 与 package.json 不同步则回退 npm install
+# （历史踩坑：vitest 4 嵌套 vite 8 导致 esbuild 版本冲突，lock 在不同平台/环境不一致）
 # 使用国内 npm 镜像源加速下载
 RUN npm config set registry ${NPM_REGISTRY} && \
     if [ -f package-lock.json ]; then \
-        npm ci --no-audit --no-fund; \
+        npm ci --no-audit --no-fund || npm install --no-audit --no-fund; \
     else \
         npm install --no-audit --no-fund; \
     fi
