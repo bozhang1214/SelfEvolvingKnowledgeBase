@@ -6,6 +6,7 @@ import {
   PlusOutlined, DeleteOutlined, EditOutlined, SendOutlined, StopOutlined,
 } from '@ant-design/icons';
 import { useChatStore } from '@/stores/chat';
+import { logger } from '@/utils/logger';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -41,7 +42,23 @@ const Chat: React.FC = () => {
     const content = inputValue.trim();
     if (!content) return;
     setInputValue('');
-    await sendMessage(content);
+    const msgLen = content.length;
+    logger.info('chat_send_message', {
+      conv_id: currentConvId || null,
+      msg_len: msgLen,
+    });
+    const done = logger.perf('chat_send_message', { conv_id: currentConvId || null });
+    try {
+      await sendMessage(content);
+      done({ result: 'success' });
+    } catch (err: any) {
+      done({ result: 'error', msg: err?.message });
+      logger.error('chat_send_message_failed', {
+        conv_id: currentConvId || null,
+        msg: err?.message,
+      });
+      antMsg.error(err?.message || '发送失败');
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -52,11 +69,28 @@ const Chat: React.FC = () => {
   };
 
   const handleNewChat = async () => {
-    await createConversation();
+    logger.info('chat_new_conversation');
+    try {
+      await createConversation();
+    } catch (err: any) {
+      logger.error('chat_new_conversation_failed', { msg: err?.message });
+      antMsg.error('创建会话失败');
+    }
+  };
+
+  const handleStopStream = () => {
+    logger.info('chat_cancel_stream', { conv_id: currentConvId || null });
+    cancelStream();
   };
 
   const handleDelete = async (convId: string) => {
-    await deleteConversation(convId);
+    logger.info('chat_delete_conversation', { conv_id: convId });
+    try {
+      await deleteConversation(convId);
+    } catch (err: any) {
+      logger.error('chat_delete_conversation_failed', { conv_id: convId, msg: err?.message });
+      antMsg.error('删除会话失败');
+    }
   };
 
   const handleRenameStart = (convId: string, currentTitle: string) => {
@@ -222,7 +256,7 @@ const Chat: React.FC = () => {
               <Button
                 danger
                 icon={<StopOutlined />}
-                onClick={cancelStream}
+                onClick={handleStopStream}
                 style={{ height: 'auto' }}
               >
                 停止

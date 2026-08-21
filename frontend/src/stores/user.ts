@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { User, LoginRequest, RegisterRequest } from '@/types/user';
 import * as authService from '@/services/auth';
+import { logger, maskEmail, maskToken } from '@/utils/logger';
 
 interface UserState {
   user: User | null;
@@ -25,7 +26,12 @@ export const useUserStore = create<UserState>((set) => ({
       try {
         const user = JSON.parse(raw) as User;
         set({ user, token, isLoggedIn: true });
+        logger.info('session_restore', {
+          user_id: user.user_id,
+          token: maskToken(token),
+        });
       } catch {
+        logger.warn('session_restore_failed', { reason: 'invalid_json' });
         localStorage.removeItem('sekb_token');
         localStorage.removeItem('sekb_user');
       }
@@ -33,17 +39,35 @@ export const useUserStore = create<UserState>((set) => ({
   },
 
   login: async (data: LoginRequest) => {
+    logger.info('login_attempt', { email: maskEmail(data.email) });
     const resp = await authService.login(data);
     set({ user: resp.user, token: resp.token, isLoggedIn: true });
+    logger.info('login_success', {
+      user_id: resp.user.user_id,
+      token: maskToken(resp.token),
+    });
   },
 
   register: async (data: RegisterRequest) => {
+    logger.info('register_attempt', { email: maskEmail(data.email) });
     const resp = await authService.register(data);
     set({ user: resp.user, token: resp.token, isLoggedIn: true });
+    logger.info('register_success', {
+      user_id: resp.user.user_id,
+      token: maskToken(resp.token),
+    });
   },
 
   logout: async () => {
-    await authService.logout();
-    set({ user: null, token: null, isLoggedIn: false });
+    logger.info('logout_attempt');
+    try {
+      await authService.logout();
+      logger.info('logout_success');
+    } catch (err: any) {
+      // 即使后端登出失败，本地 token 也应清除
+      logger.warn('logout_failed', { msg: err?.message });
+    } finally {
+      set({ user: null, token: null, isLoggedIn: false });
+    }
   },
 }));

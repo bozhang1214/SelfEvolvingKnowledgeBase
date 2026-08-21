@@ -172,6 +172,52 @@ knowledge_ingest_total = Counter(
 
 
 # ============================================================
+# 前端/客户端指标（接收前端 logger 上报）
+# ============================================================
+
+# 客户端事件计数（按事件名与级别）
+# event 标签为前端 logger 的事件名（login_submit_failed / api_error 等）
+# level 标签为 debug/info/warn/error
+client_events_total = Counter(
+    "sekb_client_events_total",
+    "Total client-side events reported by frontend logger",
+    ["event", "level"],
+)
+
+# 登录尝试总数（按结果维度）
+# result: success | user_not_found | password_mismatch | network_error | other
+login_attempts_total = Counter(
+    "sekb_login_attempts_total",
+    "Total login attempts by result",
+    ["result"],
+)
+
+# 注册尝试总数（按结果维度）
+# result: success | email_exists | network_error | other
+register_attempts_total = Counter(
+    "sekb_register_attempts_total",
+    "Total register attempts by result",
+    ["result"],
+)
+
+# 前端观测到的 API 请求耗时（秒），按 method 和 status 维度
+# 用于和后端 e2e_latency_seconds 互补，反映用户真实感知的延迟
+client_api_duration_seconds = Histogram(
+    "sekb_client_api_duration_seconds",
+    "API request duration as observed by frontend",
+    ["method", "status"],  # status: success | error
+    buckets=[0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+)
+
+# 客户端上报事件接收计数（用于监控上报链路健康度）
+client_event_reports_total = Counter(
+    "sekb_client_event_reports_total",
+    "Total client event report batches received",
+    ["status"],  # status: accepted | rejected
+)
+
+
+# ============================================================
 # 指标暴露
 # ============================================================
 
@@ -318,3 +364,107 @@ def record_llm_call(
             llm_degradations_total.labels(role=role).inc()
     except Exception:
         pass
+
+
+# ============================================================
+# 前端/客户端事件记录（接收前端 logger 上报）
+# ============================================================
+
+# 允许的事件白名单，避免前端上报任意标签导致高基数
+# 格式：event_name -> (level, 额外处理)
+_CLIENT_EVENT_ALLOWLIST: set[str] = {
+    "login_submit", "login_submit_failed",
+    "register_submit", "register_submit_failed",
+    "logout_attempt", "logout_success", "logout_failed",
+    "session_restore", "session_restore_failed",
+    "api_error",
+    "chat_send_message", "chat_send_message_failed",
+    "chat_new_conversation", "chat_new_conversation_failed",
+    "chat_delete_conversation", "chat_delete_conversation_failed",
+    "chat_cancel_stream",
+    "api_request",  # perf 事件
+}
+
+# 允许的 level 集合
+_CLIENT_LEVELS: set[str] = {"debug", "info", "warn", "error"}
+
+
+def record_client_event(event: str, level: str, fields: dict | None = None) -> None:
+    """
+    记录一条前端上报的客户端事件到 Prometheus。
+
+    - 事件白名单过滤：不在白名单的事件统一归为 "other"，避免高基数标签
+    - level 不合法时统一归为 "info"
+    - 不会因任何异常影响主流程
+
+    Args:
+        event: 前端 logger 事件名（如 login_submit_failed）
+        level: 日志级别（debug/info/warn/error）
+        fields: 额外字段（仅用于额外指标提取，例如 perf 事件的 duration_ms）
+
+    Note:
+        对特定事件做额外处理：
+        - api_request：提取耗时到 client_api_duration_seconds 直方图
+        - login_submit_failed/register_submit_failed：网络错误时记录到
+          login/register_attempts_total，与后端路径的 user_not_found/
+          password_mismatch/email_exists 形成完整漏斗
+    """
+    try:
+        evt = event if event in _CLIENT_EVENT_ALLOWLIST else "other"
+        lvl = level if level in _CLIENT_LEVELS else "info"
+        client_events_total.labels(event=evt, level=lvl).inc()
+
+        if not isinstance(fields, dict):
+            return
+
+        # perf 事件：提取耗时到直方图
+        if event == "api_request":
+            duration_ms = fields.get("duration_ms")
+            method = str(fields.get("method") or "get").lower()
+            result = str(fields.get("result") or "success")
+            status_label = "error" if result == "error" else "success"
+            if isinstance(duration_ms, (int, float)) and duration_ms >= 0:
+                client_api_duration_seconds.labels(
+                    method=method, status=status_label
+                ).observe(duration_ms / 1000.0)
+
+        # 登录失败：从 network_error 推断 network_error 维度
+        # 后端只能记录 user_not_found / password_mismatch / success
+        # 前端能感知到 network_error（HTTP 状态 0），补充完整漏斗
+        if event == "login_submit_failed" and fields.get("network_error"):
+            login_attempts_total.labels(result="network_error").inc()
+
+        # 注册失败：同理
+        if event == "register_submit_failed" and fields.get("network_error"):
+            register_attempts_total.labels(result="network_error").inc()
+    except Exception:
+        pass
+
+
+def record_login_attempt(result: str) -> None:
+    """
+    记录一次登录尝试结果。
+
+    Args:
+        result: success | user_not_found | password_mismatch | network_error | other
+    """
+    try:
+        # 后端只能区分 user_not_found / password_mismatch / success
+        # network_error 由前端单独上报
+        login_attempts_total.labels(result=result).inc()
+    except Exception:
+        pass
+
+
+def record_register_attempt(result: str) -> None:
+    """
+    记录一次注册尝试结果。
+
+    Args:
+        result: success | email_exists | network_error | other
+    """
+    try:
+        register_attempts_total.labels(result=result).inc()
+    except Exception:
+        pass
+

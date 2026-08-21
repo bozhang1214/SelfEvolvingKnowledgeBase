@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Form, Input, Button, Card, Typography, message, Space } from 'antd';
+import { Form, Input, Button, Card, Typography, message, Space, Alert } from 'antd';
 import { MailOutlined, LockOutlined, UserOutlined } from '@ant-design/icons';
 import { useUserStore } from '@/stores/user';
+import { logger, maskEmail } from '@/utils/logger';
 
 const { Title, Text } = Typography;
 
@@ -10,15 +11,27 @@ const Register: React.FC = () => {
   const navigate = useNavigate();
   const register = useUserStore((s) => s.register);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string>('');
 
   const onFinish = async (values: { email: string; password: string; name: string }) => {
     setLoading(true);
+    setErrorMsg('');
+    logger.info('register_submit', { email: maskEmail(values.email) });
     try {
       await register(values);
       message.success('注册成功');
       navigate('/');
     } catch (err: any) {
-      message.error(err?.response?.data?.message || '注册失败');
+      const status = err?.response?.status;
+      const msg = err?.response?.data?.message || '注册失败';
+      setErrorMsg(msg);
+      message.error(msg);
+      logger.warn('register_submit_failed', {
+        email: maskEmail(values.email),
+        http_status: status ?? 0,
+        server_msg: msg,
+        network_error: !err.response,
+      });
     } finally {
       setLoading(false);
     }
@@ -32,6 +45,20 @@ const Register: React.FC = () => {
             <Title level={3}>创建账户</Title>
             <Text type="secondary">注册 SEKB 知识库账户</Text>
           </div>
+          {errorMsg && (
+            <Alert
+              type="error"
+              showIcon
+              message={errorMsg}
+              description={
+                <span>
+                  已有账户？<Link to="/login">返回登录</Link>
+                </span>
+              }
+              closable
+              onClose={() => setErrorMsg('')}
+            />
+          )}
           <Form onFinish={onFinish} layout="vertical" size="large">
             <Form.Item name="name" rules={[{ required: false }]}>
               <Input prefix={<UserOutlined />} placeholder="昵称（可选）" />
