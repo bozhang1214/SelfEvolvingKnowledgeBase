@@ -52,7 +52,7 @@ jobs:
 
   # ============ 前端构建检查 ============
   frontend-build:
-    name: Frontend Build
+    name: Frontend Build & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +67,10 @@ jobs:
       - name: Type check
         working-directory: frontend
         run: npx tsc --noEmit
+      # 运行前端单元测试（logger / file upload 等 18 个用例）
+      - name: Run unit tests
+        working-directory: frontend
+        run: npm test
       - name: Production build
         working-directory: frontend
         run: npm run build
@@ -94,6 +98,8 @@ jobs:
           DEEPSEEK_API_KEY: test-key
           BOCHA_API_KEY: test-key
           JWT_SECRET: test-secret
+        # 包含增量测试：test_auth_metrics.py（登录/注册失败原因细分指标）
+        # 与 test_monitoring_endpoint.py（客户端事件上报与 Prometheus 指标写入）
         run: pytest tests/unit -x --cov=app --cov-report=xml --cov-report=term -q
       - name: Upload coverage
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -331,13 +337,13 @@ jobs:
             echo ""
             echo "--- Prometheus 抓取目标 ---"
             curl -sf 'http://localhost:9091/api/v1/targets' 2>/dev/null | python3 -c "
-import json,sys
-try:
-    d=json.load(sys.stdin)
-    for t in d.get('data',{}).get('activeTargets',[]):
-        print(f\"  {t['labels'].get('job')}: {t['health']}\")
-except: print('  Prometheus 不可达或无目标')
-" || echo "  Prometheus 不可达"
+            import json,sys
+            try:
+                d=json.load(sys.stdin)
+                for t in d.get('data',{}).get('activeTargets',[]):
+                    print(f\"  {t['labels'].get('job')}: {t['health']}\")
+            except: print('  Prometheus 不可达或无目标')
+            " || echo "  Prometheus 不可达"
 
             # ---------- 8. 清理与收尾 ----------
             echo ""

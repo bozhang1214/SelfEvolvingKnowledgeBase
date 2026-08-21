@@ -4,6 +4,7 @@
 定义项目所有自定义异常，按功能域分类。
 所有异常继承自 SEKBError，便于统一捕获和处理。
 """
+from __future__ import annotations
 
 from typing import Any
 

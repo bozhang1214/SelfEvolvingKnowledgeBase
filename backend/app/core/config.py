@@ -9,6 +9,7 @@
     config = get_config()
     print(config.llm.roles.supervisor.model)
 """
+from __future__ import annotations
 
 import os
 import re

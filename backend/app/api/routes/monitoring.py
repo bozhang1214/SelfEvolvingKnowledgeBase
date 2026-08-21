@@ -79,7 +79,13 @@ async def report_client_events(batch: ClientEventBatch) -> dict:
             accepted += 1
         except Exception as e:  # noqa: BLE001
             rejected += 1
-            logger.warning("客户端事件处理失败", event=ev.event, error=str(e))
+            logger.warning(
+                "客户端事件处理失败",
+                extra={
+                    "event": ev.event,
+                    "error": str(e),
+                },
+            )
 
     # 上报链路健康度计数
     client_event_reports_total.labels(status="accepted").inc()

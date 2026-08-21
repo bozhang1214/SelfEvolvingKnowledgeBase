@@ -52,11 +52,13 @@ async def register(body: RegisterRequest, request: Request):
                   detail={"email": body.email, "reason": "email_exists"})
         logger.warning(
             "注册失败：邮箱已存在",
-            event="register_failed",
-            reason="email_exists",
-            email_prefix=body.email[:3] + "***",  # 脱敏：仅保留前 3 字符
-            ip=client_ip,
-            user_agent=user_agent,
+            extra={
+                "event": "register_failed",
+                "reason": "email_exists",
+                "email_prefix": body.email[:3] + "***",  # 脱敏：仅保留前 3 字符
+                "ip": client_ip,
+                "user_agent": user_agent,
+            },
         )
         record_register_attempt("email_exists")
         raise HTTPException(400, "该邮箱已被注册")
@@ -73,10 +75,12 @@ async def register(body: RegisterRequest, request: Request):
     token = create_jwt(user.user_id)
     logger.info(
         "用户注册成功",
-        event="register_success",
-        user_id=user.user_id,
-        email=user.email,
-        ip=client_ip,
+        extra={
+            "event": "register_success",
+            "user_id": user.user_id,
+            "email": user.email,
+            "ip": client_ip,
+        },
     )
     record_register_attempt("success")
     audit_log(AuditAction.REGISTER, user_id=user.user_id, success=True, ip=client_ip,
@@ -99,12 +103,14 @@ async def login(body: LoginRequest, request: Request):
                   detail={"email": body.email, "reason": "user_not_found"})
         logger.warning(
             "登录失败：用户不存在",
-            event="login_failed",
-            reason="user_not_found",
-            email_prefix=body.email[:3] + "***",  # 脱敏
-            ip=client_ip,
-            user_agent=user_agent,
-            path=request.url.path,
+            extra={
+                "event": "login_failed",
+                "reason": "user_not_found",
+                "email_prefix": body.email[:3] + "***",  # 脱敏
+                "ip": client_ip,
+                "user_agent": user_agent,
+                "path": request.url.path,
+            },
         )
         record_login_attempt("user_not_found")
         raise HTTPException(401, "邮箱或密码错误")
@@ -114,13 +120,15 @@ async def login(body: LoginRequest, request: Request):
                   detail={"email": body.email, "reason": "password_mismatch"})
         logger.warning(
             "登录失败：密码错误",
-            event="login_failed",
-            reason="password_mismatch",
-            user_id=user.user_id,
-            email_prefix=body.email[:3] + "***",  # 脱敏
-            ip=client_ip,
-            user_agent=user_agent,
-            path=request.url.path,
+            extra={
+                "event": "login_failed",
+                "reason": "password_mismatch",
+                "user_id": user.user_id,
+                "email_prefix": body.email[:3] + "***",  # 脱敏
+                "ip": client_ip,
+                "user_agent": user_agent,
+                "path": request.url.path,
+            },
         )
         record_login_attempt("password_mismatch")
         raise HTTPException(401, "邮箱或密码错误")
@@ -128,10 +136,12 @@ async def login(body: LoginRequest, request: Request):
     token = create_jwt(user.user_id)
     logger.info(
         "用户登录成功",
-        event="login_success",
-        user_id=user.user_id,
-        email=user.email,
-        ip=client_ip,
+        extra={
+            "event": "login_success",
+            "user_id": user.user_id,
+            "email": user.email,
+            "ip": client_ip,
+        },
     )
     record_login_attempt("success")
     audit_log(AuditAction.LOGIN, user_id=user.user_id, success=True, ip=client_ip)

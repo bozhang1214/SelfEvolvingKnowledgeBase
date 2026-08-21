@@ -12,6 +12,7 @@
     logger = get_logger(__name__)
     logger.info("消息", user_id="xxx", action="chat")
 """
+from __future__ import annotations
 
 import logging
 import logging.handlers
