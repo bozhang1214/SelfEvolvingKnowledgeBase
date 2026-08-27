@@ -31,6 +31,7 @@ const makeConv = (id: string, title = `会话${id}`): Conversation => ({
   updated_at: '2026-01-01T00:00:00Z',
   message_count: 0,
   user_id: 'u1',
+  pinned: false,
 });
 
 const makeMsg = (id: string, convId: string, role: 'user' | 'assistant', content: string): Message => ({
@@ -169,6 +170,54 @@ describe('chat store', () => {
     });
   });
 
+  describe('togglePin', () => {
+    it('置顶 → 调用 API 并将置顶会话排到列表首位', async () => {
+      const c1 = makeConv('c1', '会话1');
+      c1.updated_at = '2026-01-02T00:00:00Z';
+      const c2 = makeConv('c2', '会话2');
+      c2.updated_at = '2026-01-01T00:00:00Z';
+      useChatStore.setState({ conversations: [c1, c2] });
+
+      vi.mocked(chatService.updateConversation).mockResolvedValue({ ...c2, pinned: true });
+
+      await useChatStore.getState().togglePin('c2', true);
+
+      expect(chatService.updateConversation).toHaveBeenCalledWith('c2', { pinned: true });
+      const state = useChatStore.getState();
+      // c2 置顶后排到首位
+      expect(state.conversations[0].conv_id).toBe('c2');
+      expect(state.conversations[0].pinned).toBe(true);
+      expect(state.conversations[1].conv_id).toBe('c1');
+    });
+
+    it('取消置顶 → 调用 API 并恢复正常排序', async () => {
+      const c1 = makeConv('c1', '会话1');
+      c1.pinned = true;
+      c1.updated_at = '2026-01-01T00:00:00Z';
+      const c2 = makeConv('c2', '会话2');
+      c2.updated_at = '2026-01-02T00:00:00Z';
+      useChatStore.setState({ conversations: [c1, c2] });
+
+      vi.mocked(chatService.updateConversation).mockResolvedValue({ ...c1, pinned: false });
+
+      await useChatStore.getState().togglePin('c1', false);
+
+      expect(chatService.updateConversation).toHaveBeenCalledWith('c1', { pinned: false });
+      const state = useChatStore.getState();
+      // 取消置顶后 c1 不再排首位，c2 更新时间更晚所以排第一
+      expect(state.conversations[0].conv_id).toBe('c2');
+      expect(state.conversations[1].conv_id).toBe('c1');
+      expect(state.conversations[1].pinned).toBe(false);
+    });
+
+    it('API 失败 → 静默处理不抛异常', async () => {
+      useChatStore.setState({ conversations: [makeConv('c1')] });
+      vi.mocked(chatService.updateConversation).mockRejectedValue(new Error('network'));
+
+      await expect(useChatStore.getState().togglePin('c1', true)).resolves.not.toThrow();
+    });
+  });
+
   describe('sendMessage: 防重发', () => {
     it('isStreaming=true → 不调用 streamChat', async () => {
       useChatStore.setState({ isStreaming: true, currentConvId: 'c1' });
@@ -184,7 +233,7 @@ describe('chat store', () => {
       // 捕获 onDone 回调
       let onDoneCb: ((meta: any) => void) | null = null;
       vi.mocked(chatService.streamChat).mockImplementation(
-        (_convId, _msg, _onToken, onDone, _onError) => {
+        (_convId, _msg, _onToken, onDone, _onError, _onThinking) => {
           onDoneCb = onDone;
           return new AbortController();
         }
@@ -192,7 +241,7 @@ describe('chat store', () => {
 
       await useChatStore.getState().sendMessage('hello');
       // 首次发消息时 convId 为空串
-      expect(chatService.streamChat).toHaveBeenCalledWith('', 'hello', expect.any(Function), expect.any(Function), expect.any(Function));
+      expect(chatService.streamChat).toHaveBeenCalledWith('', 'hello', expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function));
 
       // 模拟后端返回真实 conversation_id
       onDoneCb!({ conversation_id: 'real-conv-1' } as any);
@@ -208,7 +257,7 @@ describe('chat store', () => {
     it('onDone 返回空 conversation_id → 不更新 currentConvId，仅结束 streaming', async () => {
       let onDoneCb: ((meta: any) => void) | null = null;
       vi.mocked(chatService.streamChat).mockImplementation(
-        (_convId, _msg, _onToken, onDone, _onError) => {
+        (_convId, _msg, _onToken, onDone, _onError, _onThinking) => {
           onDoneCb = onDone;
           return new AbortController();
         }

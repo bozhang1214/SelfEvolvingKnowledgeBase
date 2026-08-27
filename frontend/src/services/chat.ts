@@ -22,7 +22,7 @@ export async function createConversation(): Promise<Conversation> {
   return res.data.data;
 }
 
-export async function updateConversation(convId: string, data: { title?: string }): Promise<Conversation> {
+export async function updateConversation(convId: string, data: { title?: string; pinned?: boolean }): Promise<Conversation> {
   const res = await apiClient.patch<ApiResponse<Conversation>>(`/conversations/${convId}`, data);
   return res.data.data;
 }
@@ -37,7 +37,8 @@ export function streamChat(
   message: string,
   onToken: (token: string) => void,
   onDone: (meta: ChatMeta) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  onThinking?: (content: string) => void,
 ): AbortController {
   const controller = new AbortController();
   const token = getToken();
@@ -85,7 +86,9 @@ export function streamChat(
           const dataStr = dataLines.map((l) => l.slice(6)).join('');
           try {
             const data = JSON.parse(dataStr);
-            if (data.type === 'token') {
+            if (data.type === 'thinking') {
+              onThinking?.(data.content);
+            } else if (data.type === 'token') {
               onToken(data.content);
             } else if (data.type === 'done') {
               parsed = true;

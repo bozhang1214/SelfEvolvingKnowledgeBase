@@ -47,6 +47,7 @@ class ConversationMeta(BaseModel):
     user_id: str                              # 所属用户 ID（Phase 1 固定为 "default"）
     title: str                                # 会话标题
     status: str = "active"                    # 状态：active / archived / deleted
+    pinned: bool = False                     # 是否置顶
     created_at: str = Field(default_factory=now_iso)   # 创建时间（ISO）
     updated_at: str = Field(default_factory=now_iso)   # 最近更新时间（ISO）
     message_count: int = 0                    # 累计消息数

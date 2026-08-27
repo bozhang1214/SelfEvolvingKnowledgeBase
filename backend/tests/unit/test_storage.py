@@ -172,6 +172,57 @@ class TestListConversations:
         convs = await storage.list_conversations("nobody")
         assert convs == []
 
+    @pytest.mark.asyncio
+    async def test_list_pinned_sorts_first(self, storage):
+        """置顶会话应排在非置顶会话之前"""
+        conv1 = await storage.create_conversation("alice", "普通会话1")
+        conv2 = await storage.create_conversation("alice", "置顶会话")
+        conv3 = await storage.create_conversation("alice", "普通会话2")
+
+        # 置顶 conv2
+        await storage.update_conversation(conv2, {"pinned": True})
+
+        convs = await storage.list_conversations("alice")
+        # conv2 虽然不是最新创建的，但置顶后应排在第一位
+        assert convs[0]["conv_id"] == conv2
+        assert convs[0]["pinned"] is True
+        assert convs[1]["pinned"] is False
+        assert convs[2]["pinned"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_multiple_pinned_sorted_by_updated_at(self, storage):
+        """多个置顶会话之间按 updated_at 倒序排列"""
+        conv1 = await storage.create_conversation("alice", "置顶1")
+        conv2 = await storage.create_conversation("alice", "置顶2")
+
+        await storage.update_conversation(conv1, {"pinned": True})
+        await storage.update_conversation(conv2, {"pinned": True})
+        # conv1 追加消息使其 updated_at 更新
+        await storage.append_message(conv1, _make_message("user", "更新"))
+
+        convs = await storage.list_conversations("alice")
+        # 两个置顶会话排在前两位，conv1 因 updated_at 更新排第一
+        assert convs[0]["conv_id"] == conv1
+        assert convs[0]["pinned"] is True
+        assert convs[1]["conv_id"] == conv2
+        assert convs[1]["pinned"] is True
+
+    @pytest.mark.asyncio
+    async def test_list_unpin_restores_normal_order(self, storage):
+        """取消置顶后会话不再排在置顶区，但 updated_at 更新使其仍可能靠前"""
+        conv1 = await storage.create_conversation("alice", "会话1")
+        conv2 = await storage.create_conversation("alice", "会话2")
+
+        # 置顶 conv1 再取消
+        await storage.update_conversation(conv1, {"pinned": True})
+        await storage.update_conversation(conv1, {"pinned": False})
+
+        convs = await storage.list_conversations("alice")
+        # 取消置顶后 conv1 不再处于置顶区，但 update_conversation 更新了 updated_at
+        # 所以 conv1 仍可能排第一；关键是两个会话都不再 pinned
+        assert all(c["pinned"] is False for c in convs)
+        assert set(c["conv_id"] for c in convs) == {conv1, conv2}
+
 
 # ============================================================
 # 追加消息测试
@@ -342,6 +393,35 @@ class TestUpdateConversation:
         """测试更新不存在的会话抛出 StorageError"""
         with pytest.raises(StorageError):
             await storage.update_conversation("nonexistent", {"title": "x"})
+
+    @pytest.mark.asyncio
+    async def test_update_pinned_true(self, storage):
+        """测试置顶会话"""
+        conv_id = await storage.create_conversation("default", "测试")
+        await storage.update_conversation(conv_id, {"pinned": True})
+
+        meta = await storage.get_conversation(conv_id)
+        assert meta["pinned"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_pinned_false(self, storage):
+        """测试取消置顶"""
+        conv_id = await storage.create_conversation("default", "测试")
+        await storage.update_conversation(conv_id, {"pinned": True})
+        await storage.update_conversation(conv_id, {"pinned": False})
+
+        meta = await storage.get_conversation(conv_id)
+        assert meta["pinned"] is False
+
+    @pytest.mark.asyncio
+    async def test_update_title_and_pinned_together(self, storage):
+        """测试同时更新标题和置顶状态"""
+        conv_id = await storage.create_conversation("default", "旧标题")
+        await storage.update_conversation(conv_id, {"title": "新标题", "pinned": True})
+
+        meta = await storage.get_conversation(conv_id)
+        assert meta["title"] == "新标题"
+        assert meta["pinned"] is True
 
 
 # ============================================================

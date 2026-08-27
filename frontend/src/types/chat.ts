@@ -5,6 +5,7 @@ export interface Conversation {
   updated_at: string;
   message_count: number;
   user_id: string;
+  pinned?: boolean;
 }
 
 export interface Message {

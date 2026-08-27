@@ -4,6 +4,7 @@ import {
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, SendOutlined, StopOutlined,
+  PushpinOutlined, PushpinFilled, CopyOutlined, CheckOutlined,
 } from '@ant-design/icons';
 import { useChatStore } from '@/stores/chat';
 import { logger } from '@/utils/logger';
@@ -15,11 +16,58 @@ import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 const { Text } = Typography;
 const { Sider, Content } = Layout;
 
+/** 代码块组件：带语言标签 + 复制按钮 */
+const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, code }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '4px 12px',
+          background: '#f0f0f0',
+          borderRadius: '4px 4px 0 0',
+          fontSize: 12,
+          color: '#666',
+        }}
+      >
+        <span>{language}</span>
+        <Button
+          type="text"
+          size="small"
+          icon={copied ? <CheckOutlined style={{ color: '#52c41a' }} /> : <CopyOutlined />}
+          onClick={handleCopy}
+        >
+          {copied ? '已复制' : '复制'}
+        </Button>
+      </div>
+      <SyntaxHighlighter
+        style={oneLight}
+        language={language}
+        PreTag="div"
+        customStyle={{ margin: 0, borderRadius: '0 0 4px 4px' }}
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  );
+};
+
 const Chat: React.FC = () => {
   const {
-    conversations, currentConvId, messages, isStreaming, streamingContent,
+    conversations, currentConvId, messages, isStreaming, streamingContent, thinkingContent,
     loadConversations, selectConversation, createConversation,
-    deleteConversation, renameConversation, sendMessage, cancelStream,
+    deleteConversation, renameConversation, togglePin, sendMessage, cancelStream,
   } = useChatStore();
 
   const [inputValue, setInputValue] = useState('');
@@ -36,7 +84,7 @@ const Chat: React.FC = () => {
   // 自动滚动到底部
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, thinkingContent]);
 
   const handleSend = async () => {
     const content = inputValue.trim();
@@ -105,8 +153,16 @@ const Chat: React.FC = () => {
     setEditingId(null);
   };
 
+  const handleTogglePin = async (convId: string, pinned: boolean) => {
+    logger.info('chat_toggle_pin', { conv_id: convId, pinned: !pinned });
+    await togglePin(convId, !pinned);
+  };
+
   const currentMessages = currentConvId ? (messages[currentConvId] || []) : [];
-  const allContent = isStreaming
+  // 思考阶段（有 thinkingContent 但无 streamingContent）不显示 assistant 气泡
+  // 正常流式输出阶段（有 streamingContent）才显示 assistant 气泡
+  const showStreamingBubble = isStreaming && streamingContent.length > 0;
+  const allContent = showStreamingBubble
     ? [...currentMessages, { role: 'assistant' as const, content: streamingContent, isStreaming: true }]
     : currentMessages;
 
@@ -127,10 +183,22 @@ const Chat: React.FC = () => {
               style={{
                 cursor: 'pointer',
                 padding: '10px 16px',
-                background: currentConvId === conv.conv_id ? '#e6f4ff' : undefined,
+                background: currentConvId === conv.conv_id
+                  ? '#e6f4ff'
+                  : (conv.pinned ? '#fffbe6' : undefined),
                 borderLeft: currentConvId === conv.conv_id ? '3px solid #1677ff' : '3px solid transparent',
               }}
               actions={[
+                <span
+                  key="pin"
+                  onClick={(e) => { e.stopPropagation(); handleTogglePin(conv.conv_id, !!conv.pinned); }}
+                  style={{ cursor: 'pointer' }}
+                  title={conv.pinned ? '取消置顶' : '置顶'}
+                >
+                  {conv.pinned
+                    ? <PushpinFilled style={{ color: '#faad14' }} />
+                    : <PushpinOutlined style={{ color: '#999' }} />}
+                </span>,
                 <Popconfirm title="确定删除？" onConfirm={() => handleDelete(conv.conv_id)} key="delete">
                   <DeleteOutlined style={{ color: '#999' }} />
                 </Popconfirm>,
@@ -152,7 +220,7 @@ const Chat: React.FC = () => {
                     <Space>
                       <Text
                         ellipsis={{ tooltip: conv.title }}
-                        style={{ maxWidth: 160, cursor: 'pointer' }}
+                        style={{ maxWidth: 140, cursor: 'pointer' }}
                         onDoubleClick={() => handleRenameStart(conv.conv_id, conv.title)}
                       >
                         {conv.title || '新对话'}
@@ -193,7 +261,8 @@ const Chat: React.FC = () => {
               key={idx}
               style={{
                 display: 'flex',
-                justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                flexDirection: 'column',
+                alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
                 marginBottom: 16,
               }}
             >
@@ -218,9 +287,7 @@ const Chat: React.FC = () => {
                           const codeStr = String(children).replace(/\n$/, '');
                           if (match) {
                             return (
-                              <SyntaxHighlighter style={oneLight} language={match[1]} PreTag="div">
-                                {codeStr}
-                              </SyntaxHighlighter>
+                              <CodeBlock language={match[1]} code={codeStr} />
                             );
                           }
                           return <code className={className} {...props}>{children}</code>;
@@ -235,8 +302,42 @@ const Chat: React.FC = () => {
                   </div>
                 )}
               </div>
+              {/* 消息时间戳 */}
+              {(msg as any).created_at && (
+                <Text
+                  type="secondary"
+                  style={{ fontSize: 11, marginTop: 4, padding: '0 4px' }}
+                >
+                  {new Date((msg as any).created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+              )}
             </div>
           ))}
+          {/* 思考中提示（无气泡、无光标，独立提示卡片） */}
+          {isStreaming && thinkingContent && !streamingContent && (
+            <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 16 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '10px 16px',
+                  borderRadius: 12,
+                  background: '#f0f5ff',
+                  border: '1px solid #d6e4ff',
+                  color: '#1677ff',
+                  fontSize: 14,
+                }}
+              >
+                <span className="thinking-dots">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+                <span>{thinkingContent}</span>
+              </div>
+            </div>
+          )}
           <div ref={messagesEndRef} />
         </div>
 
@@ -279,6 +380,23 @@ const Chat: React.FC = () => {
         @keyframes blink {
           0%, 100% { opacity: 1; }
           50% { opacity: 0; }
+        }
+        .thinking-dots {
+          display: inline-flex;
+          gap: 4px;
+        }
+        .thinking-dots span {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #1677ff;
+          animation: thinking-bounce 1.4s infinite ease-in-out both;
+        }
+        .thinking-dots span:nth-child(1) { animation-delay: -0.32s; }
+        .thinking-dots span:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes thinking-bounce {
+          0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+          40% { transform: scale(1); opacity: 1; }
         }
       `}</style>
     </Layout>

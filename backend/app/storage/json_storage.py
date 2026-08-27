@@ -282,8 +282,11 @@ class JSONStorage(StorageBackend):
             item for item in index
             if item.get("user_id") == user_id and item.get("status") != "deleted"
         ]
-        # 按 updated_at 倒序
-        user_convs.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+        # 排序：置顶优先，其次按 updated_at 倒序
+        user_convs.sort(
+            key=lambda x: (x.get("pinned", False), x.get("updated_at", "")),
+            reverse=True,
+        )
         # 分页
         return user_convs[offset:offset + limit]
 

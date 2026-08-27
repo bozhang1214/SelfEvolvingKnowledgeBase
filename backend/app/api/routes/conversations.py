@@ -34,9 +34,10 @@ router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
 # ============================================================
 
 class UpdateConversationRequest(BaseModel):
-    """更新会话请求（目前仅支持重命名）。"""
+    """更新会话请求（支持重命名和置顶）。"""
 
-    title: str = Field(..., min_length=1, max_length=200, description="新的会话标题")
+    title: str | None = Field(None, min_length=1, max_length=200, description="新的会话标题")
+    pinned: bool | None = Field(None, description="是否置顶")
 
 
 class RateRequest(BaseModel):
@@ -205,12 +206,18 @@ async def update_conversation(
         raise _not_found(conv_id)
 
     try:
-        await storage.update_conversation(conv_id, {"title": request.title})
+        updates: dict[str, Any] = {}
+        if request.title is not None:
+            updates["title"] = request.title
+        if request.pinned is not None:
+            updates["pinned"] = request.pinned
+        if updates:
+            await storage.update_conversation(conv_id, updates)
         updated = await storage.get_conversation(conv_id)
     except SEKBError as e:
         raise _handle_sekb_error(e, conv_id) from e
 
-    return updated or {"conv_id": conv_id, "title": request.title}
+    return updated or {"conv_id": conv_id}
 
 
 @router.delete("/{conv_id}")

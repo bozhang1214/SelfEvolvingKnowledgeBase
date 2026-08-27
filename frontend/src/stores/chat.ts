@@ -8,12 +8,14 @@ interface ChatState {
   messages: Record<string, Message[]>;
   isStreaming: boolean;
   streamingContent: string;
+  thinkingContent: string;
 
   loadConversations: () => Promise<void>;
   selectConversation: (convId: string) => Promise<void>;
   createConversation: () => Promise<string>;
   deleteConversation: (convId: string) => Promise<void>;
   renameConversation: (convId: string, title: string) => Promise<void>;
+  togglePin: (convId: string, pinned: boolean) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   cancelStream: () => void;
   addMessage: (convId: string, message: Message) => void;
@@ -25,10 +27,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: {},
   isStreaming: false,
   streamingContent: '',
+  thinkingContent: '',
 
   loadConversations: async () => {
     try {
       const convs = await chatService.listConversations();
+      // 排序：pinned 优先，其次按 updated_at 倒序（后端已排序，前端兜底保证）
+      convs.sort((a, b) => {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        return (b.updated_at || '').localeCompare(a.updated_at || '');
+      });
       set({ conversations: convs });
     } catch {
       // 静默处理
@@ -93,6 +101,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  togglePin: async (convId: string, pinned: boolean) => {
+    try {
+      const updated = await chatService.updateConversation(convId, { pinned });
+      // 更新后重新排序：pinned 优先
+      set((state) => {
+        const convs = state.conversations.map((c) =>
+          c.conv_id === convId ? { ...c, pinned } : c
+        );
+        // 排序：pinned 优先，其次按 updated_at 倒序
+        convs.sort((a, b) => {
+          if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+          return (b.updated_at || '').localeCompare(a.updated_at || '');
+        });
+        return { conversations: convs };
+      });
+    } catch {
+      // 静默处理
+    }
+  },
+
   sendMessage: async (content: string) => {
     const { currentConvId, conversations, isStreaming } = get();
 
@@ -133,7 +161,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // onToken
       (token) => {
         fullContent += token;
-        set({ streamingContent: fullContent });
+        // 收到第一个 token 时清除思考提示，切换为正常输出模式
+        set({ streamingContent: fullContent, thinkingContent: '' });
       },
       // onDone
       (meta: ChatMeta) => {
@@ -141,7 +170,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const realConvId = meta.conversation_id || '';
         if (!realConvId) {
           // 无效 conversation_id，不迁移消息，仅结束 streaming 状态
-          set({ isStreaming: false, streamingContent: '' });
+          set({ isStreaming: false, streamingContent: '', thinkingContent: '' });
           return;
         }
         const assistantMsg: Message = {
@@ -168,9 +197,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             messages,
             isStreaming: false,
             streamingContent: '',
+            thinkingContent: '',
             currentConvId: realConvId,
           };
         });
+
+        // 刷新会话列表，让新对话出现在侧边栏
+        // （首次发消息时后端自动创建会话，列表里还没有这条记录）
+        void get().loadConversations();
       },
       // onError
       (error) => {
@@ -187,9 +221,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             messages: { ...state.messages, [convId]: convMsgs },
             isStreaming: false,
             streamingContent: '',
+            thinkingContent: '',
           };
         });
-      }
+      },
+      // onThinking
+      (content) => {
+        set({ thinkingContent: content });
+      },
     );
 
     // 保存 controller 供取消
@@ -200,7 +239,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const controller = (window as any).__stream_controller;
     if (controller) {
       controller.abort();
-      set({ isStreaming: false, streamingContent: '' });
+      set({ isStreaming: false, streamingContent: '', thinkingContent: '' });
     }
   },
 

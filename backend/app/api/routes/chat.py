@@ -361,6 +361,14 @@ async def chat_stream(
     避免 sse-starlette 的缓冲行为导致浏览器端无法流式接收。
     """
     async def event_generator() -> AsyncIterator[bytes]:
+        # 先推送 thinking 事件，让前端立即显示"思考中"提示
+        # （_run_chat 期间前端无反馈，避免用户以为卡死）
+        thinking_payload = json.dumps(
+            {"type": "thinking", "content": "正在思考..."},
+            ensure_ascii=False,
+        )
+        yield f"data: {thinking_payload}\n\n".encode("utf-8")
+
         try:
             result = await _run_chat(ctx, request, user_id)
         except HTTPException as e:
