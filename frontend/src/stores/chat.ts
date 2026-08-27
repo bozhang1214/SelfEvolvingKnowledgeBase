@@ -131,7 +131,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     // 如果没有当前会话，使用临时 ID 让 UI 立即显示用户消息
     const tempConvId = convId || `temp_${Date.now()}`;
-    if (!convId) {
+    const isNewConv = !convId;
+    if (isNewConv) {
       set({ currentConvId: tempConvId });
     }
 
@@ -145,8 +146,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
     };
     set((state) => {
       const convMsgs = [...(state.messages[tempConvId] || []), userMsg];
+      // 新会话立即加入对话列表，让用户看到（用首条消息前 30 字作为临时标题）
+      const conversations = isNewConv
+        ? [{
+            conv_id: tempConvId,
+            title: content.slice(0, 30) || '新对话',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            message_count: 1,
+            user_id: '',
+            pinned: false,
+          }, ...state.conversations]
+        : state.conversations;
       return {
         messages: { ...state.messages, [tempConvId]: convMsgs },
+        conversations,
         isStreaming: true,
         streamingContent: '',
       };
@@ -193,8 +207,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
             delete messages[tempConvId];
           }
           messages[realConvId] = newMsgs;
+          // 同步更新 conversations 列表中的临时会话 ID
+          const conversations = state.conversations.map((c) =>
+            c.conv_id === tempConvId
+              ? { ...c, conv_id: realConvId, message_count: newMsgs.length }
+              : c
+          );
           return {
             messages,
+            conversations,
             isStreaming: false,
             streamingContent: '',
             thinkingContent: '',
