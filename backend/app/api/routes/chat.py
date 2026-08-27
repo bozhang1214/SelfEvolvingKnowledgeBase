@@ -383,27 +383,38 @@ async def chat_stream(
             return
 
         # 记录 Prometheus 指标（埋点失败不影响主流程）
-        record_chat_metrics(result)
+        try:
+            record_chat_metrics(result)
+        except Exception as e:
+            logger.warning("流式埋点失败", error=str(e))
 
-        # 逐 token 推送
-        async for token_data in _stream_tokens(result["answer"]):
-            yield f"data: {token_data}\n\n".encode("utf-8")
+        # 逐 token 推送 + done 事件（包裹 try/except 确保流正确终止）
+        try:
+            async for token_data in _stream_tokens(result["answer"]):
+                yield f"data: {token_data}\n\n".encode("utf-8")
 
-        # done 事件携带元信息
-        meta = {
-            "conversation_id": result["conversation_id"],
-            "intent": result["intent"],
-            "intent_confidence": result["intent_confidence"],
-            "metrics": result["metrics"],
-            "trace_id": result["trace_id"],
-            "latency_ms": result["latency_ms"],
-            "ingest_status": result.get("ingest_status", "disabled"),
-            "ingest_reason": result.get("ingest_reason", ""),
-        }
-        done_payload = json.dumps(
-            {"type": "done", "meta": meta}, ensure_ascii=False
-        )
-        yield f"data: {done_payload}\n\n".encode("utf-8")
+            # done 事件携带元信息
+            meta = {
+                "conversation_id": result["conversation_id"],
+                "intent": result["intent"],
+                "intent_confidence": result["intent_confidence"],
+                "metrics": result["metrics"],
+                "trace_id": result["trace_id"],
+                "latency_ms": result["latency_ms"],
+                "ingest_status": result.get("ingest_status", "disabled"),
+                "ingest_reason": result.get("ingest_reason", ""),
+            }
+            done_payload = json.dumps(
+                {"type": "done", "meta": meta}, ensure_ascii=False
+            )
+            yield f"data: {done_payload}\n\n".encode("utf-8")
+        except Exception as e:
+            logger.error("流式推送异常", error=str(e), exc_info=True)
+            payload = json.dumps(
+                {"type": "error", "detail": f"流式推送异常: {e}"},
+                ensure_ascii=False,
+            )
+            yield f"data: {payload}\n\n".encode("utf-8")
 
     return StreamingResponse(
         event_generator(),

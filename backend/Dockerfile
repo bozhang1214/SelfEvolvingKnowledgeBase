@@ -123,14 +123,15 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 EXPOSE 8000
 
 # 生产环境 uvicorn 启动命令：
-# - --workers 4：根据 CPU 核数调整（单机 4 worker 是经验值）
+# - --workers 2：2 核服务器推荐 2 worker（每个 worker 加载 embedding 模型 ~1GB，
+#   4G 内存限制下 4 worker 会 OOM；4 核及以上可调到 3~4）
 # - --no-access-log：关闭 access log（由应用 structlog 自行记录）
 # - --proxy-headers：信任 Nginx 转发的 X-Forwarded-* 头
 # - --forwarded-allow-ips：仅信任反代来源
 CMD ["uvicorn", "app.api.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "4", \
+     "--workers", "2", \
      "--no-access-log", \
      "--proxy-headers", \
      "--forwarded-allow-ips", "*"]
