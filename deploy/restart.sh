@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 # ============================================================
-# SEKB 重启脚本 - 更新代码后快速重启前后端
+# SEKB 全功能重启脚本 - 拉代码 + 重新构建 + 重启前后端
 # ============================================================
 # 用法：
 #   bash deploy/restart.sh [选项] [目标]
 #
 # 目标（互斥，默认 all）：
-#   all         重启前后端（默认）
-#   frontend    仅重启前端（自动重新构建镜像）
-#   backend     仅重启后端（直接 restart，无需重新构建）
+#   all         重新构建并重启前后端（默认，全功能）
+#   frontend    仅重新构建并重启前端
+#   backend     仅重新构建并重启后端
 #   fe, be      简写
 #
 # 选项：
 #   --no-pull    跳过 git pull（默认会先拉取最新代码）
-#   --no-build   跳过前端镜像构建（仅 restart，适用于纯配置/环境变量变更）
+#   --no-build   跳过镜像构建，仅 restart 容器（适用于纯配置/环境变量变更）
 #   --dry-run    仅打印命令不实际执行
 #   --help, -h   显示帮助
 #
 # 示例：
-#   bash deploy/restart.sh                   # 默认：git pull + 构建前端 + 重启前后端
-#   bash deploy/restart.sh backend           # 仅重启后端
+#   bash deploy/restart.sh                   # 默认：git pull + 前后端构建 + 前后端重启
+#   bash deploy/restart.sh backend           # 仅拉代码 + 构建后端 + 重启后端
 #   bash deploy/restart.sh fe --no-pull      # 已手动 git pull，仅构建+重启前端
 #   bash deploy/restart.sh all --no-build    # 拉代码但跳过构建（仅配置变更）
 # ============================================================
@@ -129,21 +129,34 @@ if $DO_PULL; then
     fi
 fi
 
-# ============ 步骤 2：前端镜像构建（仅前端或全部时） ============
-if $RESTART_FE && $DO_BUILD; then
-    info "构建前端镜像（frontend 代码变更需要重新构建）..."
-    if $DRY_RUN; then
-        echo -e "${YELLOW}[DRY]${NC} docker compose -f docker-compose.prod.yml --env-file .env.prod build frontend"
-    else
-        docker compose -f docker-compose.prod.yml --env-file .env.prod build frontend \
-            || fail "前端镜像构建失败"
-        success "前端镜像构建完成"
+# ============ 步骤 2：镜像构建（前后端都构建，确保代码变更生效） ============
+if $DO_BUILD; then
+    if $RESTART_FE; then
+        info "构建前端镜像..."
+        if $DRY_RUN; then
+            echo -e "${YELLOW}[DRY]${NC} docker compose -f docker-compose.prod.yml --env-file .env.prod build frontend"
+        else
+            docker compose -f docker-compose.prod.yml --env-file .env.prod build frontend \
+                || fail "前端镜像构建失败"
+            success "前端镜像构建完成"
+        fi
     fi
-elif $RESTART_FE && ! $DO_BUILD; then
-    warn "跳过前端构建（--no-build），直接重启"
+
+    if $RESTART_BE; then
+        info "构建后端镜像（后端代码变更需要重新构建才能生效）..."
+        if $DRY_RUN; then
+            echo -e "${YELLOW}[DRY]${NC} docker compose -f docker-compose.prod.yml --env-file .env.prod build backend"
+        else
+            docker compose -f docker-compose.prod.yml --env-file .env.prod build backend \
+                || fail "后端镜像构建失败"
+            success "后端镜像构建完成"
+        fi
+    fi
+else
+    warn "跳过镜像构建（--no-build），仅 restart 容器"
 fi
 
-# ============ 步骤 3：重启容器 ============
+# ============ 步骤 3：重启容器（使用新构建的镜像） ============
 if $RESTART_FE; then
     info "重启 frontend 容器..."
     run docker compose -f docker-compose.prod.yml --env-file .env.prod up -d frontend
@@ -151,16 +164,9 @@ if $RESTART_FE; then
 fi
 
 if $RESTART_BE; then
-    info "重启 backend 容器（直接 restart，不重建镜像）..."
-    if $DRY_RUN; then
-        echo -e "${YELLOW}[DRY]${NC} docker compose -f docker-compose.prod.yml --env-file .env.prod restart backend"
-    else
-        # backend 不需要重新构建（Python 代码热加载靠容器内挂载或重启）
-        # 如果是 requirements.txt 变更，需要先 build backend 再 up -d --no-deps backend
-        docker compose -f docker-compose.prod.yml --env-file .env.prod restart backend \
-            || fail "backend 重启失败"
-        success "backend 已重启"
-    fi
+    info "重启 backend 容器..."
+    run docker compose -f docker-compose.prod.yml --env-file .env.prod up -d backend
+    success "backend 已重启"
 fi
 
 # ============ 步骤 4：健康检查 ============
