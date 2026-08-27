@@ -28,6 +28,7 @@ from typing import Any
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Depends,
     File,
     HTTPException,
     Query,
@@ -37,6 +38,7 @@ from fastapi import (
 from pydantic import BaseModel, Field
 
 from app.api.server import get_app_context
+from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
 from app.core.exceptions import SEKBError
 from app.core.logging import get_logger
@@ -46,9 +48,6 @@ from app.tools.image_processor import SUPPORTED_IMAGE_EXTENSIONS
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/upload", tags=["upload"])
-
-# Phase 2 用户 ID 固定为 "default"（与 chat 路由保持一致）
-_DEFAULT_USER_ID = "default"
 
 # 文档来源标记与默认重要性评分
 _DOCUMENT_SOURCE = "document"
@@ -339,6 +338,7 @@ async def upload_file(
         default=False,
         description="是否后台异步处理（大文件建议开启）",
     ),
+    user_id: str = Depends(get_current_user),
 ) -> UploadResponse:
     """
     上传文件并入库到知识库。
@@ -353,7 +353,6 @@ async def upload_file(
     ctx: AppContext = get_app_context()
     _require_vector_store(ctx)
 
-    user_id = _DEFAULT_USER_ID
     file_name = file.filename or "unnamed"
 
     # 读取文件内容并做大小校验
@@ -441,14 +440,15 @@ async def upload_file(
 
 
 @router.get("/status", response_model=KnowledgeBaseStatus)
-async def knowledge_base_status() -> KnowledgeBaseStatus:
+async def knowledge_base_status(
+    user_id: str = Depends(get_current_user),
+) -> KnowledgeBaseStatus:
     """
     查询知识库状态。
 
     返回知识库条目总数与 L3 是否启用。L3 未启用时总数返回 0。
     """
     ctx: AppContext = get_app_context()
-    user_id = _DEFAULT_USER_ID
 
     if ctx.vector_store is None:
         logger.info("L3 知识库未启用，状态查询返回 0")
@@ -475,7 +475,10 @@ async def knowledge_base_status() -> KnowledgeBaseStatus:
 
 
 @router.delete("/entries/{entry_id}", response_model=DeleteEntryResponse)
-async def delete_entry(entry_id: str, user_id: str = "default") -> DeleteEntryResponse:
+async def delete_entry(
+    entry_id: str,
+    user_id: str = Depends(get_current_user),
+) -> DeleteEntryResponse:
     """
     删除指定知识条目。
 

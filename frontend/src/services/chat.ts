@@ -100,7 +100,9 @@ export function streamChat(
       }
 
       if (!parsed) {
-        onDone({} as ChatMeta);
+        // 流未收到 done 事件就结束（被中断/连接断开），视为错误
+        // 不能调用 onDone({})：空 meta 会让 store 回退到 tempConvId，导致下次发消息 404
+        onError('流式响应异常结束');
       }
     })
     .catch((err) => {

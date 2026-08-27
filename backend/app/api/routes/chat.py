@@ -29,6 +29,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
 from app.api.server import get_app_context
+from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
 from app.core.exceptions import SEKBError
 from app.core.logging import bind_context, clear_context, get_logger
@@ -93,7 +94,7 @@ def _extract_state_dict(final_state: Any) -> dict[str, Any]:
         return {}
 
 
-async def _run_chat(ctx: AppContext, request: ChatRequest) -> dict[str, Any]:
+async def _run_chat(ctx: AppContext, request: ChatRequest, user_id: str) -> dict[str, Any]:
     """
     执行一次完整的聊天流程并返回结构化结果。
 
@@ -105,12 +106,14 @@ async def _run_chat(ctx: AppContext, request: ChatRequest) -> dict[str, Any]:
         5. 持久化用户与助手消息
         6. 更新 L1 短期记忆
 
+    Args:
+        user_id: 从 JWT 解析的真实用户 ID（不再使用 ChatRequest 默认值 "default"）
+
     Returns:
         包含 ``conversation_id`` / ``answer`` / ``intent`` /
         ``intent_confidence`` / ``metrics`` / ``trace_id`` / ``latency_ms`` 的字典
     """
     user_input = request.message
-    user_id = request.user_id or _DEFAULT_USER_ID
 
     # 1. 确保会话存在
     conv_id = request.conversation_id
@@ -294,6 +297,7 @@ async def _stream_tokens(text: str) -> AsyncIterator[str]:
 async def chat(
     request: ChatRequest,
     ctx: AppContext = Depends(get_app_context),
+    user_id: str = Depends(get_current_user),
 ) -> ChatResponse:
     """
     发送消息（非流式）。
@@ -301,7 +305,7 @@ async def chat(
     运行 LangGraph 工作流并返回完整的助手回复与元信息。
     """
     try:
-        result = await _run_chat(ctx, request)
+        result = await _run_chat(ctx, request, user_id)
     except HTTPException:
         record_chat_error()
         raise
@@ -341,6 +345,7 @@ async def chat(
 async def chat_stream(
     request: ChatRequest,
     ctx: AppContext = Depends(get_app_context),
+    user_id: str = Depends(get_current_user),
 ) -> StreamingResponse:
     """
     发送消息（SSE 流式响应）。
@@ -357,7 +362,7 @@ async def chat_stream(
     """
     async def event_generator() -> AsyncIterator[bytes]:
         try:
-            result = await _run_chat(ctx, request)
+            result = await _run_chat(ctx, request, user_id)
         except HTTPException as e:
             record_chat_error()
             payload = json.dumps(

@@ -46,6 +46,46 @@ export function uploadFile(
   onDone: (info: UploadResult) => void,
   onError: (error: string, httpStatus: number) => void
 ): XMLHttpRequest {
+  return _uploadFileXHR(file, onProgress, onDone, onError);
+}
+
+/**
+ * Promise 版上传（便于批量 await 控制）。
+ *
+ * 内部仍走 XMLHttpRequest，onProgress 回调可选。
+ *
+ * 用法：
+ *   const result = await uploadFilePromise(file, (pct) => { ... });
+ *   // 如需取消，用第三个返回值 AbortController
+ */
+export function uploadFilePromise(
+  file: File,
+  onProgress?: (percent: number) => void
+): { promise: Promise<UploadResult>; abort: () => void } {
+  let xhrRef: XMLHttpRequest | null = null;
+  const promise = new Promise<UploadResult>((resolve, reject) => {
+    xhrRef = _uploadFileXHR(
+      file,
+      (pct) => onProgress?.(pct),
+      (result) => resolve(result),
+      (error, httpStatus) => reject(Object.assign(new Error(error), { httpStatus }))
+    );
+  });
+  return {
+    promise,
+    abort: () => xhrRef?.abort(),
+  };
+}
+
+/**
+ * XHR 上传实现（内部共用，回调风格）。
+ */
+function _uploadFileXHR(
+  file: File,
+  onProgress: (percent: number) => void,
+  onDone: (info: UploadResult) => void,
+  onError: (error: string, httpStatus: number) => void
+): XMLHttpRequest {
   const xhr = new XMLHttpRequest();
   const formData = new FormData();
   formData.append('file', file);

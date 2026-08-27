@@ -124,7 +124,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       };
     });
 
-    // SSE 流式聊天（convId 为空时后端自动创建会话）
+    // SSE 流式聊天：首次发消息时 convId 为空串，后端收到 null 会自动创建新会话
+    // （不能传 tempConvId，否则后端会校验 temp_xxx 不存在而 404）
     let fullContent = '';
     const controller = chatService.streamChat(
       convId,
@@ -136,7 +137,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       },
       // onDone
       (meta: ChatMeta) => {
-        const realConvId = meta.conversation_id || convId || tempConvId;
+        // 后端 done 事件必须返回 conversation_id；为空说明异常，保持 tempConvId 不持久化
+        const realConvId = meta.conversation_id || '';
+        if (!realConvId) {
+          // 无效 conversation_id，不迁移消息，仅结束 streaming 状态
+          set({ isStreaming: false, streamingContent: '' });
+          return;
+        }
         const assistantMsg: Message = {
           message_id: `msg_${Date.now()}`,
           conv_id: realConvId,
