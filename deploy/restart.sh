@@ -6,22 +6,27 @@
 #   bash deploy/restart.sh [选项] [目标]
 #
 # 目标（互斥，默认 all）：
-#   all         重新构建并重启前后端（默认，全功能）
-#   frontend    仅重新构建并重启前端
-#   backend     仅重新构建并重启后端
-#   fe, be      简写
+#   all           重新构建并重启前后端 + 启动监控栈（默认，全功能）
+#   frontend      仅重新构建并重启前端
+#   backend       仅重新构建并重启后端
+#   monitoring    启动/重启监控栈（Prometheus + Grafana + Loki + Promtail + Alertmanager）
+#   fe, be        简写
+#   mon, monitor  简写（同 monitoring）
 #
 # 选项：
-#   --no-pull    跳过 git pull（默认会先拉取最新代码）
-#   --no-build   跳过镜像构建，仅 restart 容器（适用于纯配置/环境变量变更）
-#   --dry-run    仅打印命令不实际执行
-#   --help, -h   显示帮助
+#   --no-pull         跳过 git pull（默认会先拉取最新代码）
+#   --no-build        跳过镜像构建，仅 restart 容器（适用于纯配置/环境变量变更）
+#   --no-monitoring   不启动监控栈（仅 all 目标有效，用于只想重启应用栈）
+#   --dry-run         仅打印命令不实际执行
+#   --help, -h        显示帮助
 #
 # 示例：
-#   bash deploy/restart.sh                   # 默认：git pull + 前后端构建 + 前后端重启
-#   bash deploy/restart.sh backend           # 仅拉代码 + 构建后端 + 重启后端
-#   bash deploy/restart.sh fe --no-pull      # 已手动 git pull，仅构建+重启前端
-#   bash deploy/restart.sh all --no-build    # 拉代码但跳过构建（仅配置变更）
+#   bash deploy/restart.sh                          # 默认：前后端 + 监控栈一起启动
+#   bash deploy/restart.sh backend                  # 仅拉代码 + 构建后端 + 重启后端
+#   bash deploy/restart.sh monitoring               # 仅启动监控栈
+#   bash deploy/restart.sh all --no-monitoring      # 仅应用栈（不启动监控栈）
+#   bash deploy/restart.sh fe --no-pull             # 已手动 git pull，仅构建+重启前端
+#   bash deploy/restart.sh all --no-build           # 拉代码但跳过构建（仅配置变更）
 # ============================================================
 
 set -euo pipefail
@@ -38,22 +43,24 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_FILE="${PROJECT_ROOT}/docker-compose.prod.yml"
+MONITORING_COMPOSE_FILE="${PROJECT_ROOT}/docker-compose.monitoring.yml"
 ENV_FILE="${PROJECT_ROOT}/.env.prod"
 
 TARGET="all"
 DO_PULL=true
 DO_BUILD=true
+NO_MONITORING=false
 DRY_RUN=false
 
 # ============ 参数解析 ============
 usage() {
-    sed -n '3,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '3,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        all|frontend|backend|fe|be)
+        all|frontend|backend|fe|be|monitoring|mon|monitor)
             TARGET=$1
             shift
             ;;
@@ -63,6 +70,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-build)
             DO_BUILD=false
+            shift
+            ;;
+        --no-monitoring)
+            NO_MONITORING=true
             shift
             ;;
         --dry-run)
@@ -84,6 +95,7 @@ done
 case $TARGET in
     fe) TARGET="frontend" ;;
     be) TARGET="backend" ;;
+    mon|monitor) TARGET="monitoring" ;;
 esac
 
 # ============ 工具函数 ============
@@ -111,12 +123,19 @@ info "工作目录: $PROJECT_ROOT"
 # 拆解目标
 RESTART_FE=false
 RESTART_BE=false
+RESTART_MON=false
 case $TARGET in
-    all)        RESTART_FE=true; RESTART_BE=true ;;
+    all)        RESTART_FE=true; RESTART_BE=true; RESTART_MON=true ;;
     frontend)   RESTART_FE=true ;;
     backend)    RESTART_BE=true ;;
+    monitoring) RESTART_MON=true ;;
     *)          fail "未知目标：$TARGET" ;;
 esac
+
+# --no-monitoring：默认 all 会带监控栈，此选项用于仅重启应用栈
+if $NO_MONITORING; then
+    RESTART_MON=false
+fi
 
 # ============ 步骤 1：git pull ============
 if $DO_PULL; then
@@ -169,9 +188,28 @@ if $RESTART_BE; then
     success "backend 已重启"
 fi
 
+# ============ 步骤 3b：启动监控栈 ============
+if $RESTART_MON; then
+    [[ -f "$MONITORING_COMPOSE_FILE" ]] || fail "找不到 $MONITORING_COMPOSE_FILE"
+
+    # 监控栈通过 external 网络 sekb_network 连接 backend，需应用栈先创建该网络
+    if ! $DRY_RUN; then
+        if ! docker network inspect sekb_network >/dev/null 2>&1; then
+            warn "未检测到应用栈网络 sekb_network（监控栈需连接 backend 采集指标）"
+            warn "请先启动应用栈：bash deploy/restart.sh backend  或  bash deploy/restart.sh all"
+        fi
+    fi
+
+    info "启动监控栈（Prometheus/Grafana/Loki/Promtail/Alertmanager）..."
+    run docker compose -f docker-compose.monitoring.yml --env-file .env.prod up -d
+    success "监控栈已启动"
+fi
+
 # ============ 步骤 4：健康检查 ============
-info "等待容器就绪并执行健康检查..."
-sleep 3
+if $RESTART_FE || $RESTART_BE; then
+    info "等待容器就绪并执行健康检查..."
+    sleep 3
+fi
 
 check_health() {
     local name=$1
@@ -215,6 +253,16 @@ else
     docker compose -f docker-compose.prod.yml --env-file .env.prod ps
 fi
 
+if $RESTART_MON; then
+    echo ""
+    info "监控栈状态："
+    if $DRY_RUN; then
+        echo -e "${YELLOW}[DRY]${NC} docker compose -f docker-compose.monitoring.yml --env-file .env.prod ps"
+    else
+        docker compose -f docker-compose.monitoring.yml --env-file .env.prod ps
+    fi
+fi
+
 echo ""
 success "重启流程完成"
 if $DRY_RUN; then
@@ -224,3 +272,8 @@ echo ""
 echo "提示："
 echo "  - 查看 backend 日志:  docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f backend"
 echo "  - 查看 frontend 日志: docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f frontend"
+if $RESTART_MON; then
+    echo "  - 查看监控栈日志:    docker compose -f docker-compose.monitoring.yml --env-file .env.prod logs -f prometheus"
+    echo "  - Grafana 页面:      http://localhost:3001（默认 admin/admin，建议经 Tailscale 访问）"
+    echo "  - Prometheus 页面:   http://localhost:9091"
+fi

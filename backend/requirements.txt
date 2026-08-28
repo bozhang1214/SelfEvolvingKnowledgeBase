@@ -54,6 +54,7 @@ structlog>=24.1                    # 结构化 JSON 日志
 tiktoken>=0.8.0                    # Token 计数
 tenacity>=8.2                      # 重试机制（指数退避）
 pyjwt>=2.8.0                       # JWT 鉴权（Phase 3 启用）
+packaging>=23.0                    # 版本解析（langchain_core 传递依赖，slim 镜像需显式声明）
 
 # ============ 文档解析（Phase 2，文件上传）============
 langchain-text-splitters>=1.0,<2.0 # 文本分块（文件解析用）

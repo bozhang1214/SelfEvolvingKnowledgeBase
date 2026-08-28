@@ -96,6 +96,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 从 builder 复制已安装的 Python 依赖
 COPY --from=builder /install /usr/local
 
+# 显式安装 packaging（langchain_core 依赖；builder 中被 setuptools vendored 副本遮蔽，--prefix 不会复制）
+RUN pip install --no-cache-dir packaging
+
 # 复制应用代码
 COPY app/ ./app/
 COPY config.yaml ./

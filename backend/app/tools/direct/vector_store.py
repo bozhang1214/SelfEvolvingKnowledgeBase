@@ -105,6 +105,11 @@ class DirectVectorStore:
         source_id: str = "",
         importance_score: float = 0.5,
         topic: str = "",
+        category_l1: str = "其他",
+        category_l2: str = "待分类",
+        category_l3: str = "未分类",
+        category_confidence: float = 0.0,
+        category_source: str = "auto",
     ) -> str:
         """
         添加知识条目到向量库（便捷方法）。
@@ -116,6 +121,11 @@ class DirectVectorStore:
             source_id: 来源 ID
             importance_score: 重要性评分
             topic: 主题标签
+            category_l1: 一级分类大类
+            category_l2: 二级分类子类
+            category_l3: 三级分类细类
+            category_confidence: 自动分类置信度
+            category_source: 分类来源（auto/manual）
 
         Returns:
             新条目的 entry_id
@@ -129,6 +139,11 @@ class DirectVectorStore:
             user_id=user_id,
             importance_score=importance_score,
             topic=topic,
+            category_l1=category_l1,
+            category_l2=category_l2,
+            category_l3=category_l3,
+            category_confidence=category_confidence,
+            category_source=category_source,
         )
         return await self.kb.add(entry)
 

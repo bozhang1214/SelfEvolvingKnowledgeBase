@@ -54,6 +54,10 @@ const Settings: React.FC = () => {
               <Text strong>{user?.name || user?.email}</Text>
               <br />
               <Text type="secondary">{user?.email}</Text>
+              <br />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                用户 ID: {user?.user_id || '-'}
+              </Text>
             </div>
           </Space>
           <Divider />

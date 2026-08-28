@@ -79,3 +79,18 @@ apiClient.interceptors.response.use(
 
 export { apiClient, API_BASE };
 export default apiClient;
+
+/**
+ * 从 axios 响应中提取业务数据，兼容两种后端响应格式：
+ * - 直接返回业务对象：{ entries: [...] }
+ * - 包装为 ApiResponse：{ code, data, message }
+ *
+ * 用于分类/分享等新接口，避免对响应是否被包装做假设。
+ */
+export function unwrap<T>(res: { data: T | ApiResponse<T> }): T {
+  const d = res.data as any;
+  if (d && typeof d === 'object' && !Array.isArray(d) && 'data' in d && 'code' in d) {
+    return (d as ApiResponse<T>).data;
+  }
+  return d as T;
+}

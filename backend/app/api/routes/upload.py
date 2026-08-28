@@ -157,12 +157,14 @@ async def _ingest_chunks(
     user_id: str,
     file_name: str,
     source: str = _DOCUMENT_SOURCE,
+    category: dict[str, Any] | None = None,
 ) -> tuple[list[str], str]:
     """
     将分块批量入库到知识库。
 
     为每个分块创建 KnowledgeEntry，
-    importance_score 默认 0.5，source_id 记录原文件名以便溯源。
+    importance_score 默认 0.5，source_id 记录原文件名以便溯源，
+    category 为文档级分类结果（同一文件所有分块共享）。
 
     Args:
         ctx: 应用上下文（已确保 vector_store 可用）
@@ -170,12 +172,20 @@ async def _ingest_chunks(
         user_id: 用户 ID
         file_name: 原文件名，写入 source_id 用于溯源
         source: 来源标记（"document" 或 "image"）
+        category: 分类结果 {l1, l2, l3, confidence}，None 时使用默认值
 
     Returns:
         (entry_ids, error_message) 二元组；全部成功时 error_message 为空串
     """
     vector_store = ctx.vector_store
     assert vector_store is not None  # 由调用方 _require_vector_store 保证
+
+    # 分类参数（文档级，所有分块共享）
+    cat = category or {}
+    cat_l1 = cat.get("l1", "其他")
+    cat_l2 = cat.get("l2", "待分类")
+    cat_l3 = cat.get("l3", "未分类")
+    cat_conf = float(cat.get("confidence", 0.0) or 0.0)
 
     entry_ids: list[str] = []
     error_msg = ""
@@ -187,6 +197,11 @@ async def _ingest_chunks(
                 source=source,
                 source_id=file_name,
                 importance_score=_DEFAULT_IMPORTANCE_SCORE,
+                category_l1=cat_l1,
+                category_l2=cat_l2,
+                category_l3=cat_l3,
+                category_confidence=cat_conf,
+                category_source="auto",
             )
             entry_ids.append(entry_id)
         except Exception as e:
@@ -261,12 +276,17 @@ async def _process_and_ingest(
 
     # 图片使用 "image" 来源标记，文档使用 "document"
     source = _IMAGE_SOURCE if is_image else _DOCUMENT_SOURCE
+
+    # 文档级自动分类：用文件名 + 首个分块作为样本（同一文件所有分块共享分类）
+    category = await _classify_document(ctx, result.chunks, file_name)
+
     entry_ids, error_msg = await _ingest_chunks(
         ctx=ctx,
         chunks=result.chunks,
         user_id=user_id,
         file_name=file_name,
         source=source,
+        category=category,
     )
 
     if error_msg:
@@ -280,6 +300,9 @@ async def _process_and_ingest(
         chunks_count=result.chunks_count,
         ingested_count=len(entry_ids),
         status=final_status,
+        category_l1=category.get("l1"),
+        category_l2=category.get("l2"),
+        category_l3=category.get("l3"),
     )
 
     return UploadResponse(
@@ -324,6 +347,36 @@ async def _background_ingest(
             os.remove(file_path)
         except OSError as e:
             logger.warning("临时文件清理失败", file_path=file_path, error=str(e))
+
+
+async def _classify_document(
+    ctx: AppContext,
+    chunks: list[str],
+    file_name: str,
+) -> dict[str, Any]:
+    """
+    对文档进行自动分类。
+
+    使用 LLM 分析文件名 + 首个分块内容，匹配到三级分类目录。
+    失败时返回默认 "其他/待分类/未分类"，不阻断上传主流程。
+
+    Args:
+        ctx: 应用上下文
+        chunks: 文档分块列表
+        file_name: 文件名
+
+    Returns:
+        {"l1": ..., "l2": ..., "l3": ..., "confidence": ...}
+    """
+    from app.services.classifier import DocumentClassifier
+
+    try:
+        classifier = DocumentClassifier(ctx.llm_factory)
+        sample = chunks[0] if chunks else ""
+        return await classifier.classify(content=sample, file_name=file_name)
+    except Exception as e:
+        logger.warning("文档分类异常，使用默认分类", file_name=file_name, error=str(e))
+        return {"l1": "其他", "l2": "待分类", "l3": "未分类", "confidence": 0.0}
 
 
 # ============================================================

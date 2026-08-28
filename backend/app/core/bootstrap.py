@@ -79,6 +79,8 @@ class AppContext:
     vector_store: DirectVectorStore | None = None
     # 用户存储（Phase 3，可选）
     user_storage: UserStorage | None = None
+    # 知识库分享存储（Phase 3）
+    share_storage: Any = None
     # 知识自迭代引擎实例（Phase 2，可选）
     # 实际类型为 KnowledgeIngester | None，使用 Any 避免循环导入
     knowledge_ingester: Any = None
@@ -190,6 +192,10 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
     storage_dir = config.storage.data_dir or str(Path(config_path).parent / "data")
     user_storage = UserStorage(storage_dir)
 
+    # 11.1 初始化知识库分享存储（Phase 3）
+    from app.storage.share_storage import ShareStorage
+    share_storage = ShareStorage(storage_dir)
+
     # 12. 构建 LangGraph 工作流（延迟导入，避免模块加载阶段引入 langgraph）
     from app.graph.builder import GraphBuilder
 
@@ -218,6 +224,7 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         knowledge_base=knowledge_base,
         vector_store=vector_store,
         user_storage=user_storage,
+        share_storage=share_storage,
         knowledge_ingester=knowledge_ingester,
     )
     return _app_context

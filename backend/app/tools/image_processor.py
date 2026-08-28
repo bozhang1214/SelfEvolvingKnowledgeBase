@@ -101,6 +101,15 @@ class ImageProcessor:
             ImageProcessResult
         """
         path = Path(image_path)
+        if not path.exists():
+            return ImageProcessResult(
+                file_path=image_path,
+                file_name=path.name,
+                file_size=0,
+                status="error",
+                error=f"文件不存在: {image_path}",
+            )
+
         try:
             file_size = path.stat().st_size
         except OSError:

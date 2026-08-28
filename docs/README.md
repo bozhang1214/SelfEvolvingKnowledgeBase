@@ -39,6 +39,7 @@
 | [TENCENT-CLOUD-DEPLOY.md](./TENCENT-CLOUD-DEPLOY.md) | **腾讯云部署手册**：基于腾讯云轻量 2核4G 套餐的完整部署指南，含前置项清单、购买、初始化、域名备案、HTTPS | 个人 / 小团队 |
 | [PRE-DEPLOY-CHECKLIST.md](./PRE-DEPLOY-CHECKLIST.md) | **部署前检查清单**：8 大类检查项 + 一键检查脚本，确保上线前所有前置条件已满足 | 运维与 DevOps |
 | [ALERTING-TROUBLESHOOTING.md](./ALERTING-TROUBLESHOOTING.md) | 告警模块故障排查指南：Alertmanager + feishu-webhook 常见故障与解决步骤 | 运维与 DevOps |
+| [TAILSCALE-ACCESS.md](./TAILSCALE-ACCESS.md) | **监控页面远程访问手册**：Tailscale 组网（云服务器 / MacBook Pro / 手机），免公网端口、免 SSH 隧道访问 Grafana/Prometheus | 个人 / 运维 |
 | [testCase/TEST-CASES.md](./testCase/TEST-CASES.md) | 测试用例汇总：单元测试、集成测试、评估黄金数据集、测试数据、自动化测试指南 | 测试与开发 |
 | [python311-upgrade-plan.md](./python311-upgrade-plan.md) | Python 3.11 升级计划 | 开发 |
 

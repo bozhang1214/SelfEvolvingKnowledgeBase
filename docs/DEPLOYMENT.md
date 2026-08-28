@@ -890,8 +890,14 @@ curl -o /dev/null -w "%{http_code}" http://localhost/
 ### 7.3 启动监控栈
 
 ```bash
-docker compose -f docker-compose.monitoring.yml up -d
+# 方式一：一键脚本（推荐，自动带 --env-file .env.prod 与网络预检）
+bash deploy/restart.sh monitoring
+
+# 方式二：直接 docker compose
+docker compose -f docker-compose.monitoring.yml --env-file .env.prod up -d
 ```
+
+> 监控栈通过 external 网络 `sekb_network` 连接 backend，请先确保应用栈已启动。
 
 ### 7.4 验证监控栈
 
@@ -930,6 +936,22 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod restart frontend
 ## 8. 日常运维
 
 ### 8.1 启动 / 停止 / 重启
+
+#### 一键脚本（推荐）
+
+```bash
+bash deploy/restart.sh                            # 默认：git pull + 构建 + 重启前后端 + 启动监控栈
+bash deploy/restart.sh backend                    # 仅后端（最快，约 3s）
+bash deploy/restart.sh frontend                   # 仅前端（含构建）
+bash deploy/restart.sh monitoring                 # 仅启动/重启监控栈
+bash deploy/restart.sh all --no-monitoring        # 仅应用栈（不启动监控栈）
+bash deploy/restart.sh all --no-build             # 仅重启容器（跳过构建，配置变更用）
+bash deploy/restart.sh monitoring --dry-run       # 预演（不实际执行）
+```
+
+> 完整参数见 `bash deploy/restart.sh --help`。默认（无参数）即启动「前后端 + 监控栈」全量服务；一键脚本会自动带上 `--env-file .env.prod`，并在启动监控栈前预检 `sekb_network` 网络。
+
+#### 手动 docker compose
 
 > ⚠ 以下所有 docker compose 命令均需添加 --env-file .env.prod 参数，下文为简洁已省略
 

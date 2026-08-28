@@ -263,8 +263,12 @@ curl http://localhost:8000/api/v1/health/live
 ### 4.3 启动监控栈
 
 ```bash
+# 方式一：一键脚本（推荐，自动带 --env-file .env.prod 与网络预检）
+bash deploy/restart.sh monitoring
+
+# 方式二：直接 docker compose
 # 启动 Prometheus + Grafana + Loki + Alertmanager + feishu-webhook
-docker compose -f docker-compose.monitoring.yml up -d
+docker compose -f docker-compose.monitoring.yml --env-file .env.prod up -d
 ```
 
 ### 4.4 查看服务状态
@@ -274,7 +278,7 @@ docker compose -f docker-compose.monitoring.yml up -d
 docker compose -f docker-compose.prod.yml --env-file .env.prod ps
 
 # 查看监控栈
-docker compose -f docker-compose.monitoring.yml ps
+docker compose -f docker-compose.monitoring.yml --env-file .env.prod ps
 
 # 期望所有容器状态为 Up (healthy)
 ```

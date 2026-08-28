@@ -69,6 +69,38 @@ def _log_op(
     logger.info(f"[KB-TRACE] {op}/{event}", extra=payload)
 
 
+def _build_where_filter(
+    user_id: str | None = None,
+    source: str | None = None,
+    category_l1: str | None = None,
+    category_l2: str | None = None,
+    category_l3: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    构建 ChromaDB 元数据过滤条件（多字段 AND）。
+
+    任一字段非空即参与过滤；单字段时直接返回该字段条件，
+    多字段时用 ``$and`` 组合。全部为空返回 None（不过滤）。
+    """
+    conditions: dict[str, Any] = {}
+    if user_id:
+        conditions["user_id"] = user_id
+    if source:
+        conditions["source"] = source
+    if category_l1:
+        conditions["category_l1"] = category_l1
+    if category_l2:
+        conditions["category_l2"] = category_l2
+    if category_l3:
+        conditions["category_l3"] = category_l3
+
+    if not conditions:
+        return None
+    if len(conditions) == 1:
+        return conditions
+    return {"$and": [{k: v} for k, v in conditions.items()]}
+
+
 class ChromaKnowledgeBase(KnowledgeBaseBackend):
     """
     基于 ChromaDB 的 L3 长期知识库实现。
@@ -432,21 +464,36 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
         user_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
+        source: str | None = None,
+        category_l1: str | None = None,
+        category_l2: str | None = None,
+        category_l3: str | None = None,
     ) -> list[KnowledgeEntry]:
         """
-        列出知识库条目（按创建时间降序）。
+        列出知识库条目（按 ChromaDB 存储顺序返回，未保证时间排序）。
 
         Args:
             user_id: 用户 ID（None 表示所有用户）
             limit: 返回最大条目数
             offset: 偏移量
+            source: 来源类型过滤（conversation/document/manual/image）
+            category_l1: 一级分类过滤
+            category_l2: 二级分类过滤
+            category_l3: 三级分类过滤
 
         Returns:
             KnowledgeEntry 列表
         """
         self._ensure_initialized()
 
-        where_filter = {"user_id": user_id} if user_id else None
+        where_filter = _build_where_filter(
+            user_id=user_id,
+            source=source,
+            category_l1=category_l1,
+            category_l2=category_l2,
+            category_l3=category_l3,
+        )
+
         result = await asyncio.to_thread(
             self._collection.get,
             where=where_filter,
@@ -470,3 +517,33 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
             )
 
         return entries
+
+    async def count_entries(
+        self,
+        user_id: str | None = None,
+        source: str | None = None,
+        category_l1: str | None = None,
+        category_l2: str | None = None,
+        category_l3: str | None = None,
+    ) -> int:
+        """
+        统计符合过滤条件的知识条目总数（支持与 list_entries 相同的过滤条件）。
+
+        与 list_entries 配套用于分页：返回的是满足 where 条件的真实总数，
+        避免仅靠 list_entries 的 limit 截断导致 total 失真。
+        """
+        self._ensure_initialized()
+        where_filter = _build_where_filter(
+            user_id=user_id,
+            source=source,
+            category_l1=category_l1,
+            category_l2=category_l2,
+            category_l3=category_l3,
+        )
+        if where_filter is None:
+            return await asyncio.to_thread(self._collection.count)
+        # include=[] 仅返回 ids，避免加载 documents/metadatas（大数据量时更省内存）
+        result = await asyncio.to_thread(
+            self._collection.get, where=where_filter, include=[]
+        )
+        return len(result.get("ids", []) or [])

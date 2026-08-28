@@ -251,6 +251,69 @@ class KnowledgeBaseBackend(ABC):
         ...
 
     @abstractmethod
+    async def update(
+        self,
+        entry_id: str,
+        content: str | None = None,
+        metadata_updates: dict[str, Any] | None = None,
+    ) -> Any | None:
+        """
+        更新知识条目的内容或元数据。
+
+        Args:
+            entry_id: 条目 ID
+            content: 新内容（None 表示不更新内容）
+            metadata_updates: 需要更新的元数据字段（如分类）
+
+        Returns:
+            更新后的 KnowledgeEntry，若条目不存在返回 None
+        """
+        ...
+
+    @abstractmethod
+    async def list_entries(
+        self,
+        user_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        source: str | None = None,
+        category_l1: str | None = None,
+        category_l2: str | None = None,
+        category_l3: str | None = None,
+    ) -> list[Any]:
+        """
+        列出知识条目（支持来源与多级分类过滤 + 分页）。
+
+        Args:
+            user_id: 用户 ID（None 表示所有用户）
+            limit: 返回最大条目数
+            offset: 偏移量
+            source: 来源类型过滤
+            category_l1/l2/l3: 多级分类过滤
+
+        Returns:
+            KnowledgeEntry 列表
+        """
+        ...
+
+    @abstractmethod
+    async def count_entries(
+        self,
+        user_id: str | None = None,
+        source: str | None = None,
+        category_l1: str | None = None,
+        category_l2: str | None = None,
+        category_l3: str | None = None,
+    ) -> int:
+        """
+        统计符合过滤条件的条目总数（与 list_entries 配套分页）。
+
+        Returns:
+            满足条件的条目总数
+        """
+        ...
+
+    @abstractmethod
     async def find_similar(
         self,
         query: str,

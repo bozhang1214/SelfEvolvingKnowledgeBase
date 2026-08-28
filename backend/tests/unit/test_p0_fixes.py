@@ -356,7 +356,7 @@ class TestWorkflowExceptionFallback:
         ctx.llm_factory.snapshot_stats = MagicMock(return_value=MagicMock())
 
         request = ChatRequest(message="你好")
-        result = await _run_chat(ctx, request)
+        result = await _run_chat(ctx, request, "test-user")
         # 返回降级回复而非抛异常
         assert "抱歉" in result["answer"]
         assert result["latency_ms"] >= 0
@@ -416,7 +416,7 @@ class TestE2ELatencyBackfill:
         ctx.llm_factory.snapshot_stats = MagicMock(return_value=MagicMock())
 
         request = ChatRequest(message="你好")
-        result = await _run_chat(ctx, request)
+        result = await _run_chat(ctx, request, "test-user")
         assert result["metrics"]["e2e_latency_ms"] > 0
 
 

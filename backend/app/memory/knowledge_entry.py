@@ -51,6 +51,11 @@ class KnowledgeEntry(BaseModel):
         updated_at: 最后更新时间
         last_accessed_at: 最后访问时间（检索时更新）
         access_count: 被检索命中的次数
+        category_l1: 一级分类大类（如 技术开发）
+        category_l2: 二级分类子类（如 编程语言）
+        category_l3: 三级分类细类（如 Python）
+        category_confidence: 自动分类置信度（0.0~1.0）
+        category_source: 分类来源（auto 自动 / manual 手动）
     """
 
     entry_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -67,6 +72,12 @@ class KnowledgeEntry(BaseModel):
     updated_at: str = Field(default_factory=_now_iso)
     last_accessed_at: str = Field(default_factory=_now_iso)
     access_count: int = 0
+    # 多级分类字段
+    category_l1: str = "其他"
+    category_l2: str = "待分类"
+    category_l3: str = "未分类"
+    category_confidence: float = 0.0
+    category_source: str = "auto"
 
     def to_chroma_metadata(self) -> dict[str, Any]:
         """
@@ -87,6 +98,11 @@ class KnowledgeEntry(BaseModel):
             "updated_at": self.updated_at,
             "last_accessed_at": self.last_accessed_at,
             "access_count": self.access_count,
+            "category_l1": self.category_l1,
+            "category_l2": self.category_l2,
+            "category_l3": self.category_l3,
+            "category_confidence": self.category_confidence,
+            "category_source": self.category_source,
         }
 
     @classmethod
@@ -120,10 +136,17 @@ class KnowledgeEntry(BaseModel):
             updated_at=metadata.get("updated_at", _now_iso()),
             last_accessed_at=metadata.get("last_accessed_at", _now_iso()),
             access_count=int(metadata.get("access_count", 0)),
+            category_l1=metadata.get("category_l1", "其他"),
+            category_l2=metadata.get("category_l2", "待分类"),
+            category_l3=metadata.get("category_l3", "未分类"),
+            category_confidence=float(metadata.get("category_confidence", 0.0)),
+            category_source=metadata.get("category_source", "auto"),
             metadata={"distance": distance, **{k: v for k, v in metadata.items() if k not in (
                 "user_id", "source", "source_id", "topic", "importance_score",
                 "version", "supersedes", "created_at", "updated_at",
                 "last_accessed_at", "access_count",
+                "category_l1", "category_l2", "category_l3",
+                "category_confidence", "category_source",
             )}},
         )
 

@@ -106,6 +106,8 @@ class TestToChromaMetadata:
             "user_id", "source", "source_id", "topic",
             "importance_score", "version", "supersedes",
             "created_at", "updated_at", "last_accessed_at", "access_count",
+            "category_l1", "category_l2", "category_l3",
+            "category_confidence", "category_source",
         }
         assert set(meta.keys()) == expected_keys
 
