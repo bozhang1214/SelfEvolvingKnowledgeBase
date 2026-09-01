@@ -69,3 +69,6 @@ frontend/.vite/
 # ============ 日志 ============
 *.log
 logs/
+
+# TypeScript 增量构建缓存
+*.tsbuildinfo
