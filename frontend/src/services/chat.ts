@@ -1,30 +1,30 @@
-import apiClient from './api';
+import apiClient, { unwrap } from './api';
 import type { ApiResponse } from '@/types/api';
 import type { Conversation, Message, ChatMeta } from '@/types/chat';
 
 export async function listConversations(): Promise<Conversation[]> {
   const res = await apiClient.get<ApiResponse<Conversation[]>>('/conversations');
-  return res.data.data;
+  return unwrap(res);
 }
 
 export async function getConversation(convId: string): Promise<Conversation> {
   const res = await apiClient.get<ApiResponse<Conversation>>(`/conversations/${convId}`);
-  return res.data.data;
+  return unwrap(res);
 }
 
 export async function getMessages(convId: string): Promise<Message[]> {
   const res = await apiClient.get<ApiResponse<Message[]>>(`/conversations/${convId}/messages`);
-  return res.data.data;
+  return unwrap(res);
 }
 
 export async function createConversation(): Promise<Conversation> {
   const res = await apiClient.post<ApiResponse<Conversation>>('/conversations');
-  return res.data.data;
+  return unwrap(res);
 }
 
 export async function updateConversation(convId: string, data: { title?: string; pinned?: boolean }): Promise<Conversation> {
   const res = await apiClient.patch<ApiResponse<Conversation>>(`/conversations/${convId}`, data);
-  return res.data.data;
+  return unwrap(res);
 }
 
 export async function deleteConversation(convId: string): Promise<void> {
