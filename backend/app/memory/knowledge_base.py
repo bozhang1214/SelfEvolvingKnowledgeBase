@@ -359,23 +359,17 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
         # 更新内容
         new_doc = content if content is not None else old_doc
 
-        # 如果内容变更，需要重新生成向量（异步）
-        if content is not None:
-            new_embeddings = await self._async_embed([new_doc])
-            await asyncio.to_thread(
-                self._collection.update,
-                ids=[entry_id],
-                embeddings=new_embeddings,
-                documents=[new_doc],
-                metadatas=[new_meta],
-            )
-        else:
-            await asyncio.to_thread(
-                self._collection.update,
-                ids=[entry_id],
-                documents=[new_doc],
-                metadatas=[new_meta],
-            )
+        # 无论内容是否变更都显式生成向量：
+        # 若只传 documents 不传 embeddings，chromadb 会懒加载默认 embedding 函数
+        # （下载 all-MiniLM ONNX 模型），在离线/弱网环境下会长时间阻塞
+        new_embeddings = await self._async_embed([new_doc])
+        await asyncio.to_thread(
+            self._collection.update,
+            ids=[entry_id],
+            embeddings=new_embeddings,
+            documents=[new_doc],
+            metadatas=[new_meta],
+        )
 
         return KnowledgeEntry.from_chroma_record(
             doc_id=entry_id,
