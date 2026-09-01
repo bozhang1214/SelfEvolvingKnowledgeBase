@@ -104,6 +104,7 @@ memory:
     enabled: true                       # 已启用 ChromaDB
     retrieval_top_k: 5                  # 检索返回 Top-5 结果
     importance_threshold: 0.3           # 入库最低重要性阈值，低于此值跳过
+    allow_hash_fallback: false          # 生产禁用哈希降级；开发无模型时可设 true
     eviction:
       max_items: 10000                  # 单用户最大知识条目数
       stale_days: 7                     # 超过 7 天未访问视为陈旧

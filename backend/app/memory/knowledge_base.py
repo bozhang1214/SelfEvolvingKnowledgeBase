@@ -114,6 +114,7 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
         persist_path: str = "data/chroma_db",
         embedding_fn: Any = None,
         collection_name: str = "knowledge",
+        allow_hash_fallback: bool = False,
     ):
         """
         Args:
@@ -121,10 +122,13 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
             embedding_fn: Embedding 函数，需实现 __call__(texts) -> list[list[float]]
                          若为 None，则使用默认的本地 Embedding
             collection_name: ChromaDB collection 名称
+            allow_hash_fallback: embedding 模型加载失败时是否降级为哈希向量（生产应 False）
         """
         if embedding_fn is None:
             from app.core.embedding import get_embedding_function
-            embedding_fn = get_embedding_function()
+            embedding_fn = get_embedding_function(
+                allow_hash_fallback=allow_hash_fallback,
+            )
 
         self._embedding_fn = embedding_fn
         self._persist_path = persist_path

@@ -111,6 +111,9 @@ class L3MemoryConfig(BaseModel):
     retrieval_top_k: int = 5
     importance_threshold: float = 0.3
     eviction: EvictionConfig = EvictionConfig()
+    # 生产环境禁用哈希降级：embedding 模型加载失败时应报错而非静默降级为哈希向量
+    # （哈希向量维度 256 与 bge 模型 512 不一致，混用会破坏 ChromaDB HNSW 索引）
+    allow_hash_fallback: bool = False
 
 
 class MemoryConfig(BaseModel):

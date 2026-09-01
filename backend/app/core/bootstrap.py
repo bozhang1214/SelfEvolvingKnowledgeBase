@@ -161,6 +161,7 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
 
             knowledge_base = ChromaKnowledgeBase(
                 persist_path=config.tools.vector_store.persist_path,
+                allow_hash_fallback=config.memory.l3_knowledge.allow_hash_fallback,
             )
             vector_store = DirectVectorStore(knowledge_base)
             logger.info(

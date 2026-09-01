@@ -212,3 +212,52 @@ class TestGetEmbeddingFunction:
             assert isinstance(fn, LocalEmbeddingFunction)
         finally:
             embedding_module._embedding_cache.pop(model_name, None)
+
+
+# ============================================================
+# 哈希降级开关测试（严格模式 vs 降级模式）
+# ============================================================
+
+class TestHashFallbackToggle:
+    """测试 allow_hash_fallback 开关行为"""
+
+    def test_strict_mode_raises_on_load_failure(self, monkeypatch):
+        """allow_hash_fallback=False 时模型加载失败应抛异常（不静默降级）"""
+        import sentence_transformers
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("model download failed")
+
+        monkeypatch.setattr(sentence_transformers, "SentenceTransformer", _boom)
+        fn = LocalEmbeddingFunction("test-strict-model", allow_hash_fallback=False)
+        with pytest.raises(RuntimeError):
+            fn(["文本"])
+
+    def test_fallback_mode_uses_hash_when_enabled(self, monkeypatch):
+        """allow_hash_fallback=True 时模型加载失败降级为哈希向量（256 维）"""
+        import sentence_transformers
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("model download failed")
+
+        monkeypatch.setattr(sentence_transformers, "SentenceTransformer", _boom)
+        fn = LocalEmbeddingFunction("test-fallback-model", allow_hash_fallback=True)
+        result = fn(["文本"])
+        assert len(result) == 1
+        assert len(result[0]) == 256
+
+    def test_strict_mode_raises_on_import_error(self, monkeypatch):
+        """sentence-transformers 未安装时，严格模式同样抛异常"""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "sentence_transformers":
+                raise ImportError("No module named 'sentence_transformers'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+        fn = LocalEmbeddingFunction("test-strict-import", allow_hash_fallback=False)
+        with pytest.raises(RuntimeError):
+            fn(["文本"])

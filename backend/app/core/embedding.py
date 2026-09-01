@@ -43,13 +43,22 @@ class LocalEmbeddingFunction:
     线程安全：模型加载后只读，可并发调用。
     """
 
-    def __init__(self, model_name: str = "BAAI/bge-small-zh-v1.5"):
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-small-zh-v1.5",
+        allow_hash_fallback: bool = False,
+    ):
         """
         Args:
             model_name: HuggingFace 模型名称。
                         推荐中文场景使用 BAAI/bge-small-zh-v1.5（512 维，体积小）。
+            allow_hash_fallback: 模型加载失败时是否降级为哈希向量（256 维）。
+                                 默认 False（严格模式）：失败即抛异常。
+                                 哈希向量维度与真实模型不一致，混用会破坏向量索引，
+                                 生产环境务必保持 False。
         """
         self.model_name = model_name
+        self.allow_hash_fallback = allow_hash_fallback
         self._model: Any = None
         self._loaded = False
 
@@ -64,19 +73,29 @@ class LocalEmbeddingFunction:
             self._model = SentenceTransformer(self.model_name)
             self._loaded = True
             logger.info("Embedding 模型加载完成", extra={"model": self.model_name})
-        except ImportError:
-            logger.warning(
-                "sentence-transformers 未安装，降级为哈希向量（仅限开发/测试）",
-            )
-            self._model = None
-            self._loaded = True
+        except ImportError as e:
+            if self.allow_hash_fallback:
+                logger.warning(
+                    "sentence-transformers 未安装，降级为哈希向量（仅限开发/测试）",
+                )
+                self._model = None
+                self._loaded = True
+            else:
+                raise RuntimeError(
+                    "sentence-transformers 未安装，且已禁用哈希降级（allow_hash_fallback=false）"
+                ) from e
         except Exception as e:
-            logger.warning(
-                "Embedding 模型加载失败，降级为哈希向量",
-                extra={"model": self.model_name, "error": str(e)},
-            )
-            self._model = None
-            self._loaded = True
+            if self.allow_hash_fallback:
+                logger.warning(
+                    "Embedding 模型加载失败，降级为哈希向量",
+                    extra={"model": self.model_name, "error": str(e)},
+                )
+                self._model = None
+                self._loaded = True
+            else:
+                raise RuntimeError(
+                    f"Embedding 模型加载失败（已禁用哈希降级）: {e}"
+                ) from e
 
     def __call__(self, texts: list[str]) -> list[list[float]]:
         """将文本列表转换为向量列表。"""
@@ -107,16 +126,22 @@ class LocalEmbeddingFunction:
 _embedding_cache: dict[str, EmbeddingFunction] = {}
 
 
-def get_embedding_function(model_name: str = "BAAI/bge-small-zh-v1.5") -> EmbeddingFunction:
+def get_embedding_function(
+    model_name: str = "BAAI/bge-small-zh-v1.5",
+    allow_hash_fallback: bool = False,
+) -> EmbeddingFunction:
     """
     获取 Embedding 函数实例（单例缓存）。
 
     Args:
         model_name: 模型名称
+        allow_hash_fallback: 模型加载失败时是否降级为哈希向量（默认 False）
 
     Returns:
         EmbeddingFunction 实例
     """
     if model_name not in _embedding_cache:
-        _embedding_cache[model_name] = LocalEmbeddingFunction(model_name)
+        _embedding_cache[model_name] = LocalEmbeddingFunction(
+            model_name, allow_hash_fallback
+        )
     return _embedding_cache[model_name]
