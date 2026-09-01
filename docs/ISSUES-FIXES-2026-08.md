@@ -507,6 +507,73 @@ nginx 50MB 限制通过 → backend upload_file
 
 ---
 
+### 2.9 [ISSUE-009] 知识库/分享条目 created_at 序列化 500
+
+| 字段 | 值 |
+|------|---|
+| 优先级 | P1 |
+| 模块 | backend/app/api/routes/knowledge.py、share.py |
+| 发现场景 | 服务器端到端调试：访问知识库列表 / 搜索 / 分享条目浏览 |
+| 关联测试 | 服务器端到端验证（上传 → 列表 → 搜索 → 分享条目） |
+
+**现象**
+
+以下 3 个接口返回 500 `'str' object has no attribute 'isoformat'`：
+
+- `GET /api/v1/knowledge`（知识列表）
+- `GET /api/v1/knowledge/search?q=...`（搜索命中时）
+- `GET /api/v1/share/{id}/entries`（分享条目浏览）
+
+**根因**
+
+`KnowledgeEntry.created_at` 的类型是 **`str`**（`_now_iso()` 返回 ISO 格式字符串），但序列化代码对它调用了 `.isoformat()` —— 该方法只存在于 `datetime` 对象上。
+
+**修复**
+
+新增 `_fmt_dt()` 辅助函数，兼容 str 与 datetime 两种类型：
+
+```python
+def _fmt_dt(v):
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    return v.isoformat()
+```
+
+`knowledge.py` 的 `_entry_to_dict` 与 `share.py` 的 `list_shared_entries` 等所有 `created_at` 序列化点统一改为 `_fmt_dt(...)`。
+
+**提交**：`bebf3be`、`757d2db`（后者为条目更新显式生成向量，避免 chromadb 懒加载默认模型下载 ONNX）。
+
+---
+
+### 2.10 [ISSUE-010] ChromaDB 向量检索索引损坏（哈希降级导致）
+
+| 字段 | 值 |
+|------|---|
+| 优先级 | P0 |
+| 模块 | backend/app/core/embedding.py、config.yaml、knowledge_base.py、bootstrap.py |
+| 发现场景 | 知识搜索返回空；向量检索报 `Error finding id`；聊天 RAG / 分享问答检索同样受影响 |
+| 关联测试 | ChromaDB 层检索验证 + 服务器端到端搜索验证 |
+
+**现象**
+
+- `collection.query`（向量检索）报 `Error executing plan: Internal error: Error finding id`
+- `collection.get`（元数据查询）正常，能列出 27 条条目，但向量检索始终失败/返回空
+
+**根因**
+
+早期 embedding 模型（bge-small-zh-v1.5）加载失败时，代码静默降级为 **256 维哈希向量**；之后模型加载成功（**512 维**）。两种维度的向量混进同一个 ChromaDB collection，破坏了 HNSW 索引。
+
+**修复（两步）**
+
+1. **禁用哈希降级**：`LocalEmbeddingFunction` 新增 `allow_hash_fallback` 参数（默认 `false`），模型加载失败时抛异常而非静默降级；由 `config.yaml` 的 `l3_knowledge.allow_hash_fallback` 控制。提交 `65fc097`。
+2. **重建 collection**：读取全部 27 条数据 → 备份 → 删除集合 → 用真实 bge 模型统一重灌（512 维），重建后向量检索恢复正常。
+
+**预防**：生产环境务必保持 `allow_hash_fallback: false`；如需在开发环境无模型时启用哈希向量，需同时清空并重建 collection，避免维度混用。
+
+---
+
 ## 3. 变更文件清单
 
 ### 后端（5 个文件）
