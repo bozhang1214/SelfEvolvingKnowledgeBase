@@ -39,6 +39,16 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/share", tags=["share"])
 
+
+def _fmt_dt(v: Any) -> str:
+    """时间字段统一序列化：兼容 str 与 datetime。"""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    return v.isoformat()
+
+
 # 分享对话使用的 LLM 角色（deepseek-chat，自然闲聊）
 _CHAT_ROLE = "chat_simple"
 # 检索条目数
@@ -180,7 +190,7 @@ async def create_share(
         "share_id": share.share_id,
         "title": share.title,
         "permission": share.permission,
-        "created_at": share.created_at.isoformat() if share.created_at else "",
+        "created_at": _fmt_dt(share.created_at),
         "share_url": f"/share/{share.share_id}",
         "entries_count": total,
     }
@@ -208,7 +218,7 @@ async def list_my_shares(
             "share_id": s.share_id,
             "title": s.title,
             "permission": s.permission,
-            "created_at": s.created_at.isoformat() if s.created_at else "",
+            "created_at": _fmt_dt(s.created_at),
             "is_active": s.is_active,
             "has_expired": not s.is_valid(),
             "share_url": f"/share/{s.share_id}",
@@ -240,7 +250,7 @@ async def get_share_info(
         "owner_name": _owner_display_name(ctx, share.owner_user_id),
         "is_active": share.is_active,
         "has_expired": not share.is_valid(),
-        "created_at": share.created_at.isoformat() if share.created_at else "",
+        "created_at": _fmt_dt(share.created_at),
         "entries_count": entries_count,
         "is_owner": share.owner_user_id == user_id,
     }
@@ -316,7 +326,7 @@ async def list_shared_entries(
             "category_l1": getattr(e, "category_l1", "其他"),
             "category_l2": getattr(e, "category_l2", "待分类"),
             "category_l3": getattr(e, "category_l3", "未分类"),
-            "created_at": e.created_at.isoformat() if e.created_at else "",
+            "created_at": _fmt_dt(e.created_at),
         })
 
     return {

@@ -26,6 +26,15 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
 
 
+def _fmt_dt(v: Any) -> str:
+    """时间字段统一序列化：兼容 str（Chroma 元数据）与 datetime。"""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    return v.isoformat()
+
+
 def _entry_to_dict(e: Any, with_similarity: bool = False) -> dict[str, Any]:
     """将 KnowledgeEntry 转换为 API 响应字典（含分类字段）。"""
     item: dict[str, Any] = {
@@ -35,7 +44,7 @@ def _entry_to_dict(e: Any, with_similarity: bool = False) -> dict[str, Any]:
         "source_id": e.source_id,
         "importance_score": e.importance_score,
         "version": e.version,
-        "created_at": e.created_at.isoformat() if e.created_at else "",
+        "created_at": _fmt_dt(e.created_at),
         "user_id": e.user_id,
         "category_l1": getattr(e, "category_l1", "其他"),
         "category_l2": getattr(e, "category_l2", "待分类"),
