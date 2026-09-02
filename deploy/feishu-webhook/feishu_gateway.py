@@ -28,6 +28,41 @@ app = FastAPI(title="SEKB Feishu Webhook Gateway")
 
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
 FEISHU_SECRET = os.getenv("FEISHU_SECRET", "")
+# 操作按钮跳转地址（未配置则不显示按钮）
+GRAFANA_URL = os.getenv("GRAFANA_URL", "").rstrip("/")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "").rstrip("/")
+
+# 告警类型的「人话解释」+ 建议操作（卡片里补充直白说明）
+_ALERT_GUIDE = {
+    "LowGroundedness": {
+        "meaning": "AI 回答与真实检索内容的匹配度（锚定度）偏低，可能出现了不基于事实、编造的回答",
+        "action": "查看最近对话，确认 AI 回答是否准确；若频繁出现，检查检索/知识库是否正常",
+    },
+    "LLMDegradationHigh": {
+        "meaning": "LLM 频繁降级（从 reasoner 降到 chat），可能是 reasoner 模型异常或额度/限流",
+        "action": "检查 LLM 日志与费用，确认 reasoner 模型是否可用",
+    },
+}
+
+
+def _build_action_buttons() -> list[dict]:
+    """构建操作按钮（跳转链接，未配置 URL 则不显示）。"""
+    buttons = []
+    if GRAFANA_URL:
+        buttons.append({
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": "查看监控指标"},
+            "type": "primary",
+            "url": GRAFANA_URL,
+        })
+    if FRONTEND_URL:
+        buttons.append({
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": "查看对话记录"},
+            "type": "default",
+            "url": FRONTEND_URL,
+        })
+    return buttons
 
 
 def _gen_sign(timestamp: int, secret: str) -> str:
@@ -72,19 +107,25 @@ def _build_card(alerts: list[dict]) -> dict:
         alertname = labels.get("alertname", "unknown")
         service = labels.get("service", "unknown")
 
+        content = (
+            f"**{status_icon} {alertname}**\n"
+            f"状态: {status_text} | 级别: {severity} | 服务: {service}\n"
+            f"摘要: {annotations.get('summary', '无')}\n"
+            f"详情: {annotations.get('description', '无')}\n"
+            f"开始: {starts_at}"
+            + (f"\n恢复: {ends_at}" if status == "resolved" else "")
+        )
+        # 补充直白解释 + 建议操作
+        guide = _ALERT_GUIDE.get(alertname)
+        if guide:
+            content += (
+                f"\n\n💡 **这是什么**：{guide['meaning']}"
+                f"\n👉 **建议**：{guide['action']}"
+            )
+
         element = {
             "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": (
-                    f"**{status_icon} {alertname}**\n"
-                    f"状态: {status_text} | 级别: {severity} | 服务: {service}\n"
-                    f"摘要: {annotations.get('summary', '无')}\n"
-                    f"详情: {annotations.get('description', '无')}\n"
-                    f"开始: {starts_at}"
-                    + (f"\n恢复: {ends_at}" if status == "resolved" else "")
-                ),
-            },
+            "text": {"tag": "lark_md", "content": content},
         }
         elements.append(element)
         elements.append({"tag": "hr"})
@@ -92,6 +133,12 @@ def _build_card(alerts: list[dict]) -> dict:
     # 移除最后一个 hr
     if elements and elements[-1].get("tag") == "hr":
         elements.pop()
+
+    # 操作按钮（跳转链接，未配置则不显示）
+    buttons = _build_action_buttons()
+    if buttons:
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "action", "actions": buttons})
 
     return {
         "msg_type": "interactive",
