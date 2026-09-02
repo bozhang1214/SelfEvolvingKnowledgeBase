@@ -21,6 +21,8 @@ logger = get_logger(__name__)
 
 # 单个源最多取多少条
 _MAX_ENTRIES_PER_SOURCE = 100
+# 抓取时的 User-Agent（部分源拒绝无 UA 的请求）
+_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
 
 @dataclass
@@ -64,28 +66,37 @@ class RSSFetcher:
         return items
 
     async def _fetch_one(self, url: str) -> list[NewsItem]:
-        """抓取单个源（同步 feedparser 用线程池包装）。"""
-        def _sync() -> list[NewsItem]:
-            feed = feedparser.parse(url)
-            source = self._source_name(url)
-            out: list[NewsItem] = []
-            for entry in feed.entries[:_MAX_ENTRIES_PER_SOURCE]:
-                title = (entry.get("title") or "").strip()
-                link = (entry.get("link") or "").strip()
-                if not title:
-                    continue
-                out.append(
-                    NewsItem(
-                        title=title,
-                        link=link,
-                        source=source,
-                        summary=(entry.get("summary") or entry.get("description") or "").strip(),
-                        published=self._parse_time(entry),
-                    )
-                )
-            return out
+        """抓取单个源（httpx 带超时 + feedparser 解析内容字符串）。"""
+        import httpx
 
-        return await asyncio.to_thread(_sync)
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
+                resp = await client.get(url, headers={"User-Agent": _USER_AGENT})
+                resp.raise_for_status()
+                content = resp.text
+        except Exception as e:
+            logger.warning("RSS 源抓取失败", source=url, error=str(e))
+            return []
+
+        # 解析已抓取的字符串（本地操作，无网络）
+        feed = feedparser.parse(content)
+        source = self._source_name(url)
+        out: list[NewsItem] = []
+        for entry in feed.entries[:_MAX_ENTRIES_PER_SOURCE]:
+            title = (entry.get("title") or "").strip()
+            link = (entry.get("link") or "").strip()
+            if not title:
+                continue
+            out.append(
+                NewsItem(
+                    title=title,
+                    link=link,
+                    source=source,
+                    summary=(entry.get("summary") or entry.get("description") or "").strip(),
+                    published=self._parse_time(entry),
+                )
+            )
+        return out
 
     @staticmethod
     def _source_name(url: str) -> str:
