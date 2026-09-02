@@ -86,6 +86,10 @@ bcrypt>=4.0                        # 密码哈希
 # ============ 监控（Phase 4）============
 prometheus-client>=0.20            # Prometheus 指标暴露
 
+# ============ 资讯日报 Agent（Phase 5）============
+feedparser>=6.0                    # RSS/Atom 采集
+apscheduler>=3.10,<4.0             # 定时任务调度
+
 # ============ 开发与测试（dev 依赖，放 pyproject.toml）============
 # pytest>=8.0
 # pytest-asyncio>=0.23

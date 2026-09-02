@@ -323,6 +323,22 @@ class LoggingConfig(BaseModel):
     redact_fields: list[str] = ["api_key", "authorization", "token"]
 
 
+class NewsConfig(BaseModel):
+    """资讯日报 Agent 配置（Phase 5）"""
+    enabled: bool = False
+    rss_sources: list[str] = []          # RSS 源列表（URL）
+    keywords: list[str] = []              # 命中关键词（标题/摘要包含即保留）
+    exclude_keywords: list[str] = []      # 排除关键词（命中即丢弃）
+    max_items: int = 100                  # 单次采集最大条目数
+    report_dir: str = "data/news"         # 日报存储目录（Markdown + 索引）
+    retention_days: int = 70              # 日报保留天数
+    time_window_hours: int = 24           # 日报信息时效窗口（小时）
+    llm_role: str = "chat_simple"         # 生成日报用的 LLM 角色
+    daily_cron: str = "0 9 * * *"         # 日报：每天 09:00
+    weekly_cron: str = "0 9 * * 1"        # 周报：每周一 09:00
+    monthly_cron: str = "0 9 1 * *"       # 月报：每月 1 日 09:00
+
+
 class AppConfig(BaseModel):
     """应用全局配置（对应 config.yaml 的根结构）"""
     app: AppConfigSection
@@ -338,6 +354,7 @@ class AppConfig(BaseModel):
     security: SecurityConfig = SecurityConfig()
     api: ApiConfig = ApiConfig()
     logging: LoggingConfig = LoggingConfig()
+    news: NewsConfig = NewsConfig()
 
 
 # ============================================================

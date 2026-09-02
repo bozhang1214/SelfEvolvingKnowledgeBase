@@ -130,6 +130,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     logger.info("FastAPI 应用启动中", config_path=config_path)
     _context = await initialize_app(config_path)
+
+    # 启动资讯日报定时调度（若启用）
+    if _context.news_agent is not None:
+        from app.scheduler.scheduler import NewsScheduler
+
+        _context.news_scheduler = NewsScheduler(_context.config.news, _context.news_agent)
+        _context.news_scheduler.start()
+
     logger.info(
         "FastAPI 应用启动完成",
         app=_context.config.app.name,
@@ -143,6 +151,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         logger.info("FastAPI 应用关闭中")
         if _context is not None:
+            if _context.news_scheduler is not None:
+                _context.news_scheduler.shutdown()
             await shutdown_app(_context)
         _context = None
         logger.info("FastAPI 应用已关闭")
@@ -236,6 +246,7 @@ def create_app() -> FastAPI:
     from app.api.routes.knowledge import router as knowledge_router
     from app.api.routes.metrics import router as metrics_router
     from app.api.routes.monitoring import router as monitoring_router
+    from app.api.routes.news import router as news_router
     from app.api.routes.share import router as share_router
     from app.api.routes.upload import router as upload_router
 
@@ -246,12 +257,13 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_router)
     app.include_router(metrics_router)
     app.include_router(monitoring_router)
+    app.include_router(news_router)
     app.include_router(share_router)
     app.include_router(upload_router)
 
     logger.info(
         "FastAPI 路由注册完成",
-        routers=["auth", "chat", "conversations", "health", "knowledge", "metrics", "monitoring", "share", "upload"],
+        routers=["auth", "chat", "conversations", "health", "knowledge", "metrics", "monitoring", "news", "share", "upload"],
         cors_origins=config.api.cors_origins or ["*"],
     )
 

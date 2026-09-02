@@ -279,3 +279,27 @@ logging:
     - api_key                           # API 密钥
     - authorization                     # 鉴权头
     - token                             # Token
+
+# ============ 资讯日报 Agent ============
+news:
+  enabled: false                        # 是否启用（默认关闭，Phase 5 开发中）
+  llm_role: chat_simple                 # 生成日报用的 LLM 角色
+  time_window_hours: 24                 # 日报信息时效窗口：过去 24 小时
+  max_items: 100                        # 单次采集最大条目数
+  report_dir: data/news                 # 日报存储目录
+  retention_days: 70                    # 保留 70 天
+  daily_cron: "0 9 * * *"               # 日报：每天 09:00
+  weekly_cron: "0 9 * * 1"              # 周报：每周一 09:00
+  monthly_cron: "0 9 1 * *"             # 月报：每月 1 日 09:00
+  # RSS 源（后续补齐 15 个中英文源，此处先放示例占位）
+  rss_sources: []
+  # 命中关键词（标题/摘要包含即保留；空列表=不过滤）
+  keywords:
+    - AI
+    - Agent
+    - 大模型
+    - LLM
+    - RAG
+    - 多模态
+  # 排除关键词（命中即丢弃）
+  exclude_keywords: []
