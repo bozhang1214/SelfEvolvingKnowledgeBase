@@ -291,8 +291,25 @@ news:
   daily_cron: "0 9 * * *"               # 日报：每天 09:00
   weekly_cron: "0 9 * * 1"              # 周报：每周一 09:00
   monthly_cron: "0 9 1 * *"             # 月报：每月 1 日 09:00
-  # RSS 源（后续补齐 15 个中英文源，此处先放示例占位）
-  rss_sources: []
+  # RSS 源（已实测可用的 15 个中英文源，服务器上逐一 curl 验证 HTTP 200 + XML）
+  rss_sources:
+    # ---- 中文（5）----
+    - https://www.qbitai.com/feed                    # 量子位（AI 媒体）
+    - https://www.infoq.cn/feed                      # InfoQ 中文（技术媒体）
+    - https://www.leiphone.com/feed                  # 雷锋网（科技媒体）
+    - https://www.zhidx.com/rss                      # 智东西（AI/智能产业）
+    - https://sspai.com/feed                         # 少数派（效率/工具）
+    # ---- 英文（10）----
+    - https://simonwillison.net/atom/everything/     # Simon Willison（LLM 工程，顶级）
+    - https://openai.com/news/rss.xml                # OpenAI News
+    - https://blog.google/technology/ai/rss/         # Google AI Blog
+    - https://deepmind.google/blog/rss.xml           # Google DeepMind
+    - https://arxiv.org/rss/cs.AI                    # arXiv AI 论文
+    - https://www.theverge.com/rss/index.xml         # The Verge（科技）
+    - https://venturebeat.com/category/ai/feed/      # VentureBeat AI
+    - https://www.technologyreview.com/feed/         # MIT Technology Review
+    - https://github.blog/feed/                      # GitHub Blog（含 AI 工程）
+    - https://raw.githubusercontent.com/0xSMW/rss-feeds/main/feeds/feed_anthropic_news.xml  # Anthropic News（GitHub 代理，无原生 RSS）
   # 命中关键词（标题/摘要包含即保留；空列表=不过滤）
   keywords:
     - AI
@@ -301,5 +318,8 @@ news:
     - LLM
     - RAG
     - 多模态
+    - 智能体
+    - OpenAI
+    - DeepSeek
   # 排除关键词（命中即丢弃）
   exclude_keywords: []
