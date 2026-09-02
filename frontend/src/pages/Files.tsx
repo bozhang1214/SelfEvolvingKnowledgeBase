@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Upload, Button, Typography, message, Progress, Space, Tag, Alert, Card, Statistic, Row, Col } from 'antd';
-import { InboxOutlined, FileOutlined, FileImageOutlined, ReloadOutlined, FolderOpenOutlined, StopOutlined } from '@ant-design/icons';
+import { InboxOutlined, FileOutlined, FileImageOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import {
   uploadFilePromise,
   getKnowledgeStatus,
@@ -327,21 +327,26 @@ const Files: React.FC = () => {
         <Dragger
           accept={SUPPORTED_EXTENSIONS.join(',')}
           multiple
-          directory
-          beforeUpload={handleBatchUpload as any}
+          beforeUpload={(file, fileList) => {
+            // antd 会对每个文件调用一次 beforeUpload；
+            // 仅在最后一个文件时触发一次批量上传（此时 fileList 已完整）
+            if (file.uid === fileList[fileList.length - 1].uid) {
+              void handleBatchUpload(fileList);
+            }
+            return false; // 阻止 antd 默认上传（改由 handleBatchUpload 手动控制）
+          }}
           showUploadList={false}
           disabled={uploading || (knowledgeStatus?.l3_enabled === false)}
         >
           <p className="ant-upload-drag-icon">
             <InboxOutlined />
           </p>
-          <p className="ant-upload-text">点击或拖拽文件/文件夹到此区域上传</p>
+          <p className="ant-upload-text">点击选择文件，或拖拽到此区域上传</p>
           <p className="ant-upload-hint">
-            支持批量上传和文件夹递归上传：PDF、Word、TXT、Markdown、图片(JPG/PNG/WebP 等)
+            支持多选文件（按住 Cmd/Ctrl 可多选）：PDF、Word、TXT、Markdown、图片(JPG/PNG/WebP 等)
             <br />
             <span style={{ color: '#999', fontSize: 12 }}>
-              <FolderOpenOutlined /> 可直接拖入整个文件夹，系统会自动递归读取所有支持的文件
-              ，单文件不超过 50MB
+              单文件不超过 50MB，选择后会自动逐个上传并显示进度
             </span>
           </p>
         </Dragger>
