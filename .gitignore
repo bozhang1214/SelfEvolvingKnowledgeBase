@@ -72,3 +72,6 @@ logs/
 
 # TypeScript 增量构建缓存
 *.tsbuildinfo
+
+# ============ 个人资料（不进版本库）============
+resume/
