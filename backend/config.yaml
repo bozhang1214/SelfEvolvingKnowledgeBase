@@ -282,7 +282,7 @@ logging:
 
 # ============ 资讯日报 Agent ============
 news:
-  enabled: false                        # 是否启用（默认关闭，Phase 5 开发中）
+  enabled: true                         # 是否启用（Phase 5 已部署，开启）
   llm_role: chat_simple                 # 生成日报用的 LLM 角色
   time_window_hours: 24                 # 日报信息时效窗口：过去 24 小时
   max_items: 100                        # 单次采集最大条目数

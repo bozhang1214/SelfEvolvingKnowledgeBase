@@ -103,6 +103,8 @@ RUN pip install --no-cache-dir packaging
 COPY app/ ./app/
 COPY config.yaml ./
 COPY pyproject.toml ./
+# 提示词模板（资讯日报/职位分析 Agent 运行时加载）
+COPY prompt/ ./prompt/
 
 # 创建非 root 用户并准备数据目录
 # - appuser: UID 1000，避免以 root 运行容器

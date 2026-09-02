@@ -28,10 +28,18 @@ def _resolve_prompt_path(explicit: str | None = None) -> Path | None:
     if explicit:
         p = Path(explicit)
         return p if p.exists() else None
-    # 本文件位于 backend/app/agents/news/，向上 4 级即仓库根
-    root = Path(__file__).resolve().parents[4]
-    p = root / "prompt" / "news" / "daily_report.md"
-    return p if p.exists() else None
+    # 候选目录：本地开发（仓库根）/ Docker 容器（/app）/ 当前工作目录
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[4] / "prompt",  # 本地：backend/app/agents/news/ → 仓库根
+        here.parents[3] / "prompt",  # 容器：/app/app/agents/news/ → /app
+        Path.cwd() / "prompt",
+    ]
+    for d in candidates:
+        p = d / "news" / "daily_report.md"
+        if p.exists():
+            return p
+    return None
 
 
 class DailyReportGenerator:
