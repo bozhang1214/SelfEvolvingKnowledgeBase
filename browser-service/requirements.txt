@@ -1,0 +1,4 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+pydantic>=2.10.0
+# playwright 由基础镜像 mcr.microsoft.com/playwright/python 提供

@@ -151,6 +151,34 @@ services:
           memory: 512M
           cpus: "0.5"
 
+  # ============ 通用浏览器登录/采集服务（Playwright + Chromium）============
+  # 提供多站点 Cookie 存储 + 扫码登录 + 可插拔采集器（BOSS 直聘为首个站点）。
+  # 仅 backend 内部访问，不对外暴露。
+  browser:
+    build:
+      context: ./browser-service
+      dockerfile: Dockerfile
+    image: sekb-browser:${TAG:-latest}
+    container_name: sekb-browser
+    restart: unless-stopped
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - sekb_browser_data:/data
+    networks:
+      - sekb_net
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:1300/health',timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
   # ============ 可选：PostgreSQL（Phase 2 存储迁移后启用）============
   # 当前后端使用 local_json 存储，PostgreSQL 仅在迁移到 PG 后端时需要。
   # 通过 profile 控制：默认不启动，避免占用资源。
@@ -216,3 +244,6 @@ volumes:
   # Redis 数据（profile=with-db 时使用）
   redis_data:
     name: sekb_redis_data
+  # 浏览器服务 Cookie/登录态数据
+  sekb_browser_data:
+    name: sekb_browser_data

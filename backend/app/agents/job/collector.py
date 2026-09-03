@@ -19,10 +19,53 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import httpx
+
 from app.agents.job.fetcher import LiepinJobFetcher, filter_jobs
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class BossBrowserSource:
+    """BOSS 直聘采集源：调用通用浏览器服务（sekb-browser）。
+
+    需要先在浏览器服务里导入 BOSS Cookie 或完成扫码登录；未登录时采集返回空列表。
+    """
+
+    name = "BOSS直聘"
+
+    def __init__(self, base_url: str = "http://browser:1300") -> None:
+        self._base_url = base_url
+
+    async def fetch(
+        self, keyword: str, page: int = 0, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        if not keyword or not keyword.strip():
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    f"{self._base_url}/scrape",
+                    json={
+                        "site": "boss",
+                        "keyword": keyword.strip(),
+                        "city": "北京",
+                        "page": page,
+                        "limit": limit,
+                    },
+                )
+                if resp.status_code != 200:
+                    logger.warning("BOSS 浏览器服务返回非 200", status=resp.status_code)
+                    return []
+                jobs = resp.json().get("jobs") or []
+                for j in jobs:
+                    j.setdefault("source", self.name)
+                return jobs
+        except Exception as e:  # noqa: BLE001
+            # 浏览器服务不可达或未启动时静默降级
+            logger.warning("BOSS 浏览器服务调用失败", error=str(e)[:150])
+            return []
 
 
 def _load_sources() -> list[Any]:
@@ -48,6 +91,7 @@ def _load_sources() -> list[Any]:
             XiaohongshuSource(),
             MokahrSource(org_slug="dji", site_id=170070, name="大疆"),
             MokahrSource(org_slug="high-flyer", site_id=140576, name="DeepSeek"),
+            BossBrowserSource(),  # 需先导入 BOSS Cookie/扫码登录，未登录时返回空
         ]
     except ImportError as e:  # noqa: BLE001
         logger.warning("多源采集模块未就绪，仅使用猎聘", error=str(e))
