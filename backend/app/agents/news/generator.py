@@ -32,6 +32,11 @@ _COMPREHENSIVE_FALLBACK_PROMPT = """你是资深技术资讯主编，请对当�
 输出严格 JSON：{"correlation":"300~500字跨大类关联分析","forecast":"300~500字未来半月重大事件预测（3~6条）"}。
 只基于输入，不编造，预测用不确定措辞。"""
 
+# 周报/月报兜底提示词
+_PERIODIC_FALLBACK_PROMPT = """你是 AI 行业趋势分析师，请把一段时间内的日报/补充资讯汇总成周期报告。
+输出严格 JSON：{"period":"...","type":"weekly 或 monthly","themes":[{"title","summary","implication","watch_next"}],"timeline":[{"date","event","comment"}],"outlook":["..."]}。
+只基于输入，不编造。"""
+
 
 def _resolve_prompt_path(
     explicit: str | None = None, filename: str = "daily_report.md"
@@ -81,6 +86,14 @@ class DailyReportGenerator:
         else:
             self._comprehensive_prompt = _COMPREHENSIVE_FALLBACK_PROMPT
             logger.warning("综合分析提示词文件未找到，使用内置兜底提示词")
+
+        periodic_path = _resolve_prompt_path(None, "weekly_report.md")
+        if periodic_path:
+            self._periodic_prompt = periodic_path.read_text(encoding="utf-8")
+            logger.info("已加载周期报告提示词", path=str(periodic_path))
+        else:
+            self._periodic_prompt = _PERIODIC_FALLBACK_PROMPT
+            logger.warning("周期报告提示词文件未找到，使用内置兜底提示词")
 
     async def generate(
         self,
@@ -307,6 +320,41 @@ class DailyReportGenerator:
             }
         except Exception as e:  # noqa: BLE001
             logger.error("综合分析生成失败", error=str(e)[:200])
+            return {}
+
+    # ---------- 周报/月报 ----------
+
+    async def generate_periodic(
+        self,
+        report_type: str,
+        period: str,
+        daily_reports: list[dict],
+        supplement: list[dict] | None,
+        role: str,
+    ) -> dict:
+        """把周期内的日报 + 补充资讯汇总成周报/月报。"""
+        payload = {
+            "type": report_type,
+            "period": period,
+            "daily_reports": daily_reports,
+            "supplement_items": supplement or [],
+        }
+        prompt = self._periodic_prompt.replace(
+            "{{daily_reports}}", json.dumps(daily_reports, ensure_ascii=False)
+        ).replace("{{supplement_items}}", json.dumps(supplement or [], ensure_ascii=False))
+        messages = [
+            SystemMessage(content=prompt),
+            HumanMessage(
+                content=f"请汇总生成 {report_type} 周期报告（周期：{period}）。\n{json.dumps(payload, ensure_ascii=False)}"
+            ),
+        ]
+        try:
+            llm = self._llm_factory.get(role)
+            resp = await llm.ainvoke(messages)
+            raw = resp.content if hasattr(resp, "content") else str(resp)
+            return self._parse_json(raw)
+        except Exception as e:  # noqa: BLE001
+            logger.error("周期报告生成失败", type=report_type, period=period, error=str(e)[:200])
             return {}
 
     # ---------- 解析 ----------

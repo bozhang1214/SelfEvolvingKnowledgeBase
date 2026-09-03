@@ -30,6 +30,9 @@ class NewsStorage:
         """保存某天的日报，返回 Markdown 文件路径。"""
         md_path = self._dir / f"daily_{day}.md"
         md_path.write_text(self._to_markdown(day, report), encoding="utf-8")
+        # 额外落一份结构化 JSON，供周报/月报聚合使用
+        json_path = self._dir / f"daily_{day}.json"
+        json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
         self._update_index(day, report, md_path)
         self._cleanup()
@@ -48,6 +51,45 @@ class NewsStorage:
                 item["markdown"] = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
                 return item
         return None
+
+    def read_daily_structured(self, day: str) -> dict | None:
+        """读取某天日报的结构化 JSON（供周报/月报聚合），无则返回 None。"""
+        json_path = self._dir / f"daily_{day}.json"
+        if not json_path.exists():
+            return None
+        try:
+            return json.loads(json_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    # ---------- 周期报告（周报/月报） ----------
+
+    def save_periodic(self, report_type: str, period: str, report: dict) -> str:
+        """保存周报/月报，返回 Markdown 文件路径。"""
+        md_path = self._dir / f"{report_type}_{period}.md"
+        md_path.write_text(
+            self._to_periodic_markdown(report_type, period, report), encoding="utf-8"
+        )
+        return str(md_path)
+
+    def list_periodic(self, report_type: str) -> list[dict]:
+        """列出某类周期报告（按 period 倒序）。"""
+        out = []
+        for f in self._dir.glob(f"{report_type}_*.md"):
+            period = f.stem.replace(f"{report_type}_", "")
+            out.append({"type": report_type, "period": period, "path": str(f)})
+        return sorted(out, key=lambda x: x.get("period", ""), reverse=True)
+
+    def read_periodic(self, report_type: str, period: str) -> dict | None:
+        """读取某期周报/月报。"""
+        md_path = self._dir / f"{report_type}_{period}.md"
+        if not md_path.exists():
+            return None
+        return {
+            "type": report_type,
+            "period": period,
+            "markdown": md_path.read_text(encoding="utf-8"),
+        }
 
     # ---------- 内部 ----------
 
@@ -160,4 +202,44 @@ class NewsStorage:
             if comp.get("forecast"):
                 lines.append(f"> **🔮 未来半月预测**：{comp.get('forecast')}")
                 lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _to_periodic_markdown(report_type: str, period: str, report: dict) -> str:
+        """把周报/月报 JSON 渲染为 Markdown。"""
+        label = "周报" if report_type == "weekly" else "月报"
+        lines = [f"# AI 资讯{label} · {period}", ""]
+
+        themes = report.get("themes") or []
+        if themes:
+            lines.append("## 主线梳理")
+            lines.append("")
+            for t in themes:
+                lines.append(f"### {t.get('title', '')}")
+                if t.get("summary"):
+                    lines.append(f"- 发生了什么：{t.get('summary')}")
+                if t.get("implication"):
+                    lines.append(f"- 意味着什么：{t.get('implication')}")
+                if t.get("watch_next"):
+                    lines.append(f"- 下一步关注：{t.get('watch_next')}")
+                lines.append("")
+
+        timeline = report.get("timeline") or []
+        if timeline:
+            lines.append("## 重大事件回顾")
+            lines.append("")
+            for ev in timeline:
+                date = ev.get("date", "")
+                event = ev.get("event", "")
+                comment = ev.get("comment", "")
+                lines.append(f"- **{date}** {event}" + (f" —— {comment}" if comment else ""))
+            lines.append("")
+
+        outlook = report.get("outlook") or []
+        if outlook:
+            lines.append("## 下周 / 下月展望")
+            lines.append("")
+            for i, o in enumerate(outlook, 1):
+                lines.append(f"{i}. {o}")
+            lines.append("")
         return "\n".join(lines)

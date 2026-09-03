@@ -38,6 +38,20 @@ class NewsScheduler:
             name="资讯日报（每日）",
             replace_existing=True,
         )
+        self._scheduler.add_job(
+            lambda: self._agent.generate_periodic("weekly"),
+            CronTrigger.from_crontab(self._config.weekly_cron),
+            id="news_weekly",
+            name="资讯周报（每周一）",
+            replace_existing=True,
+        )
+        self._scheduler.add_job(
+            lambda: self._agent.generate_periodic("monthly"),
+            CronTrigger.from_crontab(self._config.monthly_cron),
+            id="news_monthly",
+            name="资讯月报（每月 1 日）",
+            replace_existing=True,
+        )
         self._scheduler.start()
         logger.info(
             "资讯日报调度已启动",

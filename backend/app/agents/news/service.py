@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.agents.news.content_extractor import fetch_article_text
@@ -62,8 +62,6 @@ class NewsAgent:
         )
         # 5. 存储
         path = self._storage.save_daily(day, report)
-        # 4. 存储
-        path = self._storage.save_daily(day, report)
 
         logger.info(
             "日报刷新完成",
@@ -87,6 +85,106 @@ class NewsAgent:
     def read_report(self, day: str) -> dict | None:
         """读取指定日期的日报。"""
         return self._storage.read_report(day)
+
+    def list_periodic(self, report_type: str) -> list[dict]:
+        """列出周报/月报。"""
+        return self._storage.list_periodic(report_type)
+
+    def read_periodic(self, report_type: str, period: str) -> dict | None:
+        """读取某期周报/月报。"""
+        return self._storage.read_periodic(report_type, period)
+
+    async def generate_periodic(
+        self,
+        report_type: str,
+        period: str | None = None,
+        supplement: list[dict] | None = None,
+    ) -> dict:
+        """生成周报/月报。period 缺省按「上一周期」计算。"""
+        if report_type not in ("weekly", "monthly"):
+            raise ValueError(f"未知报告类型: {report_type}")
+
+        today = datetime.now(timezone.utc).date()
+        start, end = self._period_range(report_type, period, today)
+        period = self._period_label(report_type, start)
+
+        # 1. 收集该周期内的日报（结构化 JSON，供聚合）
+        daily_reports: list[dict] = []
+        for rep in self._storage.list_reports():
+            d_str = rep.get("date", "")
+            try:
+                d = date.fromisoformat(d_str)
+            except ValueError:
+                continue
+            if start <= d <= end:
+                structured = self._storage.read_daily_structured(d_str)
+                if structured:
+                    daily_reports.append(self._condense_daily(d_str, structured))
+
+        # 2. 生成 + 存储
+        report = await self._generator.generate_periodic(
+            report_type, period, daily_reports, supplement, self._config.llm_role
+        )
+        path = self._storage.save_periodic(report_type, period, report)
+        logger.info(
+            "周期报告生成完成",
+            type=report_type, period=period,
+            daily_count=len(daily_reports), supplement=len(supplement or []),
+        )
+        return {
+            "type": report_type,
+            "period": period,
+            "path": path,
+            "report": report,
+            "daily_count": len(daily_reports),
+        }
+
+    @staticmethod
+    def _period_range(report_type: str, period: str | None, today: date) -> tuple[date, date]:
+        """计算周期起止日期。"""
+        if report_type == "weekly":
+            this_monday = today - timedelta(days=today.weekday())
+            if period:
+                start = date.fromisoformat(period)
+                return start, start + timedelta(days=6)
+            # 缺省 = 上周
+            start = this_monday - timedelta(days=7)
+            return start, start + timedelta(days=6)
+        # monthly
+        if period:
+            y, m = (int(x) for x in period.split("-"))
+            start = date(y, m, 1)
+            if m == 12:
+                end = date(y + 1, 1, 1) - timedelta(days=1)
+            else:
+                end = date(y, m + 1, 1) - timedelta(days=1)
+            return start, end
+        # 缺省 = 上个月
+        first_this_month = today.replace(day=1)
+        last_month = first_this_month - timedelta(days=1)
+        return last_month.replace(day=1), last_month
+
+    @staticmethod
+    def _period_label(report_type: str, start: date) -> str:
+        if report_type == "weekly":
+            return start.isoformat()  # 周一日期
+        return start.strftime("%Y-%m")
+
+    @staticmethod
+    def _condense_daily(day: str, report: dict) -> dict:
+        """把日报压缩成周报/月报聚合所需的精简结构（头条 + 各分类总结 + 综合分析）。"""
+        return {
+            "date": day,
+            "headline": {
+                "title": (report.get("headline") or {}).get("title", ""),
+                "analysis": (report.get("headline") or {}).get("analysis", ""),
+            },
+            "sections": [
+                {"category": s.get("category", ""), "summary": s.get("summary", "")}
+                for s in report.get("sections", [])
+            ],
+            "comprehensive": report.get("comprehensive") or {},
+        }
 
     @staticmethod
     def _item_to_dict(item: Any) -> dict:
