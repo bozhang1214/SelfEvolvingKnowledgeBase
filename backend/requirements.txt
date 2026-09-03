@@ -91,6 +91,9 @@ feedparser>=6.0                    # RSS/Atom 采集
 apscheduler>=3.10,<4.0             # 定时任务调度
 trafilatura>=1.8.0                 # 文章正文抽取（日报原文摘要，失败时降级用 RSS 摘要）
 
+# ============ 招聘分析 Agent（Phase 2）============
+cryptography>=42.0                 # mokahr 系（大疆/DeepSeek）职位接口 AES-128-CBC 解密
+
 # ============ 开发与测试（dev 依赖，放 pyproject.toml）============
 # pytest>=8.0
 # pytest-asyncio>=0.23

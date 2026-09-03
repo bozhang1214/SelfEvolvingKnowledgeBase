@@ -25,6 +25,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import html
+import json
+import re
 import time
 import uuid
 from typing import Any
@@ -419,3 +423,140 @@ SOURCES: dict[str, type[_BaseSource]] = {
         XiaohongshuSource,
     )
 }
+
+
+# ============================================================
+# mokahr 系（大疆 / DeepSeek）：AES-128-CBC 密文解密
+# ============================================================
+
+def _parse_mokahr_init(html_text: str) -> dict[str, Any]:
+    """从 mokahr 门户页 SSR HTML 里解析 init-data（含 aesIv）。"""
+    m = re.search(r'id="init-data"\s+value="([^"]*)"', html_text)
+    if not m:
+        iv = re.search(r"aesIv&quot;:&quot;([0-9a-f]+)&quot;", html_text)
+        return {"aesIv": iv.group(1)} if iv else {}
+    try:
+        return json.loads(html.unescape(m.group(1)))
+    except Exception:
+        return {}
+
+
+def _decrypt_mokahr(envelope: dict[str, Any], aes_iv: str) -> dict[str, Any] | None:
+    """AES-128-CBC + PKCS7：key=necromancer(utf8)，iv=aesIv(utf8)，密文=base64(data)。"""
+    data_b64 = envelope.get("data")
+    necromancer = envelope.get("necromancer")
+    if not data_b64 or not necromancer or not aes_iv:
+        return None
+    try:
+        from cryptography.hazmat.primitives import padding
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+        key = necromancer.encode("utf-8")
+        iv = aes_iv.encode("utf-8")
+        ct = base64.b64decode(data_b64)
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+        dec = cipher.decryptor()
+        padded = dec.update(ct) + dec.finalize()
+        unpadder = padding.PKCS7(128).unpadder()
+        plain = unpadder.update(padded) + unpadder.finalize()
+        return json.loads(plain.decode("utf-8"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("mokahr 解密失败", error=str(e)[:150])
+        return None
+
+
+def _html_to_text(s: str) -> str:
+    """把 HTML 富文本 JD 粗略转纯文本。"""
+    return re.sub(
+        r"\s+", " ",
+        re.sub(r"<[^>]+>", " ", (s or "").replace("<br>", "\n").replace("</p>", "\n")),
+    ).strip()
+
+
+class MokahrSource(_BaseSource):
+    """mokahr 系（大疆/DeepSeek）社招采集源：密文响应 AES 解密。"""
+
+    def __init__(self, org_slug: str, site_id: int, name: str, timeout: int = 20) -> None:
+        super().__init__(timeout)
+        self.name = name
+        self._org_slug = org_slug
+        self._site_id = str(site_id)
+        self._portal = f"https://app.mokahr.com/social-recruitment/{org_slug}/{site_id}"
+        self._api = "https://app.mokahr.com/api/outer/ats-apply/website/jobs/v2"
+
+    def _fetch_sync(self, keyword: str, page: int, limit: int) -> list[dict[str, Any]]:
+        session = requests.Session()
+        # 1. GET 门户页：拿 Cookie + SSR init-data 里的 aesIv
+        try:
+            r = session.get(
+                self._portal, headers={"User-Agent": _UA}, timeout=self._timeout
+            )
+            r.raise_for_status()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("mokahr 门户页抓取失败", source=self.name, error=str(e)[:150])
+            return []
+        aes_iv = _parse_mokahr_init(r.text).get("aesIv")
+        if not aes_iv:
+            logger.warning("mokahr 门户页缺少 aesIv", source=self.name)
+            return []
+
+        # 2. POST jobs/v2（密文信封）
+        lim = max(1, min(50, limit))
+        body = {
+            "orgId": self._org_slug,
+            "siteId": self._site_id,
+            "limit": lim,
+            "offset": max(0, page) * lim,
+            "needStat": True,
+            "locale": "zh-CN",
+        }
+        if keyword:
+            body["keyword"] = keyword
+        try:
+            r2 = session.post(
+                f"{self._api}?orgId={self._org_slug}",
+                headers={
+                    "User-Agent": _UA,
+                    "Accept": "application/json,*/*",
+                    "Content-Type": "application/json",
+                    "Origin": "https://app.mokahr.com",
+                    "Referer": self._portal,
+                },
+                json=body,
+                timeout=self._timeout,
+            )
+            r2.raise_for_status()
+            envelope = r2.json()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("mokahr 接口调用失败", source=self.name, error=str(e)[:150])
+            return []
+
+        plain = _decrypt_mokahr(envelope, aes_iv)
+        if not plain or plain.get("code") != 0:
+            logger.warning(
+                "mokahr 解密或接口异常",
+                source=self.name,
+                code=(plain or {}).get("code"),
+            )
+            return []
+        jobs = (plain.get("data") or {}).get("jobs") or []
+        return [self._normalize(j) for j in jobs if isinstance(j, dict)]
+
+    def _normalize(self, j: dict[str, Any]) -> dict[str, Any]:
+        jid = str(j.get("id") or "")
+        cities = " / ".join(
+            dict.fromkeys(
+                (loc.get("provinceName") or loc.get("cityName") or "")
+                for loc in (j.get("locations") or [])
+                if isinstance(loc, dict)
+            )
+        )
+        return {
+            "job_id": jid,
+            "title": j.get("title") or "",
+            "company": self.name,
+            "salary": "",  # mokahr 列表接口不返回数字薪资
+            "city": cities,
+            "job_url": f"{self._portal}#/job/{jid}" if jid else "",
+            "jd_text": _html_to_text(j.get("jobDescription") or ""),
+        }

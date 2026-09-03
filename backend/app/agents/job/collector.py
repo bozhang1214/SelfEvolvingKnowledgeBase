@@ -33,6 +33,7 @@ def _load_sources() -> list[Any]:
             AlibabaSource,
             BaiduSource,
             BytedanceSource,
+            MokahrSource,
             TencentSource,
             XiaohongshuSource,
             XiaomiSource,
@@ -45,6 +46,8 @@ def _load_sources() -> list[Any]:
             XiaomiSource(),
             AlibabaSource(),
             XiaohongshuSource(),
+            MokahrSource(org_slug="dji", site_id=170070, name="大疆"),
+            MokahrSource(org_slug="high-flyer", site_id=140576, name="DeepSeek"),
         ]
     except ImportError as e:  # noqa: BLE001
         logger.warning("多源采集模块未就绪，仅使用猎聘", error=str(e))
