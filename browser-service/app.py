@@ -73,10 +73,9 @@ class LoginReq(BaseModel):
     site: str = Field(..., description="站点标识，如 boss")
 
 
-class CompleteLoginReq(BaseModel):
-    site: str = Field(..., description="站点标识")
+class StatusLoginReq(BaseModel):
+    site: str = Field(..., description="站点标识，如 boss")
     qr_id: str = Field(..., description="start 返回的 qr_id")
-    timeout_seconds: int = Field(180, ge=10, le=600, description="等待扫码确认的秒数")
 
 
 class ScrapeReq(BaseModel):
@@ -109,10 +108,43 @@ async def list_cookies() -> dict[str, Any]:
     }
 
 
-# ---------------- 扫码登录（BOSS，纯 HTTP） ----------------
+# ---------------- 扫码登录（BOSS，纯 HTTP，APP 扫码流程） ----------------
 
-# 进行中的扫码会话：qr_id -> APIRequestContext（持有登录 Cookie）
-_QR_SESSIONS: dict[str, Any] = {}
+# 进行中的扫码会话：qr_id -> 会话状态（含持有登录 Cookie 的 APIRequestContext）
+_QR_SESSIONS: dict[str, dict[str, Any]] = {}
+
+# BOSS「APP扫码登录」真实流程（逆向自 user-login chunk 的 BossAppScan 类）：
+#  1. randkey -> qrId（二维码内容就是这个 qrId 字符串，前端/后端用 qrId 渲染标准二维码）
+#  2. 用户用 BOSS App 扫第一张码
+#  3. scan?uuid=qrId       长轮询 -> {scaned:true}
+#  4. getSecondKey?uuid=qrId -> {qrId: secondUuid}（换第二张码）
+#  5. 用户再扫第二张码
+#  6. scanSecond?uuid=secondUuid 长轮询 -> {scaned:true}
+#  7. scanLogin?qrId=qrId   -> {login:true} 表示在 App 上点了「确认登录」
+#  8. dispatcher?qrId=qrId  -> {code:0}，并在响应里 Set-Cookie
+# 注意：不能用 getMpCode/scanByMp（那是微信小程序码，BOSS App 扫不了）。
+_QR_TTL = 30  # 第一张二维码有效期（秒），与前端 expireTime 一致
+
+
+def _make_qr_png_data_url(content: str) -> str:
+    """把字符串渲染成标准二维码 PNG，返回 data URL（BOSS App 可直接扫）。"""
+    import base64
+    import io
+
+    import qrcode
+
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=2,
+    )
+    qr.add_data(content)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
 async def _boss_qr_start(pw) -> dict[str, Any]:
@@ -126,47 +158,74 @@ async def _boss_qr_start(pw) -> dict[str, Any]:
     d1 = await r1.json()
     zp = d1.get("zpData") or {}
     qr_id = zp.get("qrId")
-    sk = zp.get("shortRandKey")
-    if not qr_id or not sk:
+    if not qr_id:
         await ctx.dispose()
         raise HTTPException(500, f"randkey 返回异常: {await r1.text()}")
-    r2 = await ctx.get("/wapi/zppassport/qrcode/getMpCode", params={"uuid": sk, "width": 300})
-    d2 = await r2.json()
-    mp_url = (d2.get("zpData") or {}).get("mpCodeUrl")
-    if not mp_url:
-        await ctx.dispose()
-        raise HTTPException(500, f"getMpCode 返回异常: {await r2.text()}")
-    _QR_SESSIONS[qr_id] = ctx
-    return {"qr_id": qr_id, "qr_image_url": mp_url}
+    _QR_SESSIONS[qr_id] = {
+        "ctx": ctx,
+        "qr_id": qr_id,
+        "second_uuid": "",
+        "phase": "waiting_scan",
+        "created": time.time(),
+    }
+    return {
+        "qr_id": qr_id,
+        "qr_image_url": _make_qr_png_data_url(qr_id),
+        "phase": "waiting_scan",
+    }
 
 
-async def _boss_qr_complete(pw, qr_id: str, timeout_seconds: int) -> dict[str, Any]:
-    ctx = _QR_SESSIONS.get(qr_id)
-    if ctx is None:
-        raise HTTPException(404, "二维码会话不存在或已过期，请重新 start")
-    deadline = time.time() + timeout_seconds
-    scanned = False
-    while time.time() < deadline:
+async def _boss_qr_status(pw, qr_id: str) -> dict[str, Any]:
+    """推进扫码状态机一步（非阻塞轮询，2.5s 内返回）。"""
+    sess = _QR_SESSIONS.get(qr_id)
+    if sess is None:
+        raise HTTPException(404, "二维码会话不存在或已过期，请重新获取")
+    ctx = sess["ctx"]
+    phase = sess["phase"]
+
+    if phase == "waiting_scan":
+        if time.time() - sess["created"] > _QR_TTL:
+            return {"phase": "expired"}
         try:
-            r = await ctx.get("/wapi/zppassport/qrcode/scanByMp", params={"uuid": qr_id})
+            r = await ctx.get(
+                "/wapi/zppassport/qrcode/scan", params={"uuid": qr_id}, timeout=2500
+            )
             d = await r.json()
-            if d.get("scaned"):
-                scanned = True
-                break
-        except Exception:  # noqa: BLE001
-            pass
-        await asyncio.sleep(2)
-    if not scanned:
-        await ctx.dispose()
-        _QR_SESSIONS.pop(qr_id, None)
-        return {"ok": False, "reason": "等待扫码超时"}
+        except Exception:  # noqa: BLE001  超时=尚未扫码
+            return {"phase": "waiting_scan"}
+        if not d.get("scaned"):
+            return {"phase": "waiting_scan"}
+        r2 = await ctx.get("/wapi/zppassport/captcha/getSecondKey", params={"uuid": qr_id})
+        d2 = await r2.json()
+        second = ((d2.get("zpData") or {}).get("qrId")) or ""
+        if not second:
+            return {"phase": "waiting_scan"}
+        sess["second_uuid"] = second
+        sess["phase"] = "waiting_second_scan"
+        return {"phase": "waiting_second_scan", "qr_image_url": _make_qr_png_data_url(second)}
 
-    # 已扫码：轮询确认登录
-    while time.time() < deadline:
+    if phase == "waiting_second_scan":
         try:
-            r2 = await ctx.get("/wapi/zppassport/qrcode/loginConfirm", params={"uuid": qr_id})
-            d2 = await r2.json()
-            if d2.get("code") == 0:
+            r = await ctx.get(
+                "/wapi/zppassport/qrcode/scanSecond",
+                params={"uuid": sess["second_uuid"]},
+                timeout=2500,
+            )
+            d = await r.json()
+        except Exception:  # noqa: BLE001
+            return {"phase": "waiting_second_scan"}
+        if d.get("scaned"):
+            sess["phase"] = "waiting_confirm"
+            return {"phase": "waiting_confirm"}
+        return {"phase": "waiting_second_scan"}
+
+    if phase == "waiting_confirm":
+        r = await ctx.get("/wapi/zppassport/qrcode/scanLogin", params={"qrId": qr_id})
+        d = await r.json()
+        if d.get("login"):
+            rd = await ctx.get("/wapi/zppassport/qrcode/dispatcher", params={"qrId": qr_id})
+            dd = await rd.json()
+            if dd.get("code") == 0:
                 state = await ctx.storage_state()
                 cookies = state.get("cookies", []) if isinstance(state, dict) else []
                 cookie_header = "; ".join(
@@ -174,18 +233,22 @@ async def _boss_qr_complete(pw, qr_id: str, timeout_seconds: int) -> dict[str, A
                 )
                 await ctx.dispose()
                 _QR_SESSIONS.pop(qr_id, None)
-                return {"ok": True, "cookie_header": cookie_header}
-        except Exception:  # noqa: BLE001
-            pass
-        await asyncio.sleep(2)
-    await ctx.dispose()
-    _QR_SESSIONS.pop(qr_id, None)
-    return {"ok": False, "reason": "已扫码但未确认登录，超时"}
+                return {"phase": "success", "ok": True, "cookie_header": cookie_header}
+            return {
+                "phase": "login_failed",
+                "message": dd.get("message") or f"登录失败(code {dd.get('code')})",
+            }
+        return {"phase": "waiting_confirm"}
+
+    if phase == "success":
+        return {"phase": "success", "ok": True}
+
+    return {"phase": phase}
 
 
 @app.post("/login/qr/start")
 async def start_qr_login(req: LoginReq) -> dict[str, Any]:
-    """启动 BOSS 扫码登录，返回二维码图片 URL + qr_id。"""
+    """启动 BOSS 扫码登录，返回第一张二维码（内容=qrId）+ qr_id。"""
     if req.site != "boss":
         raise HTTPException(404, f"站点 {req.site} 未注册扫码登录")
     try:
@@ -198,22 +261,19 @@ async def start_qr_login(req: LoginReq) -> dict[str, Any]:
         raise HTTPException(500, f"扫码登录启动失败: {e}")
 
 
-@app.post("/login/qr/complete")
-async def complete_qr_login(req: CompleteLoginReq) -> dict[str, Any]:
-    """等待扫码确认，返回登录 Cookie 并保存。"""
+@app.post("/login/qr/status")
+async def status_qr_login(req: StatusLoginReq) -> dict[str, Any]:
+    """轮询扫码状态机，返回当前 phase（及第二张码 / 登录 Cookie）。"""
     if req.site != "boss":
         raise HTTPException(404, f"站点 {req.site} 未注册扫码登录")
     try:
-        result = await _boss_qr_complete(await _get_pw(), req.qr_id, req.timeout_seconds)
-        if result.get("ok") and result.get("cookie_header"):
-            data = _read_cookies()
-            data[req.site] = {"cookie_header": result["cookie_header"], "updated_at": _now()}
-            _write_cookies(data)
-        return result
+        return await _boss_qr_status(await _get_pw(), req.qr_id)
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         import traceback
         traceback.print_exc()
-        raise HTTPException(500, f"扫码登录完成失败: {e}")
+        raise HTTPException(500, f"扫码状态查询失败: {e}")
 
 
 # ---------------- 可插拔采集器 ----------------

@@ -9,7 +9,7 @@ import {
   analyzeJob,
   fetchJobs,
   bossQrStart,
-  bossQrComplete,
+  bossQrStatus,
   type JobAnalyzeResult,
   type JobMeta,
   type FetchedJob,
@@ -137,26 +137,60 @@ const Job: React.FC = () => {
   const [qrOpen, setQrOpen] = useState(false);
   const [qrImageUrl, setQrImageUrl] = useState('');
   const [qrWaiting, setQrWaiting] = useState(false);
+  const [qrTip, setQrTip] = useState('');
 
   const handleBossQrLogin = async () => {
     setQrOpen(true);
     setQrWaiting(true);
     setQrImageUrl('');
+    setQrTip('');
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let finished = false;
+    const finish = () => {
+      finished = true;
+      if (timer) clearInterval(timer);
+      setQrWaiting(false);
+    };
     try {
       const { qr_id, qr_image_url } = await bossQrStart();
       setQrImageUrl(qr_image_url);
-      // 长轮询等待扫码确认
-      const result = await bossQrComplete(qr_id, 180);
-      if (result.ok) {
-        message.success('BOSS 登录成功，Cookie 已保存，现在可以采集 BOSS 职位了');
-        setQrOpen(false);
-      } else {
-        message.warning(result.reason || '等待扫码超时');
-      }
+      setQrTip('用手机 BOSS App「扫一扫」此二维码');
+      // 轮询状态机（第一张码扫完会换第二张码）
+      timer = setInterval(async () => {
+        try {
+          const st = await bossQrStatus(qr_id);
+          if (st.qr_image_url) setQrImageUrl(st.qr_image_url);
+          if (st.phase === 'waiting_scan') {
+            setQrTip('用手机 BOSS App「扫一扫」此二维码');
+          } else if (st.phase === 'waiting_second_scan') {
+            setQrTip('已扫描，请再次扫一扫这张新二维码');
+          } else if (st.phase === 'waiting_confirm') {
+            setQrTip('请在 BOSS App 上点击「确认登录」');
+          } else if (st.phase === 'success') {
+            finish();
+            setQrOpen(false);
+            message.success('BOSS 登录成功，Cookie 已保存，现在可以采集 BOSS 职位了');
+          } else if (st.phase === 'expired') {
+            finish();
+            message.warning('二维码已过期，请重新点击「BOSS 扫码登录」');
+          } else if (st.phase === 'login_failed') {
+            finish();
+            message.error(st.message || 'BOSS 登录失败，请重试');
+          }
+        } catch (e: any) {
+          // 单个轮询失败不中断，继续等
+        }
+      }, 1500);
+      // 最长轮询 3 分钟
+      setTimeout(() => {
+        if (!finished) {
+          finish();
+          message.warning('等待扫码超时，请重试');
+        }
+      }, 180000);
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || 'BOSS 扫码登录失败');
-    } finally {
       setQrWaiting(false);
+      message.error(e?.response?.data?.detail || 'BOSS 扫码登录失败');
     }
   };
 
@@ -435,7 +469,7 @@ const Job: React.FC = () => {
             <>
               <img src={qrImageUrl} alt="BOSS 登录二维码" style={{ width: 220, height: 220 }} />
               <Paragraph type="secondary" style={{ marginTop: 12 }}>
-                用手机 BOSS App「扫一扫」此二维码，然后在 App 上确认登录
+                {qrTip || '用手机 BOSS App「扫一扫」此二维码'}
               </Paragraph>
             </>
           ) : (

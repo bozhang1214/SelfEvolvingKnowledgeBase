@@ -105,14 +105,13 @@ async def _call_browser(path: str, payload: dict, timeout: float = 30.0) -> dict
         return resp.json()
 
 
-class BossQrCompleteReq(BaseModel):
+class BossQrStatusReq(BaseModel):
     qr_id: str = Field(..., min_length=1, description="start 返回的 qr_id")
-    timeout_seconds: int = Field(180, ge=10, le=300, description="等待扫码的秒数")
 
 
 @router.post("/boss/qr/start")
 async def boss_qr_start(user_id: str = Depends(get_current_user)):
-    """启动 BOSS 扫码登录，返回二维码图片 URL + qr_id。"""
+    """启动 BOSS 扫码登录，返回第一张二维码（data URL）+ qr_id。"""
     _require_job_agent()
     try:
         return await _call_browser("/login/qr/start", {"site": "boss"}, timeout=30)
@@ -121,16 +120,14 @@ async def boss_qr_start(user_id: str = Depends(get_current_user)):
         raise HTTPException(500, f"BOSS 扫码启动失败: {e}")
 
 
-@router.post("/boss/qr/complete")
-async def boss_qr_complete(body: BossQrCompleteReq, user_id: str = Depends(get_current_user)):
-    """完成 BOSS 扫码登录（轮询扫码确认），返回登录状态。"""
+@router.post("/boss/qr/status")
+async def boss_qr_status(body: BossQrStatusReq, user_id: str = Depends(get_current_user)):
+    """轮询 BOSS 扫码状态机，返回 phase（及第二张码 / 登录 Cookie）。"""
     _require_job_agent()
     try:
         return await _call_browser(
-            "/login/qr/complete",
-            {"site": "boss", "qr_id": body.qr_id, "timeout_seconds": body.timeout_seconds},
-            timeout=body.timeout_seconds + 30,
+            "/login/qr/status", {"site": "boss", "qr_id": body.qr_id}, timeout=15
         )
     except Exception as e:
-        logger.error("BOSS 扫码完成失败", error=str(e), exc_info=True)
-        raise HTTPException(500, f"BOSS 扫码完成失败: {e}")
+        logger.error("BOSS 扫码状态查询失败", error=str(e), exc_info=True)
+        raise HTTPException(500, f"BOSS 扫码状态查询失败: {e}")

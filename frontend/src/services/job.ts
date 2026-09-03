@@ -89,14 +89,23 @@ export async function fetchJobs(payload: {
   return res.data;
 }
 
-/** BOSS 扫码登录：启动，返回二维码图片 URL + qr_id。 */
-export async function bossQrStart(): Promise<{ qr_id: string; qr_image_url: string }> {
+/** BOSS 扫码登录：启动，返回第一张二维码（data URL）+ qr_id。 */
+export async function bossQrStart(): Promise<{ qr_id: string; qr_image_url: string; phase: string }> {
   const res = await apiClient.post('/job/boss/qr/start');
   return res.data;
 }
 
-/** BOSS 扫码登录：等待扫码确认，返回登录结果。 */
-export async function bossQrComplete(qr_id: string, timeoutSeconds = 180): Promise<{ ok: boolean; cookie_header?: string; reason?: string }> {
-  const res = await apiClient.post('/job/boss/qr/complete', { qr_id, timeout_seconds: timeoutSeconds });
+/** BOSS 扫码状态（含第二张码 / 登录结果）。 */
+export interface BossQrStatus {
+  phase: 'waiting_scan' | 'waiting_second_scan' | 'waiting_confirm' | 'success' | 'expired' | 'login_failed' | string;
+  qr_image_url?: string;
+  ok?: boolean;
+  cookie_header?: string;
+  message?: string;
+}
+
+/** 轮询 BOSS 扫码状态机。 */
+export async function bossQrStatus(qr_id: string): Promise<BossQrStatus> {
+  const res = await apiClient.post('/job/boss/qr/status', { qr_id });
   return res.data;
 }
