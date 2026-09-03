@@ -175,6 +175,10 @@ async def _boss_qr_start(pw) -> dict[str, Any]:
     }
 
 
+def _log(msg: str) -> None:
+    print(f"[boss-qr] {msg}", flush=True)
+
+
 async def _boss_qr_status(pw, qr_id: str) -> dict[str, Any]:
     """推进扫码状态机一步（非阻塞轮询，2.5s 内返回）。"""
     sess = _QR_SESSIONS.get(qr_id)
@@ -185,6 +189,7 @@ async def _boss_qr_status(pw, qr_id: str) -> dict[str, Any]:
 
     if phase == "waiting_scan":
         if time.time() - sess["created"] > _QR_TTL:
+            _log(f"{qr_id} 第一张码过期")
             return {"phase": "expired"}
         try:
             r = await ctx.get(
@@ -195,13 +200,16 @@ async def _boss_qr_status(pw, qr_id: str) -> dict[str, Any]:
             return {"phase": "waiting_scan"}
         if not d.get("scaned"):
             return {"phase": "waiting_scan"}
+        _log(f"{qr_id} 第一张码已扫 -> 请求 getSecondKey")
         r2 = await ctx.get("/wapi/zppassport/captcha/getSecondKey", params={"uuid": qr_id})
         d2 = await r2.json()
+        _log(f"{qr_id} getSecondKey 响应: {json.dumps(d2, ensure_ascii=False)[:200]}")
         second = ((d2.get("zpData") or {}).get("qrId")) or ""
         if not second:
             return {"phase": "waiting_scan"}
         sess["second_uuid"] = second
         sess["phase"] = "waiting_second_scan"
+        _log(f"{qr_id} 换第二张码 second_uuid={second}")
         return {"phase": "waiting_second_scan", "qr_image_url": _make_qr_png_data_url(second)}
 
     if phase == "waiting_second_scan":
@@ -215,6 +223,7 @@ async def _boss_qr_status(pw, qr_id: str) -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             return {"phase": "waiting_second_scan"}
         if d.get("scaned"):
+            _log(f"{qr_id} 第二张码已扫 -> waiting_confirm")
             sess["phase"] = "waiting_confirm"
             return {"phase": "waiting_confirm"}
         return {"phase": "waiting_second_scan"}
@@ -222,12 +231,17 @@ async def _boss_qr_status(pw, qr_id: str) -> dict[str, Any]:
     if phase == "waiting_confirm":
         r = await ctx.get("/wapi/zppassport/qrcode/scanLogin", params={"qrId": qr_id})
         d = await r.json()
+        _log(f"{qr_id} scanLogin 响应: {json.dumps(d, ensure_ascii=False)[:200]}")
         if d.get("login"):
+            _log(f"{qr_id} App 已确认 -> dispatcher")
             rd = await ctx.get("/wapi/zppassport/qrcode/dispatcher", params={"qrId": qr_id})
             dd = await rd.json()
+            _log(f"{qr_id} dispatcher 响应: {json.dumps(dd, ensure_ascii=False)[:200]}")
             if dd.get("code") == 0:
                 state = await ctx.storage_state()
                 cookies = state.get("cookies", []) if isinstance(state, dict) else []
+                names = [c.get("name") for c in cookies]
+                _log(f"{qr_id} 登录成功，Cookie 数={len(cookies)} names={names}")
                 cookie_header = "; ".join(
                     f"{c.get('name')}={c.get('value')}" for c in cookies
                 )
@@ -267,7 +281,17 @@ async def status_qr_login(req: StatusLoginReq) -> dict[str, Any]:
     if req.site != "boss":
         raise HTTPException(404, f"站点 {req.site} 未注册扫码登录")
     try:
-        return await _boss_qr_status(await _get_pw(), req.qr_id)
+        result = await _boss_qr_status(await _get_pw(), req.qr_id)
+        # 登录成功：把 Cookie 持久化，供后续采集使用
+        if result.get("phase") == "success" and result.get("cookie_header"):
+            data = _read_cookies()
+            data[req.site] = {
+                "cookie_header": result["cookie_header"],
+                "updated_at": _now(),
+            }
+            _write_cookies(data)
+            _log(f"Cookie 已持久化到 /data/cookies.json site={req.site}")
+        return result
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
