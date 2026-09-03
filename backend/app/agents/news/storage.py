@@ -58,7 +58,10 @@ class NewsStorage:
         index.append({
             "date": day,
             "total_count": report.get("total_count", 0),
-            "headline": (report.get("headline") or {}).get("title", ""),
+            "headline": (
+                (report.get("sections") or [{}])[0].get("summary", "")[:100]
+                if report.get("sections") else ""
+            ),
             "path": str(md_path),
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
@@ -95,35 +98,29 @@ class NewsStorage:
 
     @staticmethod
     def _to_markdown(day: str, report: dict) -> str:
-        """把日报 JSON 渲染为结构清晰的 Markdown。"""
+        """把日报 JSON 渲染为结构清晰的 Markdown（含总结预测 + 打分）。"""
         lines = [f"# AI 资讯日报 · {day}", ""]
-
-        headline = report.get("headline") or {}
-        if headline.get("title"):
-            lines += [
-                "## 📌 今日头条",
-                "",
-                f"**{headline.get('title', '')}**",
-                "",
-                headline.get("summary", ""),
-                "",
-                f"> 影响：{headline.get('impact', '')}",
-                "",
-            ]
 
         for section in report.get("sections", []):
             items = section.get("items", [])
             if not items:
                 continue
-            lines.append(f"## {section.get('category', '其他')}（{len(items)} 条）")
+            category = section.get("category", "其他")
+            summary = section.get("summary", "")
+            lines.append(f"## {category}（{len(items)} 条）")
             lines.append("")
+            if summary:
+                lines.append(f"> **📊 总结与预测**：{summary}")
+                lines.append("")
             for i, item in enumerate(items, 1):
                 title = item.get("title", "")
                 source = item.get("source", "")
                 one_liner = item.get("one_liner", "")
                 why = item.get("why_matters", "")
                 link = item.get("link", "")
-                lines.append(f"**{i}. {title}**（{source}）")
+                score = item.get("importance")
+                score_tag = f" ⭐{score}" if isinstance(score, (int, float)) else ""
+                lines.append(f"**{i}. {title}**（{source}）{score_tag}")
                 if one_liner:
                     lines.append(f"- 要点：{one_liner}")
                 if why:

@@ -39,9 +39,13 @@ class NewsAgent:
         items = await self._fetcher.fetch_all()
         # 2. 筛选
         filtered = self._filter.filter(items)
-        # 3. 生成
+        # 3. 生成（逐类）
         items_json = [self._item_to_dict(it) for it in filtered]
-        report = await self._generator.generate(items_json, self._config.llm_role)
+        report = await self._generator.generate(
+            items_json,
+            self._config.llm_role,
+            self._config.categories,
+        )
         # 4. 存储
         path = self._storage.save_daily(day, report)
 
@@ -75,5 +79,6 @@ class NewsAgent:
             "source": item.source,
             "link": item.link,
             "published": item.published,
+            "summary": item.summary,
             "score": item.score,
         }

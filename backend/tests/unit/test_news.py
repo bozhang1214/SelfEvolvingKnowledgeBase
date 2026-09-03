@@ -69,9 +69,40 @@ class TestParseJson:
         raw = '好的，日报如下：{"date":"2026-09-02"} 以上。'
         assert DailyReportGenerator._parse_json(raw)["date"] == "2026-09-02"
 
-    def test_invalid_returns_error(self):
+    def test_invalid_returns_empty(self):
         result = DailyReportGenerator._parse_json("这不是 JSON")
-        assert "error" in result
+        assert result == {}
+
+
+class TestNewsGeneratorClassify:
+    def test_classify_by_keyword_first_match(self):
+        from app.core.config import CategoryConfig
+
+        gen = object.__new__(DailyReportGenerator)
+        cats = [
+            CategoryConfig(name="Android", keywords=["android", "安卓"]),
+            CategoryConfig(name="前端", keywords=["react", "vue", "前端"]),
+        ]
+        items = [
+            {"title": "Android 15 发布", "summary": ""},
+            {"title": "React 19 特性", "summary": "前端框架更新"},
+            {"title": "安卓性能优化", "summary": ""},
+        ]
+        classified = DailyReportGenerator._classify(gen, items, cats)
+        assert [it["title"] for it in classified["Android"]] == [
+            "Android 15 发布",
+            "安卓性能优化",
+        ]
+        assert [it["title"] for it in classified["前端"]] == ["React 19 特性"]
+
+    def test_classify_unmatched_dropped(self):
+        from app.core.config import CategoryConfig
+
+        gen = object.__new__(DailyReportGenerator)
+        cats = [CategoryConfig(name="鸿蒙", keywords=["harmony", "鸿蒙"])]
+        items = [{"title": "无关资讯", "summary": ""}]
+        classified = DailyReportGenerator._classify(gen, items, cats)
+        assert classified["鸿蒙"] == []
 
 
 class TestNewsStorage:
@@ -80,8 +111,22 @@ class TestNewsStorage:
         day = "2026-09-02"
         report = {
             "total_count": 1,
-            "headline": {"title": "头条", "summary": "摘要", "impact": "影响"},
-            "sections": [{"category": "大模型", "items": [{"title": "t", "source": "s", "one_liner": "l"}]}],
+            "sections": [
+                {
+                    "category": "大模型",
+                    "summary": "本周大模型总结与预测。",
+                    "items": [
+                        {
+                            "title": "t",
+                            "source": "s",
+                            "link": "http://x/1",
+                            "one_liner": "l",
+                            "why_matters": "w",
+                            "importance": 90,
+                        }
+                    ],
+                }
+            ],
         }
         path = store.save_daily(day, report)
         assert path.endswith(f"daily_{day}.md")
@@ -92,4 +137,5 @@ class TestNewsStorage:
 
         read = store.read_report(day)
         assert read is not None
-        assert "头条" in read["markdown"]
+        assert "总结与预测" in read["markdown"]
+        assert "⭐" in read["markdown"]

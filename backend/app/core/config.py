@@ -323,12 +323,20 @@ class LoggingConfig(BaseModel):
     redact_fields: list[str] = ["api_key", "authorization", "token"]
 
 
+class CategoryConfig(BaseModel):
+    """资讯日报大类配置：名称 + 分类关键词。"""
+    name: str = ""
+    keywords: list[str] = []
+
+
 class NewsConfig(BaseModel):
     """资讯日报 Agent 配置（Phase 5）"""
     enabled: bool = False
     rss_sources: list[str] = []          # RSS 源列表（URL）
     keywords: list[str] = []              # 命中关键词（标题/摘要包含即保留）
     exclude_keywords: list[str] = []      # 排除关键词（命中即丢弃）
+    categories: list[CategoryConfig] = [] # 大类定义（名称 + 分类关键词，用于归类）
+    min_items_per_category: int = 10      # 每个大类最少收录条目数
     max_items: int = 100                  # 单次采集最大条目数
     report_dir: str = "data/news"         # 日报存储目录（Markdown + 索引）
     retention_days: int = 70              # 日报保留天数
