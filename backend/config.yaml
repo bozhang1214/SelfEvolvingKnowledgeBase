@@ -308,6 +308,8 @@ news:
     - https://www.ifanr.com/feed                     # 爱范儿（消费电子/移动端）
     - https://www.ithome.com/rss/                    # IT之家（科技/数码/移动）
     - https://www.oschina.net/news/rss               # 开源中国（开源/前端/后端）
+    # ---- 鸿蒙专属（自建 RSSHub 的掘金 HarmonyOS 标签，内网服务）----
+    - http://rsshub:1200/juejin/tag/HarmonyOS        # 掘金 HarmonyOS 标签（鸿蒙/OpenHarmony 开发）
     # ---- iOS / Android / 前端 / 开源 / 融资（8，服务器已验证 200+XML）----
     - https://9to5mac.com/feed/                      # 9to5Mac（iOS/苹果）
     - https://www.swift.org/atom.xml                 # Swift.org 官方博客（iOS/Swift）
