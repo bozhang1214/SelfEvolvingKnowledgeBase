@@ -138,8 +138,7 @@ class TestNewsStorage:
                             "title": "t",
                             "source": "s",
                             "link": "http://x/1",
-                            "one_liner": "l",
-                            "why_matters": "w",
+                            "abstract": "这是一段 150~200 字的条目摘要。",
                             "importance": 90,
                         }
                     ],
@@ -157,3 +156,5 @@ class TestNewsStorage:
         assert read is not None
         assert "总结与预测" in read["markdown"]
         assert "⭐" in read["markdown"]
+        assert "摘要：" in read["markdown"]
+        assert "这是一段 150~200 字的条目摘要" in read["markdown"]

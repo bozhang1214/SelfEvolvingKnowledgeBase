@@ -115,16 +115,13 @@ class NewsStorage:
             for i, item in enumerate(items, 1):
                 title = item.get("title", "")
                 source = item.get("source", "")
-                one_liner = item.get("one_liner", "")
-                why = item.get("why_matters", "")
+                abstract = item.get("abstract", "") or item.get("one_liner", "")
                 link = item.get("link", "")
                 score = item.get("importance")
                 score_tag = f" ⭐{score}" if isinstance(score, (int, float)) else ""
                 lines.append(f"**{i}. {title}**（{source}）{score_tag}")
-                if one_liner:
-                    lines.append(f"- 要点：{one_liner}")
-                if why:
-                    lines.append(f"- 关注：{why}")
+                if abstract:
+                    lines.append(f"- 摘要：{abstract}")
                 if link:
                     lines.append(f"- 🔗 [原文链接]({link})")
                 lines.append("")

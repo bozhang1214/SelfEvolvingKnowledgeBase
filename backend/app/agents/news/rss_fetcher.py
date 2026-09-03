@@ -33,6 +33,7 @@ class NewsItem:
     link: str
     source: str
     summary: str = ""
+    content: str = ""  # RSS 全文（content:encoded / entry.content，可能为空）
     published: str = ""  # ISO 8601 时间字符串
     score: float = 0.0
 
@@ -93,10 +94,19 @@ class RSSFetcher:
                     link=link,
                     source=source,
                     summary=(entry.get("summary") or entry.get("description") or "").strip(),
+                    content=self._extract_full_content(entry),
                     published=self._parse_time(entry),
                 )
             )
         return out
+
+    @staticmethod
+    def _extract_full_content(entry: object) -> str:
+        """提取 RSS 全文（content:encoded / Atom content），无则返回空串。"""
+        for c in entry.get("content") or []:
+            if isinstance(c, dict) and c.get("value"):
+                return str(c["value"]).strip()
+        return ""
 
     @staticmethod
     def _source_name(url: str) -> str:

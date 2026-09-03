@@ -1,13 +1,15 @@
 """
 资讯日报 Agent 服务编排。
 
-串联流水线：RSS 采集 → 关键词筛选 → LLM 生成日报 → 存储。
+串联流水线：RSS 采集 → 关键词筛选 → 原文正文抽取 → LLM 生成日报 → 存储。
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
+from app.agents.news.content_extractor import fetch_article_text
 from app.agents.news.filter import NewsFilter
 from app.agents.news.generator import DailyReportGenerator
 from app.agents.news.rss_fetcher import RSSFetcher
@@ -15,6 +17,11 @@ from app.agents.news.storage import NewsStorage
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# 原文正文抓取的并发数（过大易被目标站限流）
+_CONTENT_CONCURRENCY = 10
+# 单条正文传给 LLM 的最大字符数（150~200 字摘要足够）
+_CONTENT_MAX_CHARS = 1200
 
 
 class NewsAgent:
@@ -44,13 +51,17 @@ class NewsAgent:
         items = await self._fetcher.fetch_all()
         # 2. 筛选
         filtered = self._filter.filter(items)
-        # 3. 生成（逐类）
+        # 3. 原文正文抽取（RSS 摘要/全文不足时抓取原文，供 150~200 字摘要用）
         items_json = [self._item_to_dict(it) for it in filtered]
+        items_json = await self._enrich_content(items_json)
+        # 4. 生成（逐类）
         report = await self._generator.generate(
             items_json,
             self._config.llm_role,
             self._config.categories,
         )
+        # 5. 存储
+        path = self._storage.save_daily(day, report)
         # 4. 存储
         path = self._storage.save_daily(day, report)
 
@@ -84,6 +95,25 @@ class NewsAgent:
             "source": item.source,
             "link": item.link,
             "published": item.published,
-            "summary": item.summary,
-            "score": item.score,
+            "summary": item.summary,  # RSS 摘要（兜底）
+            "content": item.content,  # RSS 全文（content:encoded，可能为空）
         }
+
+    async def _enrich_content(self, items_json: list[dict]) -> list[dict]:
+        """为每条资讯补全正文：优先 RSS 全文/摘要，不足时并发抓取原文正文。"""
+        sem = asyncio.Semaphore(_CONTENT_CONCURRENCY)
+
+        async def enrich(d: dict) -> dict:
+            rss_summary = (d.get("summary") or "").strip()
+            rss_content = (d.get("content") or "").strip()
+            fetched = ""
+            # RSS 已有较完整内容时直接用（「用原文的摘要」）；不足则抓原文正文
+            if max(len(rss_content), len(rss_summary)) < 200 and d.get("link"):
+                async with sem:
+                    fetched = await fetch_article_text(d["link"])
+            best = max([rss_content, rss_summary, fetched], key=len)
+            d["content"] = best[:_CONTENT_MAX_CHARS]
+            # 保留 summary（RSS 摘要）供分类关键词匹配；content 供 LLM 写摘要
+            return d
+
+        return list(await asyncio.gather(*[enrich(d) for d in items_json]))
