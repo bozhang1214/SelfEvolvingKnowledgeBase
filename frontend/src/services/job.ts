@@ -64,10 +64,15 @@ export interface FetchedJob {
   city: string;
   job_url: string;
   jd_text: string;
+  source?: string;
 }
 
 export interface JobFetchResult {
   keyword: string;
+  city?: string;
+  min_salary_k?: number;
+  source_count?: number;
+  sources?: Record<string, { raw: number; count: number }>;
   count: number;
   jobs: FetchedJob[];
 }

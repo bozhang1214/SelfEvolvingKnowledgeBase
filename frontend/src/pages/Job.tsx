@@ -125,10 +125,11 @@ const Job: React.FC = () => {
   const [result, setResult] = useState<JobAnalyzeResult | null>(null);
   const [activeTab, setActiveTab] = useState<SectionKey>('job_analysis');
 
-  // 职位采集（猎聘）
+  // 职位采集（多源）
   const [fetchKeyword, setFetchKeyword] = useState('');
   const [fetching, setFetching] = useState(false);
   const [fetchedJobs, setFetchedJobs] = useState<FetchedJob[]>([]);
+  const [companyFilter, setCompanyFilter] = useState('');
 
   const handleFetch = async () => {
     const kw = fetchKeyword.trim();
@@ -224,14 +225,14 @@ const Job: React.FC = () => {
 
   return (
     <div style={{ padding: 24, overflow: 'auto', background: '#fff', minHeight: '100%' }}>
-      {/* 职位采集（猎聘公开接口） */}
+      {/* 职位采集（多源，免登录） */}
       <Card
         title={
           <Space>
             <SearchOutlined />
             <Text strong>职位采集</Text>
             <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
-              从猎聘采集真实职位（免登录），点击职位自动填入下方分析框
+              多源采集真实职位（猎聘/字节/腾讯/百度/小米/阿里/小红书，免登录），点击职位自动填入下方分析框
             </Text>
           </Space>
         }
@@ -249,10 +250,22 @@ const Job: React.FC = () => {
           </Button>
         </Space.Compact>
         {fetchedJobs.length > 0 && (
+          <Input
+            placeholder="按公司筛选（如：字节 / 智谱 / 月之暗面）"
+            value={companyFilter}
+            onChange={(e) => setCompanyFilter(e.target.value)}
+            allowClear
+            style={{ marginTop: 12 }}
+            prefix={<Text type="secondary">公司</Text>}
+          />
+        )}
+        {fetchedJobs.length > 0 && (
           <List
             size="small"
             style={{ marginTop: 12 }}
-            dataSource={fetchedJobs}
+            dataSource={fetchedJobs.filter((j) =>
+              !companyFilter.trim() || (j.company || '').toLowerCase().includes(companyFilter.trim().toLowerCase())
+            )}
             renderItem={(job) => (
               <List.Item
                 key={job.job_id || `${job.title}-${job.company}`}
@@ -269,11 +282,12 @@ const Job: React.FC = () => {
                     <Space size={8}>
                       <Text strong>{job.title}</Text>
                       <Tag color="blue">{job.salary || '面议'}</Tag>
+                      {job.source && <Tag style={{ fontSize: 11 }}>{job.source}</Tag>}
                     </Space>
                   }
                   description={
                     <Space size={8}>
-                      <Text type="secondary">{job.company}</Text>
+                      <Text strong>{job.company}</Text>
                       {job.city && <Text type="secondary">{job.city}</Text>}
                     </Space>
                   }
