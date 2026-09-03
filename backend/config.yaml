@@ -304,6 +304,10 @@ news:
     - https://www.leiphone.com/feed                  # 雷锋网（科技媒体）
     - https://www.zhidx.com/rss                      # 智东西（AI/智能产业）
     - https://sspai.com/feed                         # 少数派（效率/工具）
+    # ---- 移动端 / 前端 / 跨端（3）----
+    - https://www.ifanr.com/feed                     # 爱范儿（消费电子/移动端）
+    - https://www.ithome.com/rss/                    # IT之家（科技/数码/移动）
+    - https://www.oschina.net/news/rss               # 开源中国（开源/前端/后端）
     # ---- 英文（10）----
     - https://simonwillison.net/atom/everything/     # Simon Willison（LLM 工程，顶级）
     - https://openai.com/news/rss.xml                # OpenAI News
