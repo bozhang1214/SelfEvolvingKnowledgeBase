@@ -55,13 +55,13 @@ class NewsStorage:
         index = self._read_index()
         # 覆盖同一天
         index = [it for it in index if it.get("date") != day]
+        headline_title = (report.get("headline") or {}).get("title", "")
+        if not headline_title and report.get("sections"):
+            headline_title = report["sections"][0].get("summary", "")[:100]
         index.append({
             "date": day,
             "total_count": report.get("total_count", 0),
-            "headline": (
-                (report.get("sections") or [{}])[0].get("summary", "")[:100]
-                if report.get("sections") else ""
-            ),
+            "headline": headline_title[:100],
             "path": str(md_path),
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
@@ -98,8 +98,28 @@ class NewsStorage:
 
     @staticmethod
     def _to_markdown(day: str, report: dict) -> str:
-        """把日报 JSON 渲染为结构清晰的 Markdown（含总结预测 + 打分）。"""
+        """把日报 JSON 渲染为结构清晰的 Markdown（含头条 + 总结预测 + 打分）。"""
         lines = [f"# AI 资讯日报 · {day}", ""]
+
+        # 头条（当天最重要的一条，置顶）
+        headline = report.get("headline") or {}
+        if headline.get("title"):
+            lines.append("## 🔥 头条")
+            lines.append("")
+            title = headline.get("title", "")
+            source = headline.get("source", "")
+            score = headline.get("importance")
+            score_tag = f" ⭐{score}" if isinstance(score, (int, float)) else ""
+            lines.append(f"**{title}**（{source}）{score_tag}")
+            if headline.get("abstract"):
+                lines.append(f"- 摘要：{headline.get('abstract')}")
+            if headline.get("analysis"):
+                lines.append(f"- 分析：{headline.get('analysis')}")
+            if headline.get("attention"):
+                lines.append(f"- 关注：{headline.get('attention')}")
+            if headline.get("link"):
+                lines.append(f"- 🔗 [原文链接]({headline.get('link')})")
+            lines.append("")
 
         for section in report.get("sections", []):
             items = section.get("items", [])

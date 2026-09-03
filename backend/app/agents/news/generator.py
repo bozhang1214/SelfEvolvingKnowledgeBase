@@ -19,11 +19,18 @@ logger = get_logger(__name__)
 
 # 兜底提示词（当 prompt 文件缺失时使用，保证不崩溃）
 _FALLBACK_PROMPT = """你是技术资讯编辑，针对「{{category}}」大类生成总结预测+精选条目。
-输出严格 JSON：{"category":"...","summary":"≤600字总结+预测","items":[{"title","source","link","one_liner","why_matters","importance"}]}
-只基于输入，不编造，items 按 importance 降序最多 10 条。"""
+输出严格 JSON：{"category":"...","summary":"≤600字总结+预测","items":[{"title","source","link","abstract","attention","importance"}]}
+只基于输入，不编造，items 按 importance（0~10 十分制）降序最多 10 条。"""
+
+# 头条分析兜底提示词
+_HEADLINE_FALLBACK_PROMPT = """你是资深技术资讯主编，请对「今天最重要的一条资讯」写一段头条深度分析。
+输出严格 JSON：{"analysis":"300~500字：为什么这是今天最重要的一条 + 对行业/读者的深层含义与后续走向"}。
+只基于输入，不编造。"""
 
 
-def _resolve_prompt_path(explicit: str | None = None) -> Path | None:
+def _resolve_prompt_path(
+    explicit: str | None = None, filename: str = "daily_report.md"
+) -> Path | None:
     """定位提示词文件：优先显式路径，其次多个候选目录。"""
     if explicit:
         p = Path(explicit)
@@ -35,7 +42,7 @@ def _resolve_prompt_path(explicit: str | None = None) -> Path | None:
         Path.cwd() / "prompt",
     ]
     for d in candidates:
-        p = d / "news" / "daily_report.md"
+        p = d / "news" / filename
         if p.exists():
             return p
     return None
@@ -53,6 +60,14 @@ class DailyReportGenerator:
         else:
             self._system_prompt = _FALLBACK_PROMPT
             logger.warning("日报提示词文件未找到，使用内置兜底提示词")
+
+        headline_path = _resolve_prompt_path(None, "headline.md")
+        if headline_path:
+            self._headline_prompt = headline_path.read_text(encoding="utf-8")
+            logger.info("已加载头条分析提示词", path=str(headline_path))
+        else:
+            self._headline_prompt = _HEADLINE_FALLBACK_PROMPT
+            logger.warning("头条分析提示词文件未找到，使用内置兜底提示词")
 
     async def generate(
         self,
@@ -85,9 +100,13 @@ class DailyReportGenerator:
                 # 该分类生成了但无条目（如"当日无相关资讯"），跳过
                 logger.info("大类无条目，跳过", category=cat.name)
 
+        # 3. 选出当天最重要的一条作为「头条」并深度分析
+        headline = await self._generate_headline(sections, items, role)
+
         total = sum(len(s.get("items", [])) for s in sections)
-        logger.info("逐类生成完成", section_count=len(sections), total_items=total)
-        return {"sections": sections, "total_count": total}
+        logger.info("逐类生成完成", section_count=len(sections), total_items=total,
+                    headline=bool(headline))
+        return {"headline": headline, "sections": sections, "total_count": total}
 
     # ---------- 分类 ----------
 
@@ -155,6 +174,76 @@ class DailyReportGenerator:
                 )
             ),
         ]
+
+    # ---------- 头条 ----------
+
+    async def _generate_headline(
+        self, sections: list[dict], items: list[dict], role: str
+    ) -> dict | None:
+        """从所有大类条目中选出 importance 最高的一条作为头条，并生成深度分析。"""
+        best = None
+        for s in sections:
+            for it in s.get("items", []):
+                score = it.get("importance") or 0
+                if best is None or score > (best.get("importance") or 0):
+                    best = it
+        if not best:
+            return None
+        content = self._match_content(best, items)
+        analysis = await self._generate_headline_analysis(best, content, role)
+        return {
+            "title": best.get("title", ""),
+            "source": best.get("source", ""),
+            "link": best.get("link", ""),
+            "importance": best.get("importance"),
+            "abstract": best.get("abstract", ""),
+            "attention": best.get("attention", ""),
+            "analysis": analysis,
+        }
+
+    @staticmethod
+    def _match_content(headline_item: dict, items: list[dict]) -> str:
+        """按 link/title 把头条条目映射回原始输入，取回原文正文供深度分析。"""
+        link = (headline_item.get("link") or "").strip()
+        title = (headline_item.get("title") or "").strip()
+        if link:
+            for it in items:
+                if (it.get("link") or "").strip() == link:
+                    return it.get("content", "") or ""
+        if title:
+            for it in items:
+                if (it.get("title") or "").strip() == title:
+                    return it.get("content", "") or ""
+        return ""
+
+    async def _generate_headline_analysis(
+        self, headline_item: dict, content: str, role: str
+    ) -> str:
+        """调用 LLM 生成头条深度分析（300~500 字）。"""
+        payload = {
+            "title": headline_item.get("title", ""),
+            "source": headline_item.get("source", ""),
+            "link": headline_item.get("link", ""),
+            "importance": headline_item.get("importance"),
+            "abstract": headline_item.get("abstract", ""),
+            "attention": headline_item.get("attention", ""),
+            "content": (content or "")[:2000],
+        }
+        messages = [
+            SystemMessage(content=self._headline_prompt),
+            HumanMessage(
+                content=f"以下是今天最重要的一条资讯：\n{json.dumps(payload, ensure_ascii=False)}\n\n请写头条深度分析。"
+            ),
+        ]
+        try:
+            llm = self._llm_factory.get(role)
+            resp = await llm.ainvoke(messages)
+            raw = resp.content if hasattr(resp, "content") else str(resp)
+            parsed = self._parse_json(raw)
+            return (parsed.get("analysis") or "").strip()
+        except Exception as e:  # noqa: BLE001
+            logger.error("头条分析生成失败", error=str(e)[:200])
+            return ""
 
     # ---------- 解析 ----------
 

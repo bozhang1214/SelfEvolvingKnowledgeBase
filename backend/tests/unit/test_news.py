@@ -129,6 +129,15 @@ class TestNewsStorage:
         day = "2026-09-02"
         report = {
             "total_count": 1,
+            "headline": {
+                "title": "头条标题",
+                "source": "s",
+                "link": "http://x/headline",
+                "importance": 9.5,
+                "abstract": "头条摘要。",
+                "analysis": "头条深度分析：为什么这是今天最重要的一条。",
+                "attention": "头条关注建议。",
+            },
             "sections": [
                 {
                     "category": "大模型",
@@ -140,7 +149,7 @@ class TestNewsStorage:
                             "link": "http://x/1",
                             "abstract": "这是一段 150~200 字的条目摘要。",
                             "attention": "关注建议：值得关注并跟进。",
-                            "importance": 90,
+                            "importance": 9.0,
                         }
                     ],
                 }
@@ -152,9 +161,13 @@ class TestNewsStorage:
         reports = store.list_reports()
         assert len(reports) == 1
         assert reports[0]["date"] == day
+        assert reports[0]["headline"] == "头条标题"
 
         read = store.read_report(day)
         assert read is not None
+        assert "🔥 头条" in read["markdown"]
+        assert "头条标题" in read["markdown"]
+        assert "头条深度分析：为什么这是今天最重要的一条。" in read["markdown"]
         assert "总结与预测" in read["markdown"]
         assert "⭐" in read["markdown"]
         assert "摘要：" in read["markdown"]
