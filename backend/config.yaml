@@ -60,7 +60,7 @@ llm:
     news_report:                       # 资讯日报生成：结构化长报告（每条含要点/来源）
       model: deepseek-chat
       temperature: 0.3
-      max_tokens: 6000                 # 日报条目多（每类 10+），需要较大输出上限
+      max_tokens: 8000                 # 日报条目多（每类 10+），需要较大输出上限
       response_format: json
 
   # 降级链：reasoner 不可用 → 降级 chat；chat 不可用 → 返回错误提示
