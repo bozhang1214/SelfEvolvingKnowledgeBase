@@ -128,7 +128,7 @@ def _register_login(site: str):
 @_register_login("boss")
 def _boss_login(pw, state_path: Path, action: str, timeout_seconds: int = 180):
     """BOSS 直聘扫码登录：action = start | complete。"""
-    browser = pw.chromium.launch(headless=False)
+    browser = pw.chromium.launch(headless=True)
     context = browser.new_context(
         locale="zh-CN",
         user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
