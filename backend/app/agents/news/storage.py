@@ -95,27 +95,40 @@ class NewsStorage:
 
     @staticmethod
     def _to_markdown(day: str, report: dict) -> str:
-        """把日报 JSON 渲染为 Markdown。"""
+        """把日报 JSON 渲染为结构清晰的 Markdown。"""
         lines = [f"# AI 资讯日报 · {day}", ""]
+
         headline = report.get("headline") or {}
-        if headline:
+        if headline.get("title"):
             lines += [
-                f"## 头条：{headline.get('title', '')}",
+                "## 📌 今日头条",
+                "",
+                f"**{headline.get('title', '')}**",
                 "",
                 headline.get("summary", ""),
                 "",
                 f"> 影响：{headline.get('impact', '')}",
                 "",
             ]
+
         for section in report.get("sections", []):
-            lines.append(f"## {section.get('category', '其他')}")
+            items = section.get("items", [])
+            if not items:
+                continue
+            lines.append(f"## {section.get('category', '其他')}（{len(items)} 条）")
             lines.append("")
-            for item in section.get("items", []):
-                lines.append(f"- **{item.get('title', '')}**（{item.get('source', '')}）")
-                lines.append(f"  - {item.get('one_liner', '')}")
-                if item.get("why_matters"):
-                    lines.append(f"  - 关注点：{item.get('why_matters')}")
-                if item.get("link"):
-                    lines.append(f"  - {item.get('link')}")
-            lines.append("")
+            for i, item in enumerate(items, 1):
+                title = item.get("title", "")
+                source = item.get("source", "")
+                one_liner = item.get("one_liner", "")
+                why = item.get("why_matters", "")
+                link = item.get("link", "")
+                lines.append(f"**{i}. {title}**（{source}）")
+                if one_liner:
+                    lines.append(f"- 要点：{one_liner}")
+                if why:
+                    lines.append(f"- 关注：{why}")
+                if link:
+                    lines.append(f"- 🔗 [原文链接]({link})")
+                lines.append("")
         return "\n".join(lines)

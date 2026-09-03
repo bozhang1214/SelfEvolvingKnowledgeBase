@@ -82,3 +82,23 @@ body {
   margin: 12px 0;
   color: #666;
 }
+
+.markdown-content ul, .markdown-content ol {
+  margin: 4px 0;
+  padding-left: 22px;
+}
+
+.markdown-content li {
+  margin: 4px 0;
+  line-height: 1.7;
+}
+
+.markdown-content a {
+  color: #1890ff;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.markdown-content a:hover {
+  text-decoration: underline;
+}

@@ -57,6 +57,11 @@ llm:
       model: deepseek-chat
       temperature: 0.7                 # 高温度保证闲聊自然度
       max_tokens: 1000
+    news_report:                       # 资讯日报生成：结构化长报告（每条含要点/来源）
+      model: deepseek-chat
+      temperature: 0.3
+      max_tokens: 6000                 # 日报条目多（每类 10+），需要较大输出上限
+      response_format: json
 
   # 降级链：reasoner 不可用 → 降级 chat；chat 不可用 → 返回错误提示
   fallback:
@@ -283,7 +288,7 @@ logging:
 # ============ 资讯日报 Agent ============
 news:
   enabled: true                         # 是否启用（Phase 5 已部署，开启）
-  llm_role: chat_simple                 # 生成日报用的 LLM 角色
+  llm_role: news_report                 # 生成日报用的 LLM 角色（大 token 上限）
   time_window_hours: 24                 # 日报信息时效窗口：过去 24 小时
   max_items: 100                        # 单次采集最大条目数
   report_dir: data/news                 # 日报存储目录
@@ -321,5 +326,17 @@ news:
     - 智能体
     - OpenAI
     - DeepSeek
+    # ---- 移动端 / 前端 / 跨端 ----
+    - Android
+    - iOS
+    - 鸿蒙
+    - HarmonyOS
+    - 前端
+    - 跨端
+    - Flutter
+    - React Native
+    - 小程序
+    - 移动端
+    - Web
   # 排除关键词（命中即丢弃）
   exclude_keywords: []
