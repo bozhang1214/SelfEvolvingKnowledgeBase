@@ -30,6 +30,11 @@ COOKIES_FILE = DATA_DIR / "cookies.json"
 
 app = FastAPI(title="sekb-browser", version="1.0.0")
 
+_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+)
+
 # Playwright 单实例复用（启动较慢，避免每请求都启动）
 _playwright = None
 _pw_lock = threading.Lock()
@@ -75,6 +80,7 @@ class LoginReq(BaseModel):
 
 class CompleteLoginReq(BaseModel):
     site: str = Field(..., description="站点标识")
+    qr_id: str = Field(..., description="start 返回的 qr_id")
     timeout_seconds: int = Field(180, ge=10, le=600, description="等待扫码确认的秒数")
 
 
@@ -113,9 +119,12 @@ def list_cookies() -> dict[str, Any]:
 # ---------------- 扫码登录（通用，按站点注册） ----------------
 
 # 各站点的扫码登录实现：返回 (start_fn, complete_fn)
-# start_fn(pw) -> {"qr_image_base64": str}   生成二维码图片
-# complete_fn(pw, timeout_seconds) -> bool   等待扫码完成并保存 storage_state
+# start_fn(pw) -> {"qr_id": str, "qr_image_url": str}   生成二维码图片 URL
+# complete_fn(pw, qr_id, timeout_seconds) -> {"ok": bool, "cookie_header": str}
 LOGIN_HANDLERS: dict[str, tuple] = {}
+
+# 进行中的扫码会话：qr_id -> request context（持有登录 Cookie）
+_QR_SESSIONS: dict[str, Any] = {}
 
 
 def _register_login(site: str):
@@ -125,50 +134,87 @@ def _register_login(site: str):
     return deco
 
 
-@_register_login("boss")
-def _boss_login(pw, state_path: Path, action: str, timeout_seconds: int = 180):
-    """BOSS 直聘扫码登录：action = start | complete。"""
-    browser = pw.chromium.launch(headless=True)
-    context = browser.new_context(
-        locale="zh-CN",
-        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+def _boss_qr_start(pw) -> dict[str, Any]:
+    """BOSS 扫码登录第一步：randkey + getMpCode，拿到二维码图片 URL。"""
+    ctx = pw.request.new_context(
+        base_url="https://login.zhipin.com",
+        user_agent=_UA,
+        extra_http_headers={"Referer": "https://login.zhipin.com/"},
     )
-    page = context.new_page()
-    page.goto("https://www.zhipin.com/web/user/?ka=header-login", timeout=60000)
+    ctx.get("/")
+    r1 = ctx.post("/wapi/zppassport/captcha/randkey")
+    d1 = r1.json()
+    zp = d1.get("zpData") or {}
+    qr_id = zp.get("qrId")
+    sk = zp.get("shortRandKey")
+    if not qr_id or not sk:
+        raise HTTPException(500, f"randkey 返回异常: {r1.text()[:200]}")
+    r2 = ctx.get("/wapi/zppassport/qrcode/getMpCode", params={"uuid": sk, "width": 300})
+    d2 = r2.json()
+    mp_url = (d2.get("zpData") or {}).get("mpCodeUrl")
+    if not mp_url:
+        raise HTTPException(500, f"getMpCode 返回异常: {r2.text()[:200]}")
+    _QR_SESSIONS[qr_id] = ctx
+    return {"qr_id": qr_id, "qr_image_url": mp_url}
 
-    if action == "start":
-        page.wait_for_selector(".login-qrcode img, img[class*=qr], img[src*='qrcode']", timeout=15000)
-        qr_img = page.query_selector(".login-qrcode img, img[class*=qr], img[src*='qrcode']")
-        if qr_img is None:
-            context.close(); browser.close()
-            raise HTTPException(500, "未找到登录二维码元素")
-        qr_bytes = qr_img.screenshot()
-        import base64
-        b64 = base64.b64encode(qr_bytes).decode("utf-8")
-        context.close(); browser.close()
-        return {"qr_image_base64": b64}
 
-    # complete：轮询等待登录成功（页面跳转离开登录页或出现登录态）
+def _boss_qr_complete(pw, qr_id: str, timeout_seconds: int) -> dict[str, Any]:
+    """BOSS 扫码登录第二步：轮询 scanByMp（扫码）+ loginConfirm（确认），拿登录 Cookie。"""
+    ctx = _QR_SESSIONS.get(qr_id)
+    if ctx is None:
+        raise HTTPException(404, "二维码会话不存在或已过期，请重新 start")
     import time
     deadline = time.time() + timeout_seconds
+    scanned = False
     while time.time() < deadline:
-        if "login" not in page.url and page.query_selector(".user-nav, .user-name, a[href*='geek/web/chat']"):
-            context.storage_state(path=str(state_path))
-            context.close(); browser.close()
-            return {"ok": True}
-        time.sleep(3)
-    context.close(); browser.close()
-    return {"ok": False, "reason": "等待扫码超时"}
+        try:
+            r = ctx.get("/wapi/zppassport/qrcode/scanByMp", params={"uuid": qr_id})
+            d = r.json()
+            if d.get("scaned"):
+                scanned = True
+                break
+            # 未扫码：server 端是长轮询，这里 sleep 后重试
+            time.sleep(2)
+        except Exception as e:  # noqa: BLE001
+            time.sleep(2)
+    if not scanned:
+        return {"ok": False, "reason": "等待扫码超时"}
+
+    # 已扫码：轮询确认登录
+    while time.time() < deadline:
+        try:
+            r2 = ctx.get("/wapi/zppassport/qrcode/loginConfirm", params={"uuid": qr_id})
+            d2 = r2.json()
+            if d2.get("code") == 0:
+                # 登录成功，从 request context 抓 Cookie
+                state = ctx.storage_state()
+                cookies = state.get("cookies", []) if isinstance(state, dict) else []
+                cookie_header = "; ".join(
+                    f"{c.get('name')}={c.get('value')}" for c in cookies
+                )
+                return {"ok": True, "cookie_header": cookie_header}
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(2)
+    return {"ok": False, "reason": "已扫码但未确认登录，超时"}
+
+
+@_register_login("boss")
+def _boss_login(pw, state_path: Path, action: str, qr_id: str = "", timeout_seconds: int = 180):
+    """BOSS 直聘扫码登录：action = start | complete（纯 HTTP，无 iframe 截图）。"""
+    if action == "start":
+        return _boss_qr_start(pw)
+    return _boss_qr_complete(pw, qr_id, timeout_seconds)
 
 
 @app.post("/login/qr/start")
 def start_qr_login(req: LoginReq) -> dict[str, Any]:
-    """启动某站点的扫码登录，返回二维码图片（base64）。"""
+    """启动某站点的扫码登录，返回二维码图片 URL + qr_id。"""
     handler = LOGIN_HANDLERS.get(req.site)
     if handler is None:
         raise HTTPException(404, f"站点 {req.site} 未注册扫码登录")
     try:
-        return handler(_get_pw(), _state_path(req.site), "start", 180)
+        return handler(_get_pw(), _state_path(req.site), "start", "", 180)
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
@@ -179,13 +225,21 @@ def start_qr_login(req: LoginReq) -> dict[str, Any]:
 
 @app.post("/login/qr/complete")
 def complete_qr_login(req: CompleteLoginReq) -> dict[str, Any]:
-    """等待用户扫码确认并保存登录态。"""
+    """等待用户扫码确认，返回登录 Cookie 并保存到 Cookie 存储。"""
     handler = LOGIN_HANDLERS.get(req.site)
     if handler is None:
         raise HTTPException(404, f"站点 {req.site} 未注册扫码登录")
     try:
-        return handler(_get_pw(), _state_path(req.site), "complete", req.timeout_seconds)
+        result = handler(_get_pw(), _state_path(req.site), "complete", req.qr_id, req.timeout_seconds)
+        if result.get("ok") and result.get("cookie_header"):
+            # 保存 Cookie 到存储，供后续 scrape 使用
+            data = _read_cookies()
+            data[req.site] = {"cookie_header": result["cookie_header"], "updated_at": _now()}
+            _write_cookies(data)
+        return result
     except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
         raise HTTPException(500, f"扫码登录完成失败: {e}")
 
 

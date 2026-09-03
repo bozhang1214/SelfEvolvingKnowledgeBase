@@ -356,6 +356,12 @@ class JobConfig(BaseModel):
     default_city: str = "北京"            # 默认城市
     default_city_code: str = "010"        # 猎聘城市码（北京 010，全国 410）
     default_min_salary_k: int = 50        # 最低月薪（K），即 50K×14
+    # 猎聘/BOSS 排除的大厂（这些公司已有独立渠道，避免重复，聚焦大厂之外的创业公司）
+    exclude_companies: list[str] = [
+        "字节", "阿里", "淘宝", "天猫", "蚂蚁", "腾讯", "百度", "小米", "京东",
+        "大疆", "小红书", "深度求索", "DeepSeek", "ByteDance", "Alibaba",
+        "Tencent", "Baidu", "Xiaomi",
+    ]
 
 
 class AppConfig(BaseModel):

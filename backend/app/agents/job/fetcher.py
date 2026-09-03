@@ -179,6 +179,8 @@ def filter_jobs(
 class LiepinJobFetcher:
     """猎聘职位采集器（免登录公开接口）。"""
 
+    name = "猎聘"
+
     def __init__(self, timeout: int = 20) -> None:
         self._timeout = timeout
 

@@ -98,12 +98,36 @@ def _load_sources() -> list[Any]:
     return sources
 
 
+def exclude_big_tech(
+    jobs: list[dict[str, Any]], exclude_keywords: list[str]
+) -> list[dict[str, Any]]:
+    """排除大厂公司：company 命中任一排除关键词的职位被过滤掉。"""
+    if not exclude_keywords:
+        return jobs
+    out: list[dict[str, Any]] = []
+    for j in jobs:
+        company = (j.get("company") or "").lower()
+        if any(kw.lower() in company for kw in exclude_keywords):
+            continue
+        out.append(j)
+    return out
+
+
 class JobCollector:
     """多源职位采集器。"""
 
-    def __init__(self, city: str = "北京", min_salary_k: int = 50) -> None:
+    # 通用职位平台（猎聘/BOSS）：需要排除大厂（大厂已有独立渠道）
+    _GENERAL_BOARDS = {"猎聘", "BOSS直聘"}
+
+    def __init__(
+        self,
+        city: str = "北京",
+        min_salary_k: int = 50,
+        exclude_companies: list[str] | None = None,
+    ) -> None:
         self._city = city
         self._min_salary_k = min_salary_k
+        self._exclude = exclude_companies or []
         self._sources = _load_sources()
 
     @property
@@ -128,6 +152,9 @@ class JobCollector:
             filtered = filter_jobs(
                 jobs, city=self._city, min_salary_k=self._min_salary_k
             )
+            # 通用平台（猎聘/BOSS）排除大厂公司
+            if name in self._GENERAL_BOARDS and self._exclude:
+                filtered = exclude_big_tech(filtered, self._exclude)
             per_source[name] = {"raw": len(jobs), "count": len(filtered)}
             merged.extend(filtered)
 

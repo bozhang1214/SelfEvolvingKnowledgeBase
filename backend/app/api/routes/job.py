@@ -70,7 +70,11 @@ async def fetch_jobs(body: JobFetchRequest, user_id: str = Depends(get_current_u
     keyword = (body.keyword or "").strip() or cfg.default_keyword
     city = (body.city or "").strip() or cfg.default_city
 
-    collector = JobCollector(city=city, min_salary_k=cfg.default_min_salary_k)
+    collector = JobCollector(
+        city=city,
+        min_salary_k=cfg.default_min_salary_k,
+        exclude_companies=cfg.exclude_companies,
+    )
     try:
         result = await collector.fetch_all(keyword=keyword, page=body.page, limit=body.limit)
     except Exception as e:
