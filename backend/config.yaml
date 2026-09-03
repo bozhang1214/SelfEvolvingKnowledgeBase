@@ -317,6 +317,10 @@ news:
     - https://www.cncf.io/feed/                      # CNCF（云原生/开源）
     - https://changelog.com/posts/feed               # Changelog（开发者工具链/开源）
     - https://techcrunch.com/feed/                   # TechCrunch（融资/商业/政策）
+    - https://www.androidcentral.com/rss.xml         # Android Central（Android/谷歌）
+    - https://blog.logrocket.com/feed/               # LogRocket（前端/React Native/Flutter）
+    - https://dev.to/feed/tag/flutter                # dev.to Flutter 标签（大前端跨端）
+    - https://dev.to/feed/tag/reactnative            # dev.to React Native 标签（大前端跨端）
     # ---- 英文（10）----
     - https://simonwillison.net/atom/everything/     # Simon Willison（LLM 工程，顶级）
     - https://openai.com/news/rss.xml                # OpenAI News
