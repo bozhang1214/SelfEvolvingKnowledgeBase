@@ -128,6 +128,29 @@ services:
           memory: 256M
           cpus: "0.5"
 
+  # ============ RSSHub（资讯日报鸿蒙/掘金/少数派等专属路由中转，内部服务）============
+  # 公共 RSSHub 实例路由残缺且不稳定，故自建；仅 backend 内部访问，不对外暴露。
+  rsshub:
+    image: diygod/rsshub:latest
+    container_name: sekb-rsshub
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      # 内存缓存，降低对上游站点的请求频率
+      CACHE_TYPE: memory
+      # 监听端口（默认 1200）
+      PORT: "1200"
+    ports:
+      # 仅绑定本机回环，供宿主机调试；backend 走容器网络 http://rsshub:1200
+      - "127.0.0.1:1200:1200"
+    networks:
+      - sekb_net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
   # ============ 可选：PostgreSQL（Phase 2 存储迁移后启用）============
   # 当前后端使用 local_json 存储，PostgreSQL 仅在迁移到 PG 后端时需要。
   # 通过 profile 控制：默认不启动，避免占用资源。
