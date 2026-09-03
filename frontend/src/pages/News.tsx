@@ -153,9 +153,7 @@ const News: React.FC = () => {
 
   const activeKey = isDaily ? currentDate : pPeriod;
   const activeDetail = isDaily ? current : pCurrent;
-  const detailTitle = isDaily
-    ? `AI 科技资讯 · ${currentDate}`
-    : `AI 科技${tab === 'weekly' ? '周报' : '月报'} · ${pPeriod}`;
+  const detailTitle = 'AI 科技资讯';
 
   return (
     <Layout style={{ minHeight: '100%' }}>

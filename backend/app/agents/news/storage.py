@@ -29,7 +29,7 @@ class NewsStorage:
     def save_daily(self, day: str, report: dict) -> str:
         """保存某天的日报，返回 Markdown 文件路径。"""
         md_path = self._dir / f"daily_{day}.md"
-        md_path.write_text(self._to_markdown(f"AI 科技资讯 · {day}", report), encoding="utf-8")
+        md_path.write_text(self._to_markdown("AI 科技资讯", report, f"日报 · {day}"), encoding="utf-8")
         # 额外落一份结构化 JSON，供周报/月报聚合使用
         json_path = self._dir / f"daily_{day}.json"
         json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -69,7 +69,7 @@ class NewsStorage:
         md_path = self._dir / f"{report_type}_{period}.md"
         label = "周报" if report_type == "weekly" else "月报"
         md_path.write_text(
-            self._to_markdown(f"AI 科技{label} · {period}", report), encoding="utf-8"
+            self._to_markdown("AI 科技资讯", report, f"{label} · {period}"), encoding="utf-8"
         )
         return str(md_path)
 
@@ -140,9 +140,12 @@ class NewsStorage:
                 continue
 
     @staticmethod
-    def _to_markdown(title: str, report: dict) -> str:
+    def _to_markdown(title: str, report: dict, subtitle: str = "") -> str:
         """把日报/周报/月报 JSON 渲染为结构清晰的 Markdown（含头条 + 总结预测 + 打分）。"""
         lines = [f"# {title}", ""]
+        if subtitle:
+            lines.append(f"> **📅 {subtitle}**")
+            lines.append("")
 
         # 头条（本周期最重要的一条，置顶）
         headline = report.get("headline") or {}
