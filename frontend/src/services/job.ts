@@ -88,3 +88,15 @@ export async function fetchJobs(payload: {
   logger.info('job_fetch_done', { keyword: payload.keyword, count: res.data.count });
   return res.data;
 }
+
+/** BOSS 扫码登录：启动，返回二维码图片 URL + qr_id。 */
+export async function bossQrStart(): Promise<{ qr_id: string; qr_image_url: string }> {
+  const res = await apiClient.post('/job/boss/qr/start');
+  return res.data;
+}
+
+/** BOSS 扫码登录：等待扫码确认，返回登录结果。 */
+export async function bossQrComplete(qr_id: string, timeoutSeconds = 180): Promise<{ ok: boolean; cookie_header?: string; reason?: string }> {
+  const res = await apiClient.post('/job/boss/qr/complete', { qr_id, timeout_seconds: timeoutSeconds });
+  return res.data;
+}

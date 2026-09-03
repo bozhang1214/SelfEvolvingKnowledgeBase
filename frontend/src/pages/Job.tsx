@@ -1,13 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List,
+  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List, Modal,
 } from 'antd';
 import {
-  ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined,
+  ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined, QrcodeOutlined,
 } from '@ant-design/icons';
 import {
   analyzeJob,
   fetchJobs,
+  bossQrStart,
+  bossQrComplete,
   type JobAnalyzeResult,
   type JobMeta,
   type FetchedJob,
@@ -131,6 +133,33 @@ const Job: React.FC = () => {
   const [fetchedJobs, setFetchedJobs] = useState<FetchedJob[]>([]);
   const [companyFilter, setCompanyFilter] = useState('');
 
+  // BOSS 扫码登录
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrImageUrl, setQrImageUrl] = useState('');
+  const [qrWaiting, setQrWaiting] = useState(false);
+
+  const handleBossQrLogin = async () => {
+    setQrOpen(true);
+    setQrWaiting(true);
+    setQrImageUrl('');
+    try {
+      const { qr_id, qr_image_url } = await bossQrStart();
+      setQrImageUrl(qr_image_url);
+      // 长轮询等待扫码确认
+      const result = await bossQrComplete(qr_id, 180);
+      if (result.ok) {
+        message.success('BOSS 登录成功，Cookie 已保存，现在可以采集 BOSS 职位了');
+        setQrOpen(false);
+      } else {
+        message.warning(result.reason || '等待扫码超时');
+      }
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || 'BOSS 扫码登录失败');
+    } finally {
+      setQrWaiting(false);
+    }
+  };
+
   const handleFetch = async () => {
     const kw = fetchKeyword.trim();
     if (!kw) {
@@ -247,6 +276,9 @@ const Job: React.FC = () => {
           />
           <Button type="primary" icon={<SearchOutlined />} loading={fetching} onClick={handleFetch}>
             采集职位
+          </Button>
+          <Button icon={<QrcodeOutlined />} onClick={handleBossQrLogin}>
+            BOSS 扫码登录
           </Button>
         </Space.Compact>
         {fetchedJobs.length > 0 && (
@@ -389,6 +421,33 @@ const Job: React.FC = () => {
           </>
         )}
       </Card>
+
+      {/* BOSS 扫码登录弹窗 */}
+      <Modal
+        title="BOSS 直聘扫码登录"
+        open={qrOpen}
+        onCancel={() => setQrOpen(false)}
+        footer={null}
+        width={360}
+      >
+        <div style={{ textAlign: 'center', padding: '12px 0' }}>
+          {qrImageUrl ? (
+            <>
+              <img src={qrImageUrl} alt="BOSS 登录二维码" style={{ width: 220, height: 220 }} />
+              <Paragraph type="secondary" style={{ marginTop: 12 }}>
+                用手机 BOSS App「扫一扫」此二维码，然后在 App 上确认登录
+              </Paragraph>
+            </>
+          ) : (
+            <Spin tip="正在生成二维码…" />
+          )}
+          {qrWaiting && qrImageUrl && (
+            <Paragraph type="secondary" style={{ marginTop: 8 }}>
+              <Spin size="small" /> 等待扫码确认中…（约 3 分钟超时）
+            </Paragraph>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 };
