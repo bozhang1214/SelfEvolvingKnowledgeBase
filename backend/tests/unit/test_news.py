@@ -154,6 +154,10 @@ class TestNewsStorage:
                     ],
                 }
             ],
+            "comprehensive": {
+                "correlation": "大模型与Agent的关联分析。",
+                "forecast": "未来半月预计有重大发布会。",
+            },
         }
         path = store.save_daily(day, report)
         assert path.endswith(f"daily_{day}.md")
@@ -174,3 +178,8 @@ class TestNewsStorage:
         assert "这是一段 150~200 字的条目摘要" in read["markdown"]
         assert "关注：" in read["markdown"]
         assert "关注建议：值得关注并跟进。" in read["markdown"]
+        assert "🔮 综合分析" in read["markdown"]
+        assert "关联分析" in read["markdown"]
+        assert "大模型与Agent的关联分析。" in read["markdown"]
+        assert "未来半月预测" in read["markdown"]
+        assert "未来半月预计有重大发布会。" in read["markdown"]

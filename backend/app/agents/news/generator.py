@@ -27,6 +27,11 @@ _HEADLINE_FALLBACK_PROMPT = """你是资深技术资讯主编，请对「今天�
 输出严格 JSON：{"analysis":"300~500字：为什么这是今天最重要的一条 + 对行业/读者的深层含义与后续走向"}。
 只基于输入，不编造。"""
 
+# 综合分析兜底提示词
+_COMPREHENSIVE_FALLBACK_PROMPT = """你是资深技术资讯主编，请对当日全部大类资讯做跨大类关联分析 + 未来半月重大事件预测。
+输出严格 JSON：{"correlation":"300~500字跨大类关联分析","forecast":"300~500字未来半月重大事件预测（3~6条）"}。
+只基于输入，不编造，预测用不确定措辞。"""
+
 
 def _resolve_prompt_path(
     explicit: str | None = None, filename: str = "daily_report.md"
@@ -69,6 +74,14 @@ class DailyReportGenerator:
             self._headline_prompt = _HEADLINE_FALLBACK_PROMPT
             logger.warning("头条分析提示词文件未找到，使用内置兜底提示词")
 
+        comprehensive_path = _resolve_prompt_path(None, "comprehensive.md")
+        if comprehensive_path:
+            self._comprehensive_prompt = comprehensive_path.read_text(encoding="utf-8")
+            logger.info("已加载综合分析提示词", path=str(comprehensive_path))
+        else:
+            self._comprehensive_prompt = _COMPREHENSIVE_FALLBACK_PROMPT
+            logger.warning("综合分析提示词文件未找到，使用内置兜底提示词")
+
     async def generate(
         self,
         items: list[dict],
@@ -103,10 +116,18 @@ class DailyReportGenerator:
         # 3. 选出当天最重要的一条作为「头条」并深度分析
         headline = await self._generate_headline(sections, items, role)
 
+        # 4. 篇尾综合分析：跨大类关联分析 + 未来半月重大事件预测
+        comprehensive = await self._generate_comprehensive(headline, sections, role)
+
         total = sum(len(s.get("items", [])) for s in sections)
         logger.info("逐类生成完成", section_count=len(sections), total_items=total,
-                    headline=bool(headline))
-        return {"headline": headline, "sections": sections, "total_count": total}
+                    headline=bool(headline), comprehensive=bool(comprehensive))
+        return {
+            "headline": headline,
+            "sections": sections,
+            "comprehensive": comprehensive,
+            "total_count": total,
+        }
 
     # ---------- 分类 ----------
 
@@ -244,6 +265,49 @@ class DailyReportGenerator:
         except Exception as e:  # noqa: BLE001
             logger.error("头条分析生成失败", error=str(e)[:200])
             return ""
+
+    # ---------- 综合分析 ----------
+
+    async def _generate_comprehensive(
+        self, headline: dict | None, sections: list[dict], role: str
+    ) -> dict:
+        """生成篇尾综合分析：跨大类关联分析 + 未来半月重大事件预测。"""
+        context = {
+            "headline": (
+                {
+                    "title": headline.get("title", ""),
+                    "importance": headline.get("importance"),
+                    "analysis": headline.get("analysis", ""),
+                }
+                if headline else None
+            ),
+            "categories": [
+                {"category": s.get("category", ""), "summary": s.get("summary", "")}
+                for s in sections
+            ],
+        }
+        messages = [
+            SystemMessage(content=self._comprehensive_prompt),
+            HumanMessage(
+                content=(
+                    f"以下是当日日报的头条与各分类总结：\n"
+                    f"{json.dumps(context, ensure_ascii=False)}\n\n"
+                    "请做跨大类关联分析 + 未来半月重大事件预测。"
+                )
+            ),
+        ]
+        try:
+            llm = self._llm_factory.get(role)
+            resp = await llm.ainvoke(messages)
+            raw = resp.content if hasattr(resp, "content") else str(resp)
+            parsed = self._parse_json(raw)
+            return {
+                "correlation": (parsed.get("correlation") or "").strip(),
+                "forecast": (parsed.get("forecast") or "").strip(),
+            }
+        except Exception as e:  # noqa: BLE001
+            logger.error("综合分析生成失败", error=str(e)[:200])
+            return {}
 
     # ---------- 解析 ----------
 

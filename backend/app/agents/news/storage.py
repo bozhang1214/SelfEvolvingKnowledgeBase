@@ -148,4 +148,16 @@ class NewsStorage:
                 if link:
                     lines.append(f"- 🔗 [原文链接]({link})")
                 lines.append("")
+
+        # 篇尾综合分析：跨大类关联分析 + 未来半月预测
+        comp = report.get("comprehensive") or {}
+        if comp.get("correlation") or comp.get("forecast"):
+            lines.append("## 🔮 综合分析 · 未来半月展望")
+            lines.append("")
+            if comp.get("correlation"):
+                lines.append(f"> **🔗 关联分析**：{comp.get('correlation')}")
+                lines.append("")
+            if comp.get("forecast"):
+                lines.append(f"> **🔮 未来半月预测**：{comp.get('forecast')}")
+                lines.append("")
         return "\n".join(lines)
