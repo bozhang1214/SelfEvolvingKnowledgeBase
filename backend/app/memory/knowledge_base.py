@@ -381,6 +381,19 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
             metadata=new_meta,
         )
 
+    async def update_metadata(self, entry_id: str, metadata_updates: dict[str, Any]) -> None:
+        """仅更新元数据（不重新嵌入向量），用于重分类/系列归组等元数据变更。"""
+        self._ensure_initialized()
+        existing = await asyncio.to_thread(self._collection.get, ids=[entry_id])
+        if not existing["ids"]:
+            return
+        old_meta = existing["metadatas"][0] if existing["metadatas"] else {}
+        new_meta = {**old_meta, **metadata_updates}
+        new_meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+        await asyncio.to_thread(
+            self._collection.update, ids=[entry_id], metadatas=[new_meta]
+        )
+
     async def delete(self, entry_id: str) -> None:
         """删除知识条目。"""
         oid = _op_id()

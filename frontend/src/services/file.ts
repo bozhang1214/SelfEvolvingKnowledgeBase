@@ -70,7 +70,8 @@ export function uploadFile(
  */
 export function uploadFilePromise(
   file: File,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  overwrite = false
 ): { promise: Promise<UploadResult>; abort: () => void } {
   let xhrRef: XMLHttpRequest | null = null;
   const promise = new Promise<UploadResult>((resolve, reject) => {
@@ -78,7 +79,8 @@ export function uploadFilePromise(
       file,
       (pct) => onProgress?.(pct),
       (result) => resolve(result),
-      (error, httpStatus) => reject(Object.assign(new Error(error), { httpStatus }))
+      (error, httpStatus) => reject(Object.assign(new Error(error), { httpStatus })),
+      overwrite
     );
   });
   return {
@@ -94,7 +96,8 @@ function _uploadFileXHR(
   file: File,
   onProgress: (percent: number) => void,
   onDone: (info: UploadResult) => void,
-  onError: (error: string, httpStatus: number) => void
+  onError: (error: string, httpStatus: number) => void,
+  overwrite = false
 ): XMLHttpRequest {
   const xhr = new XMLHttpRequest();
   const formData = new FormData();
@@ -180,10 +183,13 @@ function _uploadFileXHR(
   };
 
   // 构造 URL（与 api.ts 的 baseURL 对齐逻辑）
-  const uploadUrl =
+  let uploadUrl =
     import.meta.env.PROD && import.meta.env.VITE_API_BASE
       ? `${import.meta.env.VITE_API_BASE}/api/v1/upload`
       : '/api/v1/upload';
+  if (overwrite) {
+    uploadUrl += '?overwrite=true';
+  }
 
   xhr.open('POST', uploadUrl);
   xhr.timeout = 120_000;  // 2 分钟超时，大文件保护
@@ -222,4 +228,50 @@ export async function deleteEntry(entryId: string): Promise<void> {
 export async function listSeries(): Promise<SeriesGroup[]> {
   const res = await apiClient.get<{ series: SeriesGroup[] }>('/upload/series');
   return res.data.series || [];
+}
+
+/** 历史已上传文件信息（GET /api/v1/upload/files）。 */
+export interface UploadedFile {
+  file_name: string;
+  source: string;
+  chunk_count: number;
+  category: { l1: string; l2: string; l3: string; confidence: number } | null;
+  series: string;
+  uploaded_at: string;
+}
+
+/**
+ * 列出历史已上传文件（跨会话持久）。
+ * 后端接口：GET /api/v1/upload/files
+ */
+export async function listFiles(): Promise<UploadedFile[]> {
+  const res = await apiClient.get<{ files: UploadedFile[] }>('/upload/files');
+  return res.data.files || [];
+}
+
+/** 知识库自动分析与分类结果（POST /api/v1/upload/analyze）。 */
+export interface KnowledgeAnalysis {
+  total_entries: number;
+  document_files: number;
+  category_distribution: { category: string; count: number }[];
+  files: string[];
+  overview: string;
+}
+
+/**
+ * 对当前知识库做自动分析与分类。
+ * 后端接口：POST /api/v1/upload/analyze
+ */
+export async function analyzeKnowledgeBase(): Promise<KnowledgeAnalysis> {
+  const res = await apiClient.post<KnowledgeAnalysis>('/upload/analyze');
+  return res.data;
+}
+
+/**
+ * 对当前知识库的所有文档重新分类。
+ * 后端接口：POST /api/v1/upload/reclassify
+ */
+export async function reclassifyFiles(): Promise<{ files_reclassified: number; entries_updated: number }> {
+  const res = await apiClient.post('/upload/reclassify');
+  return res.data;
 }

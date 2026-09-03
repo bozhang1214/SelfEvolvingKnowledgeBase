@@ -1,12 +1,16 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag,
+  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List,
 } from 'antd';
-import { ThunderboltOutlined, ClearOutlined, FileSearchOutlined } from '@ant-design/icons';
+import {
+  ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined,
+} from '@ant-design/icons';
 import {
   analyzeJob,
+  fetchJobs,
   type JobAnalyzeResult,
   type JobMeta,
+  type FetchedJob,
 } from '@/services/job';
 
 const { Text, Paragraph } = Typography;
@@ -121,6 +125,50 @@ const Job: React.FC = () => {
   const [result, setResult] = useState<JobAnalyzeResult | null>(null);
   const [activeTab, setActiveTab] = useState<SectionKey>('job_analysis');
 
+  // 职位采集（猎聘）
+  const [fetchKeyword, setFetchKeyword] = useState('');
+  const [fetching, setFetching] = useState(false);
+  const [fetchedJobs, setFetchedJobs] = useState<FetchedJob[]>([]);
+
+  const handleFetch = async () => {
+    const kw = fetchKeyword.trim();
+    if (!kw) {
+      message.warning('请输入采集关键词');
+      return;
+    }
+    setFetching(true);
+    setFetchedJobs([]);
+    try {
+      const data = await fetchJobs({ keyword: kw });
+      setFetchedJobs(data.jobs);
+      if (data.jobs.length === 0) {
+        message.info('未采集到职位（接口可能被限流或关键词无结果）');
+      } else {
+        message.success(`采集到 ${data.count} 个职位`);
+      }
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '职位采集失败');
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  /** 点击采集到的职位：有 JD 文本则填入分析框，否则跳转原链接 */
+  const handlePickJob = (job: FetchedJob) => {
+    if (job.jd_text && job.jd_text.trim()) {
+      setJdText(job.jd_text);
+      setMeta({ company: job.company, position: job.title, city: job.city, salary: job.salary });
+      message.success('已填入职位描述，请点击「开始分析」');
+    } else {
+      if (job.job_url) {
+        window.open(job.job_url, '_blank');
+        message.info('该职位未返回 JD 文本，已打开职位详情页，请复制 JD 粘贴到上方分析框');
+      } else {
+        message.warning('该职位缺少 JD 文本，请手动粘贴职位描述');
+      }
+    }
+  };
+
   const handleAnalyze = async () => {
     const text = jdText.trim();
     if (!text) {
@@ -176,6 +224,66 @@ const Job: React.FC = () => {
 
   return (
     <div style={{ padding: 24, overflow: 'auto', background: '#fff', minHeight: '100%' }}>
+      {/* 职位采集（猎聘公开接口） */}
+      <Card
+        title={
+          <Space>
+            <SearchOutlined />
+            <Text strong>职位采集</Text>
+            <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
+              从猎聘采集真实职位（免登录），点击职位自动填入下方分析框
+            </Text>
+          </Space>
+        }
+        style={{ maxWidth: 1080, margin: '0 auto 16px' }}
+      >
+        <Space.Compact style={{ width: '100%' }}>
+          <Input
+            placeholder="采集关键词，如：AI Agent / 大模型应用工程师 / LangGraph"
+            value={fetchKeyword}
+            onChange={(e) => setFetchKeyword(e.target.value)}
+            onPressEnter={handleFetch}
+          />
+          <Button type="primary" icon={<SearchOutlined />} loading={fetching} onClick={handleFetch}>
+            采集职位
+          </Button>
+        </Space.Compact>
+        {fetchedJobs.length > 0 && (
+          <List
+            size="small"
+            style={{ marginTop: 12 }}
+            dataSource={fetchedJobs}
+            renderItem={(job) => (
+              <List.Item
+                key={job.job_id || `${job.title}-${job.company}`}
+                onClick={() => handlePickJob(job)}
+                style={{ cursor: 'pointer' }}
+                actions={[
+                  <Button key="pick" size="small" type="link">
+                    {job.jd_text ? '填入分析' : '打开详情'}
+                  </Button>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={
+                    <Space size={8}>
+                      <Text strong>{job.title}</Text>
+                      <Tag color="blue">{job.salary || '面议'}</Tag>
+                    </Space>
+                  }
+                  description={
+                    <Space size={8}>
+                      <Text type="secondary">{job.company}</Text>
+                      {job.city && <Text type="secondary">{job.city}</Text>}
+                    </Space>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        )}
+      </Card>
+
       <Card
         title={
           <Space>

@@ -231,14 +231,23 @@ async def _process_and_ingest(
     file_path: str,
     file_name: str,
     user_id: str,
+    overwrite: bool = False,
 ) -> UploadResponse:
     """
     执行 解析 → 分块 → 入库 完整流程并构造响应。
 
     被 POST /api/v1/upload 主流程与 BackgroundTasks 后台任务共用。
     图片文件会额外保存原图到持久化目录。
+    overwrite=True 时，先删除同名旧文件的全部条目再入库（覆盖）。
     """
     vector_store = _require_vector_store(ctx)
+
+    # 覆盖上传：删除同名旧文件条目
+    if overwrite:
+        deleted = await _delete_entries_by_source_id(ctx, user_id, file_name)
+        if deleted:
+            logger.info("覆盖上传：已删除旧文件条目", file_name=file_name, deleted=deleted)
+
     image_config = _get_image_config()
     processor = FileProcessor(image_config=image_config)
 
@@ -331,11 +340,31 @@ async def _process_and_ingest(
     )
 
 
+async def _delete_entries_by_source_id(
+    ctx: AppContext, user_id: str, source_id: str
+) -> int:
+    """删除某个 source_id（文件名）下 document/image 来源的全部条目，返回删除数量。"""
+    try:
+        entries = await ctx.knowledge_base.list_entries(user_id=user_id, limit=5000)
+    except Exception as e:
+        logger.warning("查询同名文件条目失败，跳过覆盖删除", error=str(e))
+        return 0
+    ids = [
+        e.entry_id
+        for e in entries
+        if e.source_id == source_id and e.source in (_DOCUMENT_SOURCE, _IMAGE_SOURCE)
+    ]
+    if ids:
+        await ctx.knowledge_base.delete_batch(ids)
+    return len(ids)
+
+
 async def _background_ingest(
     ctx: AppContext,
     file_path: str,
     file_name: str,
     user_id: str,
+    overwrite: bool = False,
 ) -> None:
     """
     后台异步处理大文件入库任务。
@@ -348,6 +377,7 @@ async def _background_ingest(
             file_path=file_path,
             file_name=file_name,
             user_id=user_id,
+            overwrite=overwrite,
         )
     except Exception as e:
         logger.error(
@@ -406,6 +436,10 @@ async def upload_file(
         default=False,
         description="是否后台异步处理（大文件建议开启）",
     ),
+    overwrite: bool = Query(
+        default=False,
+        description="是否覆盖同名旧文件（true 时先删除旧条目再入库）",
+    ),
     user_id: str = Depends(get_current_user),
 ) -> UploadResponse:
     """
@@ -417,6 +451,7 @@ async def upload_file(
         3. 删除临时文件并返回上传结果
 
     若 ``async_process=true``，立即返回占位响应，实际入库在后台执行。
+    若 ``overwrite=true``，先删除同名旧文件的条目再入库（覆盖）。
     """
     ctx: AppContext = get_app_context()
     _require_vector_store(ctx)
@@ -467,6 +502,7 @@ async def upload_file(
             file_path=tmp_path,
             file_name=file_name,
             user_id=user_id,
+            overwrite=overwrite,
         )
         return UploadResponse(
             file_name=file_name,
@@ -484,6 +520,7 @@ async def upload_file(
             file_path=tmp_path,
             file_name=file_name,
             user_id=user_id,
+            overwrite=overwrite,
         )
     except HTTPException:
         raise
@@ -656,3 +693,176 @@ async def list_series(
         })
     result.sort(key=lambda x: x["series"])
     return {"series": result}
+
+
+@router.get("/files")
+async def list_files(user_id: str = Depends(get_current_user)) -> dict[str, Any]:
+    """
+    列出历史已上传文件（按文件名归组，跨会话持久）。
+
+    从 document/image 来源的条目中，按 source_id（原文件名）归组，
+    返回文件名、来源类型、分块数、自动分类、系列名、首次入库时间。
+    """
+    ctx: AppContext = get_app_context()
+    _require_vector_store(ctx)
+
+    try:
+        entries = await ctx.knowledge_base.list_entries(user_id=user_id, limit=5000)
+    except Exception as e:
+        logger.error("列出文件历史失败", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"查询文件历史失败: {e}",
+        ) from e
+
+    files: dict[str, dict[str, Any]] = {}
+    for e in entries:
+        if e.source not in (_DOCUMENT_SOURCE, _IMAGE_SOURCE):
+            continue
+        fname = e.source_id or "(未命名)"
+        f = files.setdefault(fname, {
+            "file_name": fname,
+            "source": e.source,
+            "chunk_count": 0,
+            "category": None,
+            "series": e.series or "",
+            "uploaded_at": e.created_at,
+        })
+        f["chunk_count"] += 1
+        if f["category"] is None:
+            f["category"] = {
+                "l1": e.category_l1,
+                "l2": e.category_l2,
+                "l3": e.category_l3,
+                "confidence": e.category_confidence,
+            }
+
+    result = sorted(files.values(), key=lambda x: x.get("uploaded_at", ""), reverse=True)
+    return {"files": result, "count": len(result)}
+
+
+@router.post("/reclassify")
+async def reclassify_files(user_id: str = Depends(get_current_user)) -> dict[str, Any]:
+    """
+    对当前知识库的所有文档文件重新执行自动分类 + 系列识别。
+
+    按 source_id（文件名）归组，用文件名 + 首块内容重新分类，
+    并把新的分类（l1/l2/l3）与系列名更新到该文件的所有分块元数据。
+    """
+    from app.services.series import detect_series
+
+    ctx: AppContext = get_app_context()
+    _require_vector_store(ctx)
+
+    try:
+        entries = await ctx.knowledge_base.list_entries(
+            user_id=user_id, source=_DOCUMENT_SOURCE, limit=5000
+        )
+    except Exception as e:
+        logger.error("重分类失败：查询条目异常", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"查询条目失败: {e}",
+        ) from e
+
+    by_file: dict[str, list[Any]] = {}
+    for e in entries:
+        by_file.setdefault(e.source_id or "(未命名)", []).append(e)
+
+    reclassified = 0
+    for fname, chunk_entries in by_file.items():
+        sample = chunk_entries[0].content if chunk_entries else ""
+        category = await _classify_document(ctx, [sample], fname)
+        series_info = detect_series(fname)
+        series_name = str(series_info["series"]) if series_info["is_series"] else ""
+        updates = {
+            "category_l1": category.get("l1", "其他"),
+            "category_l2": category.get("l2", "待分类"),
+            "category_l3": category.get("l3", "未分类"),
+            "category_confidence": float(category.get("confidence", 0.0) or 0.0),
+            "category_source": "auto",
+            "series": series_name,
+        }
+        for e in chunk_entries:
+            try:
+                await ctx.knowledge_base.update_metadata(e.entry_id, updates)
+            except Exception as ex:
+                logger.warning("更新条目分类失败", entry_id=e.entry_id, error=str(ex))
+        reclassified += 1
+
+    logger.info("知识库重分类完成", files=reclassified, entries=len(entries))
+    return {"files_reclassified": reclassified, "entries_updated": len(entries)}
+
+
+@router.post("/analyze")
+async def analyze_knowledge_base(user_id: str = Depends(get_current_user)) -> dict[str, Any]:
+    """
+    对当前知识库做自动分析与分类。
+
+    1. 重新分类（复用 reclassify 逻辑）
+    2. 统计分类分布（按 l1 大类）
+    3. 用 LLM 生成知识库概览（覆盖主题、结构、缺口）
+    """
+    ctx: AppContext = get_app_context()
+    _require_vector_store(ctx)
+
+    try:
+        entries = await ctx.knowledge_base.list_entries(user_id=user_id, limit=5000)
+    except Exception as e:
+        logger.error("知识库分析失败：查询条目异常", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"查询条目失败: {e}",
+        ) from e
+
+    # 分类分布（按 l1）
+    dist: dict[str, int] = {}
+    for e in entries:
+        if e.source == "conversation":
+            continue
+        l1 = e.category_l1 or "其他"
+        dist[l1] = dist.get(l1, 0) + 1
+
+    doc_entries = [e for e in entries if e.source == _DOCUMENT_SOURCE]
+    file_names = sorted({e.source_id for e in doc_entries if e.source_id})
+
+    # LLM 概览（失败降级为纯统计）
+    overview = ""
+    try:
+        overview = await _generate_kb_overview(ctx, dist, file_names)
+    except Exception as e:
+        logger.warning("知识库 LLM 概览生成失败，降级为纯统计", error=str(e))
+
+    return {
+        "total_entries": len(entries),
+        "document_files": len(file_names),
+        "category_distribution": [
+            {"category": k, "count": v} for k, v in sorted(dist.items(), key=lambda x: -x[1])
+        ],
+        "files": file_names[:200],
+        "overview": overview,
+    }
+
+
+async def _generate_kb_overview(
+    ctx: AppContext, dist: dict[str, int], file_names: list[str]
+) -> str:
+    """用 LLM 生成知识库概览（覆盖主题/结构/缺口）。"""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    prompt = (
+        "你是知识库分析助手。根据给定信息，用 3~6 句话概括这个知识库："
+        "主要覆盖哪些主题、结构是否均衡、存在哪些明显缺口，以及可补强的方向。"
+        "直接输出纯文本，不要用列表或 markdown 标题。"
+    )
+    payload = (
+        f"分类分布（大类 → 条目数）：{json.dumps(dist, ensure_ascii=False)}\n"
+        f"已上传文件（前 200 个）：{', '.join(file_names[:200])}"
+    )
+    llm = ctx.llm_factory.get("job_analysis")
+    resp = await llm.ainvoke([
+        SystemMessage(content=prompt),
+        HumanMessage(content=payload),
+    ])
+    raw = resp.content if hasattr(resp, "content") else str(resp)
+    return raw.strip()

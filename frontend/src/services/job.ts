@@ -54,3 +54,32 @@ export async function analyzeJob(payload: JobAnalyzeRequest): Promise<JobAnalyze
   });
   return res.data;
 }
+
+/** 采集到的单个职位。 */
+export interface FetchedJob {
+  job_id: string;
+  title: string;
+  company: string;
+  salary: string;
+  city: string;
+  job_url: string;
+  jd_text: string;
+}
+
+export interface JobFetchResult {
+  keyword: string;
+  count: number;
+  jobs: FetchedJob[];
+}
+
+/** 从猎聘采集真实职位列表。 */
+export async function fetchJobs(payload: {
+  keyword: string;
+  city?: string;
+  page?: number;
+  limit?: number;
+}): Promise<JobFetchResult> {
+  const res = await apiClient.post<JobFetchResult>('/job/fetch', payload);
+  logger.info('job_fetch_done', { keyword: payload.keyword, count: res.data.count });
+  return res.data;
+}

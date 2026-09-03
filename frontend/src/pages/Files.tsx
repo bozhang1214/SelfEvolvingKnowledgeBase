@@ -1,13 +1,19 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Upload, Button, Typography, message, Progress, Space, Tag, Alert, Card, Statistic, Row, Col } from 'antd';
-import { InboxOutlined, FileOutlined, FileImageOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
+import { Upload, Button, Typography, message, Progress, Space, Tag, Alert, Card, Statistic, Row, Col, Modal, List } from 'antd';
+import {
+  InboxOutlined, FileOutlined, FileImageOutlined, ReloadOutlined, StopOutlined, RadarChartOutlined,
+} from '@ant-design/icons';
 import {
   uploadFilePromise,
   getKnowledgeStatus,
   listSeries,
+  listFiles,
+  analyzeKnowledgeBase,
   type UploadResult,
   type KnowledgeStatus,
   type SeriesGroup,
+  type UploadedFile,
+  type KnowledgeAnalysis,
 } from '@/services/file';
 import { logger } from '@/utils/logger';
 
@@ -105,6 +111,10 @@ const Files: React.FC = () => {
   const [statusLoading, setStatusLoading] = useState(false);
   const [seriesGroups, setSeriesGroups] = useState<SeriesGroup[]>([]);
   const [seriesLoading, setSeriesLoading] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [analysis, setAnalysis] = useState<KnowledgeAnalysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
   const abortRef = useRef(false);
 
   const loadStatus = async () => {
@@ -131,9 +141,37 @@ const Files: React.FC = () => {
     }
   };
 
+  const loadFiles = async () => {
+    setFilesLoading(true);
+    try {
+      const data = await listFiles();
+      setUploadedFiles(data);
+    } catch (err: any) {
+      logger.warn('load_files_failed', { msg: err?.message });
+    } finally {
+      setFilesLoading(false);
+    }
+  };
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true);
+    try {
+      const data = await analyzeKnowledgeBase();
+      setAnalysis(data);
+      message.success(`分析完成：${data.document_files} 个文件，${data.total_entries} 个条目`);
+      loadFiles();
+      loadSeries();
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '知识库分析失败');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
   useEffect(() => {
     loadStatus();
     loadSeries();
+    loadFiles();
   }, []);
 
   /** 批量上传入口：处理 antd Upload 选择的文件列表 */
@@ -142,6 +180,36 @@ const Files: React.FC = () => {
     if (supported.length === 0) {
       message.warning('未选择支持的文件类型');
       return false;
+    }
+
+    // 去重检查：识别已上传过的同名文件，询问用户取消还是覆盖
+    let existingNames = new Set<string>();
+    try {
+      const existing = await listFiles();
+      existingNames = new Set(existing.map((f) => f.file_name));
+    } catch {
+      // listFiles 失败不阻断上传，按非重复处理
+    }
+    const duplicates = supported.filter((f) => existingNames.has(f.name));
+    let overwrite = false;
+    if (duplicates.length > 0) {
+      const names = duplicates.map((d) => d.name).slice(0, 6).join('、');
+      const more = duplicates.length > 6 ? ` 等 ${duplicates.length} 个` : '';
+      const choice = await new Promise<'overwrite' | 'cancel'>((resolve) => {
+        Modal.confirm({
+          title: '发现已上传过的文件',
+          content: `以下 ${duplicates.length} 个文件已存在于知识库：${names}${more}。是否覆盖旧文件？（覆盖会删除旧版本再重新入库）`,
+          okText: '覆盖旧文件',
+          cancelText: '取消上传',
+          onOk: () => resolve('overwrite'),
+          onCancel: () => resolve('cancel'),
+        });
+      });
+      if (choice === 'cancel') {
+        message.info('已取消上传');
+        return false;
+      }
+      overwrite = true;
     }
 
     // 初始化任务列表
@@ -182,11 +250,12 @@ const Files: React.FC = () => {
       ));
 
       try {
+        const isDup = existingNames.has(task.file.name);
         const { promise } = uploadFilePromise(task.file, (pct) => {
           setTasks((prev) => prev.map((t) =>
             t.uid === task.uid ? { ...t, progress: pct } : t
           ));
-        });
+        }, overwrite && isDup);
 
         const result = await promise;
 
@@ -238,9 +307,10 @@ const Files: React.FC = () => {
       message.error(`全部 ${total} 个文件上传失败`);
     }
 
-    // 刷新知识库状态与系列分组
+    // 刷新知识库状态、系列分组与文件历史
     loadStatus();
     loadSeries();
+    loadFiles();
     return false;  // 阻止 antd 默认上传
   };
 
@@ -317,14 +387,23 @@ const Files: React.FC = () => {
             />
           </Col>
           <Col span={12} style={{ textAlign: 'right' }}>
-            <Button
-              icon={<ReloadOutlined />}
-              onClick={loadStatus}
-              loading={statusLoading}
-              type="text"
-            >
-              刷新
-            </Button>
+            <Space>
+              <Button
+                icon={<RadarChartOutlined />}
+                onClick={handleAnalyze}
+                loading={analyzing}
+              >
+                知识库分析
+              </Button>
+              <Button
+                icon={<ReloadOutlined />}
+                onClick={() => { loadStatus(); loadFiles(); loadSeries(); }}
+                loading={statusLoading}
+                type="text"
+              >
+                刷新
+              </Button>
+            </Space>
           </Col>
         </Row>
       </Card>
@@ -534,6 +613,68 @@ const Files: React.FC = () => {
               </div>
             ))}
           </div>
+        )}
+      </Card>
+
+      {/* 知识库分析结果 */}
+      {analysis && (
+        <Card size="small" title="知识库分析结果" style={{ marginTop: 16 }}>
+          <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
+            {analysis.category_distribution.map((c) => (
+              <Tag key={c.category} color="geekblue">
+                {c.category} × {c.count}
+              </Tag>
+            ))}
+          </Space>
+          {analysis.overview && (
+            <Alert type="info" message="概览" description={analysis.overview} style={{ marginBottom: 8 }} />
+          )}
+          <Text type="secondary">
+            共 {analysis.document_files} 个文件、{analysis.total_entries} 个条目
+          </Text>
+        </Card>
+      )}
+
+      {/* 已上传文件历史（跨会话持久） */}
+      <Card
+        size="small"
+        title={`已上传文件 (${uploadedFiles.length})`}
+        loading={filesLoading}
+        style={{ marginTop: 16 }}
+      >
+        {uploadedFiles.length === 0 ? (
+          <Text type="secondary">暂无已上传文件</Text>
+        ) : (
+          <List
+            size="small"
+            dataSource={uploadedFiles}
+            renderItem={(f) => (
+              <List.Item
+                key={f.file_name}
+                actions={[
+                  <Tag key="c" color="purple" style={{ fontSize: 11 }}>
+                    {f.category ? `${f.category.l1}/${f.category.l2}/${f.category.l3}` : '未分类'}
+                  </Tag>,
+                  f.series && <Tag key="s" color="gold" style={{ fontSize: 11 }}>📚 {f.series}</Tag>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={
+                    <Space size={8}>
+                      {f.source === 'image' ? <FileImageOutlined /> : <FileOutlined />}
+                      <Text>{f.file_name}</Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>{f.chunk_count} 块</Text>
+                    </Space>
+                  }
+                  description={
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {f.uploaded_at ? new Date(f.uploaded_at).toLocaleString('zh-CN') : ''}
+                    </Text>
+                  }
+                />
+              </List.Item>
+            )}
+          />
         )}
       </Card>
     </div>
