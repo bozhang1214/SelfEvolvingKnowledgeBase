@@ -36,9 +36,27 @@
 - 城市：北京（客户端按 `city` 前缀过滤；猎聘码 `010`）
 - 薪资：月薪 ≥ 50K（客户端解析 `job.salary` 字符串过滤；猎聘服务端薪资字段不生效）
 
+## BOSS 直聘关注重点（登录后接入时用）
+
+> 大厂（字节/阿里/腾讯/百度/小米/京东/大疆/小红书/DeepSeek）已通过各自官网渠道覆盖，BOSS 上**重点抓非大厂的 AI/智能驾驶/具身智能创业公司**。
+
+- **重点公司**：智谱、阶跃星辰、月之暗面（Kimi/Moonshot AI）、MiniMax、零一万物、百川智能、面壁智能、无问芯穹、昆仑万维、商汤、旷视、地平线、Momenta、小马智行、文远知行、图森未来、宇树科技、智元机器人、银河通用、星动纪元 等
+- **关键词**：AI、大模型、Agent、智能驾驶、具身智能、机器人、自动驾驶
+- **排除**：字节跳动、阿里巴巴、腾讯、百度、小米、京东、大疆、小红书、深度求索
+
+## MCP / 其他免登录方式调研（需登录的京东/BOSS）
+
+| 渠道 | 是否有 MCP/公开接口 | 结论 |
+|------|-------------------|------|
+| BOSS直聘 | 有 MCP（[boss-mcp-job-hunting](https://github.com/lemonskiller/boss-mcp-job-hunting)、[mcp-bosszp](https://github.com/mucsbr/mcp-bosszp)） | 但都基于 **Playwright + 需你登录后的 Cookie**（`import_boss_cookies`）或扫码；**无真正免登录方式** |
+| BOSS直聘/智联/51job 聚合 | 有 [mergedao/mcp-jobs](https://github.com/mergedao/mcp-jobs)（猎聘/Boss/智联/51job） | 仍是聚合 MCP，BOSS/智联/51job 各自受登录/签名/WAF 限制，**不解决免登录** |
+| 京东社招 | 未找到公开 MCP | 需逆向动态 sign，无免登录方式 |
+
+> 结论：BOSS/京东**没有免登录的公开 API 或 MCP**。要接入 BOSS，需你提供登录 Cookie（BOSS 的 `__zp_stoken__` 等），可用 `boss-mcp-job-hunting` 的 `import_boss_cookies` 方式导入；京东建议放弃自动化、改用手动粘贴 JD。
+
 ## 实现状态
 
 - [x] 猎聘（已打通）
-- [ ] 字节 / 阿里 / 腾讯 / 百度 / 小米 / 小红书（6 家免登录明文 JSON，待接入）
+- [x] 字节 / 阿里 / 腾讯 / 百度 / 小米 / 小红书（6 家免登录明文 JSON，已接入）
 - [ ] 大疆 / DeepSeek（mokahr AES 解密，待接入，需加 AES 依赖）
-- [x] 京东 / BOSS（文档标注需登录/逆向，不接入）
+- [x] 京东 / BOSS（需登录/逆向，文档标注；BOSS 需你提供 Cookie 后可用 MCP 接入）
