@@ -116,12 +116,15 @@ class NewsStorage:
                 title = item.get("title", "")
                 source = item.get("source", "")
                 abstract = item.get("abstract", "") or item.get("one_liner", "")
+                attention = item.get("attention", "") or item.get("why_matters", "")
                 link = item.get("link", "")
                 score = item.get("importance")
                 score_tag = f" ⭐{score}" if isinstance(score, (int, float)) else ""
                 lines.append(f"**{i}. {title}**（{source}）{score_tag}")
                 if abstract:
                     lines.append(f"- 摘要：{abstract}")
+                if attention:
+                    lines.append(f"- 关注：{attention}")
                 if link:
                     lines.append(f"- 🔗 [原文链接]({link})")
                 lines.append("")
