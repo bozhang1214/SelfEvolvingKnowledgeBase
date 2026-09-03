@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -102,26 +103,58 @@ class DailyReportGenerator:
 
     # ---------- 单类生成 ----------
 
+    # 单类输入条目上限：降低 token 成本，并减少内容风控误判概率
+    _MAX_ITEMS_PER_CATEGORY = 30
+    # 单类生成最大尝试次数（内容风控多为偶发，重试常可绕过）
+    _MAX_ATTEMPTS = 3
+
     async def _generate_category(
         self, category_name: str, items: list[dict], role: str
     ) -> dict:
-        """调用 LLM 生成单类的总结预测 + 打分条目。"""
+        """调用 LLM 生成单类的总结预测 + 打分条目（带重试与降噪回退）。"""
         prompt = self._system_prompt.replace("{{category}}", category_name)
+        items = items[: self._MAX_ITEMS_PER_CATEGORY]
+
+        llm = self._llm_factory.get(role)
+        last_error = ""
+        for attempt in range(1, self._MAX_ATTEMPTS + 1):
+            messages = self._build_messages(category_name, items, prompt)
+            try:
+                resp = await llm.ainvoke(messages)
+                raw = resp.content if hasattr(resp, "content") else str(resp)
+                parsed = self._parse_json(raw)
+                if parsed and parsed.get("items"):
+                    return parsed
+                last_error = "非 JSON 输出或无条目"
+            except Exception as e:
+                last_error = str(e)
+                # 内容风控（Content Exists Risk 等）偶发，重试时降噪：仅保留标题/来源/链接
+                if "content exists risk" in last_error.lower() or " 400" in last_error:
+                    items = [
+                        {k: it.get(k) for k in ("title", "source", "link", "published")}
+                        for it in items
+                    ]
+            if attempt < self._MAX_ATTEMPTS:
+                logger.warning(
+                    "大类生成失败，重试", category=category_name,
+                    attempt=attempt, error=last_error[:200],
+                )
+                await asyncio.sleep(2 * attempt)
+        logger.error("大类生成最终失败", category=category_name, error=last_error[:200])
+        return {}
+
+    @staticmethod
+    def _build_messages(category_name: str, items: list[dict], prompt: str) -> list:
         items_json = json.dumps(items, ensure_ascii=False)
-        messages = [
+        return [
             SystemMessage(content=prompt),
             HumanMessage(
-                content=f"以下是「{category_name}」大类下的资讯条目：\n{items_json}\n\n请生成总结预测 + 精选打分条目。"
+                content=(
+                    f"以下是「{category_name}」大类下的资讯条目：\n{items_json}\n\n"
+                    "请生成总结预测 + 精选打分条目。"
+                )
             ),
         ]
-        try:
-            llm = self._llm_factory.get(role)
-            resp = await llm.ainvoke(messages)
-            raw = resp.content if hasattr(resp, "content") else str(resp)
-        except Exception as e:
-            logger.error("大类生成失败", category=category_name, error=str(e))
-            return {}
-        return self._parse_json(raw)
 
     # ---------- 解析 ----------
 
