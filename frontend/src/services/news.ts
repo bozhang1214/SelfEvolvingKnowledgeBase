@@ -43,3 +43,35 @@ export async function refreshNews(): Promise<NewsRefreshResult> {
   logger.info('news_refresh_triggered');
   return res.data;
 }
+
+// ============ 周报 / 月报 ============
+
+export type PeriodicType = 'weekly' | 'monthly';
+
+export interface PeriodicReportMeta {
+  type: PeriodicType;
+  period: string;
+  path: string;
+}
+
+export interface PeriodicReport extends PeriodicReportMeta {
+  markdown?: string;
+}
+
+/** 列出周报/月报。 */
+export async function listPeriodic(type: PeriodicType): Promise<PeriodicReportMeta[]> {
+  const res = await apiClient.get<{ reports: PeriodicReportMeta[] }>(`/news/${type}`);
+  return res.data.reports || [];
+}
+
+/** 读取某期周报/月报。 */
+export async function getPeriodic(type: PeriodicType, period: string): Promise<PeriodicReport> {
+  const res = await apiClient.get<PeriodicReport>(`/news/${type}`, { params: { period } });
+  return res.data;
+}
+
+/** 生成周报/月报（缺省上一周期）。 */
+export async function generatePeriodic(type: PeriodicType): Promise<{ type: string; period: string }> {
+  const res = await apiClient.post(`/news/${type}`);
+  return res.data;
+}
