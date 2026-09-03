@@ -56,6 +56,7 @@ class KnowledgeEntry(BaseModel):
         category_l3: 三级分类细类（如 Python）
         category_confidence: 自动分类置信度（0.0~1.0）
         category_source: 分类来源（auto 自动 / manual 手动）
+        series: 系列名（如「Flutter 教程」，用于系列文章归组；无系列为空串）
     """
 
     entry_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -78,6 +79,7 @@ class KnowledgeEntry(BaseModel):
     category_l3: str = "未分类"
     category_confidence: float = 0.0
     category_source: str = "auto"
+    series: str = ""
 
     def to_chroma_metadata(self) -> dict[str, Any]:
         """
@@ -103,6 +105,7 @@ class KnowledgeEntry(BaseModel):
             "category_l3": self.category_l3,
             "category_confidence": self.category_confidence,
             "category_source": self.category_source,
+            "series": self.series,
         }
 
     @classmethod
@@ -141,12 +144,13 @@ class KnowledgeEntry(BaseModel):
             category_l3=metadata.get("category_l3", "未分类"),
             category_confidence=float(metadata.get("category_confidence", 0.0)),
             category_source=metadata.get("category_source", "auto"),
+            series=metadata.get("series", ""),
             metadata={"distance": distance, **{k: v for k, v in metadata.items() if k not in (
                 "user_id", "source", "source_id", "topic", "importance_score",
                 "version", "supersedes", "created_at", "updated_at",
                 "last_accessed_at", "access_count",
                 "category_l1", "category_l2", "category_l3",
-                "category_confidence", "category_source",
+                "category_confidence", "category_source", "series",
             )}},
         )
 

@@ -17,6 +17,16 @@ export interface UploadResult {
   status: 'success' | 'partial' | 'error';
   error: string;
   entry_ids: string[];
+  category?: { l1: string; l2: string; l3: string; confidence: number } | null;
+  series?: string;
+}
+
+/** 系列文章分组（GET /api/v1/upload/series）。 */
+export interface SeriesGroup {
+  series: string;
+  category: string[];
+  count: number;
+  files: { file_name: string; part: number }[];
 }
 
 /**
@@ -203,4 +213,13 @@ export async function getKnowledgeStatus(): Promise<KnowledgeStatus> {
  */
 export async function deleteEntry(entryId: string): Promise<void> {
   await apiClient.delete(`/upload/entries/${entryId}`);
+}
+
+/**
+ * 列出识别到的系列文章分组。
+ * 后端接口：GET /api/v1/upload/series
+ */
+export async function listSeries(): Promise<SeriesGroup[]> {
+  const res = await apiClient.get<{ series: SeriesGroup[] }>('/upload/series');
+  return res.data.series || [];
 }

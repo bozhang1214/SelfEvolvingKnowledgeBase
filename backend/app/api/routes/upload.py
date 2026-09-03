@@ -112,6 +112,10 @@ class UploadResponse(BaseModel):
     entry_ids: list[str] = Field(
         default_factory=list, description="已入库的条目 ID 列表"
     )
+    category: dict[str, Any] | None = Field(
+        None, description="自动分类结果 {l1,l2,l3,confidence}"
+    )
+    series: str = Field("", description="识别到的系列名（无则空串）")
 
 
 class KnowledgeBaseStatus(BaseModel):
@@ -158,13 +162,14 @@ async def _ingest_chunks(
     file_name: str,
     source: str = _DOCUMENT_SOURCE,
     category: dict[str, Any] | None = None,
+    series: str = "",
 ) -> tuple[list[str], str]:
     """
     将分块批量入库到知识库。
 
     为每个分块创建 KnowledgeEntry，
     importance_score 默认 0.5，source_id 记录原文件名以便溯源，
-    category 为文档级分类结果（同一文件所有分块共享）。
+    category 为文档级分类结果（同一文件所有分块共享），series 为系列名。
 
     Args:
         ctx: 应用上下文（已确保 vector_store 可用）
@@ -173,6 +178,7 @@ async def _ingest_chunks(
         file_name: 原文件名，写入 source_id 用于溯源
         source: 来源标记（"document" 或 "image"）
         category: 分类结果 {l1, l2, l3, confidence}，None 时使用默认值
+        series: 系列名（系列文章归组，无则空串）
 
     Returns:
         (entry_ids, error_message) 二元组；全部成功时 error_message 为空串
@@ -202,6 +208,7 @@ async def _ingest_chunks(
                 category_l3=cat_l3,
                 category_confidence=cat_conf,
                 category_source="auto",
+                series=series,
             )
             entry_ids.append(entry_id)
         except Exception as e:
@@ -280,6 +287,11 @@ async def _process_and_ingest(
     # 文档级自动分类：用文件名 + 首个分块作为样本（同一文件所有分块共享分类）
     category = await _classify_document(ctx, result.chunks, file_name)
 
+    # 系列文章识别（文件名启发式，无需 LLM）
+    from app.services.series import detect_series
+    series_info = detect_series(file_name)
+    series_name = str(series_info["series"]) if series_info["is_series"] else ""
+
     entry_ids, error_msg = await _ingest_chunks(
         ctx=ctx,
         chunks=result.chunks,
@@ -287,6 +299,7 @@ async def _process_and_ingest(
         file_name=file_name,
         source=source,
         category=category,
+        series=series_name,
     )
 
     if error_msg:
@@ -313,6 +326,8 @@ async def _process_and_ingest(
         status=final_status,
         error=error_msg,
         entry_ids=entry_ids,
+        category=category,
+        series=series_name,
     )
 
 
@@ -585,3 +600,59 @@ async def delete_entry(
 
     logger.info("知识条目已删除", entry_id=entry_id, user_id=user_id)
     return DeleteEntryResponse(entry_id=entry_id, deleted=True)
+
+
+@router.get("/series")
+async def list_series(
+    user_id: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """
+    列出识别到的「系列文章」分组。
+
+    从 document 来源的条目中，按 series 字段归组（series 非空），
+    组内文件按系列序号排序，返回系列名 + 文件列表 + 数量。
+    """
+    from app.services.series import detect_series
+
+    ctx: AppContext = get_app_context()
+    _require_vector_store(ctx)
+
+    try:
+        entries = await ctx.knowledge_base.list_entries(
+            user_id=user_id, source=_DOCUMENT_SOURCE, limit=5000
+        )
+    except Exception as e:
+        logger.error("列出系列分组失败", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"查询系列分组失败: {e}",
+        ) from e
+
+    groups: dict[str, dict[str, Any]] = {}
+    for e in entries:
+        s = (e.series or "").strip()
+        if not s:
+            continue
+        fname = e.source_id or ""
+        g = groups.setdefault(s, {"series": s, "files": {}, "category": [e.category_l1, e.category_l2, e.category_l3]})
+        if fname and fname not in g["files"]:
+            g["files"][fname] = detect_series(fname)
+
+    result = []
+    for g in groups.values():
+        files = [
+            {
+                "file_name": name,
+                "part": info.get("part") or 0,
+            }
+            for name, info in g["files"].items()
+        ]
+        files.sort(key=lambda x: (x["part"], x["file_name"]))
+        result.append({
+            "series": g["series"],
+            "category": g["category"],
+            "count": len(files),
+            "files": files,
+        })
+    result.sort(key=lambda x: x["series"])
+    return {"series": result}

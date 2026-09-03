@@ -62,6 +62,11 @@ llm:
       temperature: 0.3
       max_tokens: 8000                 # 日报条目多（每类 10+），需要较大输出上限
       response_format: json
+    job_analysis:                      # 招聘分析：JD 深度分析/差距/简历/策略（结构化 JSON）
+      model: deepseek-chat
+      temperature: 0.3
+      max_tokens: 4000                 # 单步输出为结构化 JSON，4000 token 足够
+      response_format: json
 
   # 降级链：reasoner 不可用 → 降级 chat；chat 不可用 → 返回错误提示
   fallback:
@@ -385,3 +390,8 @@ news:
       keywords: [融资, 商业, 政策, 监管, 上市, 收购, 投资]
     - name: "安全 / 评测 / 治理"
       keywords: [安全, 评测, 治理, 伦理, 对齐, 红队, 隐私]
+
+# ============ 招聘分析 Agent ============
+job:
+  enabled: true                         # 是否启用（Phase 2）
+  llm_role: job_analysis                # 分析用的 LLM 角色（JSON 输出）

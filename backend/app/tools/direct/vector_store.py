@@ -110,6 +110,7 @@ class DirectVectorStore:
         category_l3: str = "未分类",
         category_confidence: float = 0.0,
         category_source: str = "auto",
+        series: str = "",
     ) -> str:
         """
         添加知识条目到向量库（便捷方法）。
@@ -126,6 +127,7 @@ class DirectVectorStore:
             category_l3: 三级分类细类
             category_confidence: 自动分类置信度
             category_source: 分类来源（auto/manual）
+            series: 系列名（系列文章归组，无则空串）
 
         Returns:
             新条目的 entry_id
@@ -144,6 +146,7 @@ class DirectVectorStore:
             category_l3=category_l3,
             category_confidence=category_confidence,
             category_source=category_source,
+            series=series,
         )
         return await self.kb.add(entry)
 

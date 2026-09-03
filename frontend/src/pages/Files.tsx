@@ -4,8 +4,10 @@ import { InboxOutlined, FileOutlined, FileImageOutlined, ReloadOutlined, StopOut
 import {
   uploadFilePromise,
   getKnowledgeStatus,
+  listSeries,
   type UploadResult,
   type KnowledgeStatus,
+  type SeriesGroup,
 } from '@/services/file';
 import { logger } from '@/utils/logger';
 
@@ -101,6 +103,8 @@ const Files: React.FC = () => {
   const [uploading, setUploading] = useState(false);
   const [history, setHistory] = useState<UploadHistoryItem[]>([]);
   const [statusLoading, setStatusLoading] = useState(false);
+  const [seriesGroups, setSeriesGroups] = useState<SeriesGroup[]>([]);
+  const [seriesLoading, setSeriesLoading] = useState(false);
   const abortRef = useRef(false);
 
   const loadStatus = async () => {
@@ -115,8 +119,21 @@ const Files: React.FC = () => {
     }
   };
 
+  const loadSeries = async () => {
+    setSeriesLoading(true);
+    try {
+      const data = await listSeries();
+      setSeriesGroups(data);
+    } catch (err: any) {
+      logger.warn('load_series_failed', { msg: err?.message });
+    } finally {
+      setSeriesLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadStatus();
+    loadSeries();
   }, []);
 
   /** 批量上传入口：处理 antd Upload 选择的文件列表 */
@@ -221,8 +238,9 @@ const Files: React.FC = () => {
       message.error(`全部 ${total} 个文件上传失败`);
     }
 
-    // 刷新知识库状态
+    // 刷新知识库状态与系列分组
     loadStatus();
+    loadSeries();
     return false;  // 阻止 antd 默认上传
   };
 
@@ -460,6 +478,14 @@ const Files: React.FC = () => {
                   </span>
                   <span style={{ flex: 1 }}>{r.file_name}</span>
                   <span style={{ color: '#999' }}>{formatSize(r.file_size)}</span>
+                  {r.category && (
+                    <Tag color="purple" style={{ fontSize: 11 }}>
+                      {r.category.l1} / {r.category.l2} / {r.category.l3}
+                    </Tag>
+                  )}
+                  {r.series && (
+                    <Tag color="gold" style={{ fontSize: 11 }}>📚 {r.series}</Tag>
+                  )}
                   <Tag color={statusColor[r.status]}>
                     {statusLabel[r.status]}
                   </Tag>
@@ -469,6 +495,44 @@ const Files: React.FC = () => {
                 </div>
               );
             })}
+          </div>
+        )}
+      </Card>
+
+      {/* 系列文章分组 */}
+      <Card
+        size="small"
+        title={`系列文章 (${seriesGroups.length})`}
+        loading={seriesLoading}
+        style={{ marginTop: 16 }}
+      >
+        {seriesGroups.length === 0 ? (
+          <Text type="secondary">
+            暂无识别到的系列文章。文件名为「XX 第1篇/第2篇」「XX Part 1」「XX（上/中/下）」「XX 01/02」等会被自动归组。
+          </Text>
+        ) : (
+          <div>
+            {seriesGroups.map((g) => (
+              <div
+                key={g.series}
+                style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}
+              >
+                <Space size={8}>
+                  <Text strong>📚 {g.series}</Text>
+                  <Tag color="blue">{g.count} 篇</Tag>
+                  {g.category && g.category.length === 3 && (
+                    <Tag color="purple" style={{ fontSize: 11 }}>{g.category.join(' / ')}</Tag>
+                  )}
+                </Space>
+                <div style={{ marginTop: 4, paddingLeft: 8 }}>
+                  {g.files.map((f) => (
+                    <div key={f.file_name} style={{ fontSize: 12, color: '#666' }}>
+                      {f.part > 0 ? `${f.part}. ` : ''}{f.file_name}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </Card>

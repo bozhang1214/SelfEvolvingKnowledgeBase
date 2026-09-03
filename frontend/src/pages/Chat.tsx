@@ -1,13 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Layout, List, Input, Button, Typography, Space, Spin, Popconfirm, message as antMsg,
+  Layout, List, Input, Button, Typography, Space, Spin, Popconfirm, Checkbox, message as antMsg,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, SendOutlined, StopOutlined,
   PushpinOutlined, PushpinFilled, CopyOutlined, CheckOutlined,
+  ShareAltOutlined, DownloadOutlined, CheckSquareOutlined,
 } from '@ant-design/icons';
 import { useChatStore } from '@/stores/chat';
 import { logger } from '@/utils/logger';
+import { copyText, downloadTextFile } from '@/utils/clipboard';
+import { createChatShare } from '@/services/share';
+import type { Message } from '@/types/chat';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -63,6 +67,31 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
   );
 };
 
+/** 将多条消息拼接为 Markdown 文本（用于导出下载）。 */
+function buildConversationMarkdown(title: string, msgs: Message[]): string {
+  const lines: string[] = [];
+  lines.push(`# ${title || '对话'}`);
+  lines.push('');
+  lines.push(`> 导出自 SEKB 知识库对话 · ${new Date().toLocaleString('zh-CN')}`);
+  lines.push('');
+  msgs.forEach((m) => {
+    const role = m.role === 'user' ? '🧑 用户' : '🤖 助手';
+    const time = m.created_at ? new Date(m.created_at).toLocaleString('zh-CN') : '';
+    lines.push(`## ${role}${time ? ` · ${time}` : ''}`);
+    lines.push('');
+    lines.push(m.content);
+    lines.push('');
+  });
+  return lines.join('\n');
+}
+
+/** 拼接多条选中消息为纯文本（按 角色: 内容 格式）。 */
+function joinSelectedMessages(msgs: Message[]): string {
+  return msgs
+    .map((m) => `${m.role === 'user' ? '用户' : '助手'}: ${m.content}`)
+    .join('\n\n');
+}
+
 const Chat: React.FC = () => {
   const {
     conversations, currentConvId, messages, isStreaming, streamingContent, thinkingContent,
@@ -73,6 +102,12 @@ const Chat: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  // 多选模式与已选消息索引集合（针对 currentMessages 下标）
+  const [multiSelect, setMultiSelect] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  // 单条消息「已复制」状态（记录消息下标，短暂显示）
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [sharing, setSharing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -166,6 +201,87 @@ const Chat: React.FC = () => {
     ? [...currentMessages, { role: 'assistant' as const, content: streamingContent, isStreaming: true }]
     : currentMessages;
 
+  // ============ 复制 / 多选 / 导出 / 分享 ============
+
+  const handleCopyMessage = async (msg: { role: string; content: string }, idx: number) => {
+    const ok = await copyText(msg.content);
+    if (ok) {
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx((cur) => (cur === idx ? null : cur)), 2000);
+    } else {
+      antMsg.error('复制失败');
+    }
+  };
+
+  const enterMultiSelect = () => {
+    setMultiSelect(true);
+    setSelected(new Set());
+  };
+
+  const exitMultiSelect = () => {
+    setMultiSelect(false);
+    setSelected(new Set());
+  };
+
+  const toggleSelect = (idx: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+
+  const handleCopySelected = async () => {
+    const msgs = currentMessages.filter((_, i) => selected.has(i));
+    if (msgs.length === 0) return;
+    const ok = await copyText(joinSelectedMessages(msgs));
+    if (ok) {
+      antMsg.success(`已复制 ${msgs.length} 条消息`);
+      exitMultiSelect();
+    } else {
+      antMsg.error('复制失败');
+    }
+  };
+
+  const handleExport = () => {
+    if (currentMessages.length === 0) {
+      antMsg.warning('当前会话没有可导出的消息');
+      return;
+    }
+    const conv = conversations.find((c) => c.conv_id === currentConvId);
+    const title = (conv?.title || '对话').trim();
+    const md = buildConversationMarkdown(title, currentMessages);
+    downloadTextFile(`${title}.md`, md);
+    logger.info('chat_export_conversation', {
+      conv_id: currentConvId || null,
+      count: currentMessages.length,
+    });
+  };
+
+  const handleShare = async () => {
+    if (!currentConvId) {
+      antMsg.warning('请先选择一个会话');
+      return;
+    }
+    if (sharing) return;
+    setSharing(true);
+    logger.info('chat_share_conversation', { conv_id: currentConvId });
+    try {
+      const res = await createChatShare(currentConvId);
+      const url = window.location.origin + res.share_url;
+      const ok = await copyText(url);
+      antMsg.success(ok ? '分享链接已复制到剪贴板' : '分享链接已生成，请手动复制');
+    } catch (err: any) {
+      logger.error('chat_share_failed', { conv_id: currentConvId, msg: err?.message });
+      antMsg.error(err?.response?.data?.detail || err?.message || '分享失败');
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const currentConvTitle = conversations.find((c) => c.conv_id === currentConvId)?.title || '';
+
   return (
     <Layout style={{ height: '100vh' }}>
       {/* 会话列表侧边栏 */}
@@ -247,6 +363,48 @@ const Chat: React.FC = () => {
 
       {/* 聊天主区域 */}
       <Content style={{ display: 'flex', flexDirection: 'column', background: '#fff' }}>
+        {/* 顶部工具栏：多选 / 导出 / 分享 */}
+        {currentConvId && (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '10px 24px',
+              borderBottom: '1px solid #f0f0f0',
+              background: '#fafafa',
+            }}
+          >
+            <Text strong ellipsis={{ tooltip: currentConvTitle }} style={{ maxWidth: 320 }}>
+              {currentConvTitle || '新对话'}
+            </Text>
+            <Space size={4}>
+              {multiSelect ? (
+                <>
+                  <Text type="secondary" style={{ fontSize: 13, marginRight: 4 }}>
+                    已选 {selected.size} 条
+                  </Text>
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<CopyOutlined />}
+                    disabled={selected.size === 0}
+                    onClick={handleCopySelected}
+                  >
+                    复制所选
+                  </Button>
+                  <Button size="small" onClick={exitMultiSelect}>取消</Button>
+                </>
+              ) : (
+                <>
+                  <Button size="small" icon={<CheckSquareOutlined />} onClick={enterMultiSelect}>多选</Button>
+                  <Button size="small" icon={<DownloadOutlined />} onClick={handleExport}>导出</Button>
+                  <Button size="small" icon={<ShareAltOutlined />} loading={sharing} onClick={handleShare}>分享</Button>
+                </>
+              )}
+            </Space>
+          </div>
+        )}
         {/* 消息列表 */}
         <div style={{ flex: 1, overflow: 'auto', padding: '24px 40px' }}>
           {allContent.length === 0 && !isStreaming && (
@@ -256,63 +414,95 @@ const Chat: React.FC = () => {
               <Text type="secondary">在下方输入消息，开始与 SEKB 知识库对话</Text>
             </div>
           )}
-          {allContent.map((msg, idx) => (
-            <div
-              key={idx}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                marginBottom: 16,
-              }}
-            >
+          {allContent.map((msg, idx) => {
+            // 流式占位气泡不属于已持久化消息，不提供复制/多选
+            const isPersisted = idx < currentMessages.length;
+            const isCopied = copiedIdx === idx;
+            return (
               <div
+                key={idx}
                 style={{
-                  maxWidth: '70%',
-                  padding: '12px 16px',
-                  borderRadius: 12,
-                  background: msg.role === 'user' ? '#1677ff' : '#f5f5f5',
-                  color: msg.role === 'user' ? '#fff' : '#000',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                  marginBottom: 16,
                 }}
               >
-                {msg.role === 'user' ? (
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
-                ) : (
-                  <div className="markdown-content">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        code({ className, children, ...props }) {
-                          const match = /language-(\w+)/.exec(className || '');
-                          const codeStr = String(children).replace(/\n$/, '');
-                          if (match) {
-                            return (
-                              <CodeBlock language={match[1]} code={codeStr} />
-                            );
-                          }
-                          return <code className={className} {...props}>{children}</code>;
-                        },
-                      }}
-                    >
-                      {msg.content}
-                    </ReactMarkdown>
-                    {(msg as any).isStreaming && (
-                      <span style={{ display: 'inline-block', animation: 'blink 1s steps(1) infinite' }}>|</span>
+                <div
+                  className="msg-row"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexDirection: msg.role === 'user' ? 'row-reverse' : 'row',
+                  }}
+                >
+                  {multiSelect && isPersisted && (
+                    <Checkbox
+                      checked={selected.has(idx)}
+                      onChange={() => toggleSelect(idx)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  )}
+                  <div
+                    style={{
+                      maxWidth: '70%',
+                      padding: '12px 16px',
+                      borderRadius: 12,
+                      background: msg.role === 'user' ? '#1677ff' : '#f5f5f5',
+                      color: msg.role === 'user' ? '#fff' : '#000',
+                    }}
+                  >
+                    {msg.role === 'user' ? (
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                    ) : (
+                      <div className="markdown-content">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            code({ className, children, ...props }) {
+                              const match = /language-(\w+)/.exec(className || '');
+                              const codeStr = String(children).replace(/\n$/, '');
+                              if (match) {
+                                return (
+                                  <CodeBlock language={match[1]} code={codeStr} />
+                                );
+                              }
+                              return <code className={className} {...props}>{children}</code>;
+                            },
+                          }}
+                        >
+                          {msg.content}
+                        </ReactMarkdown>
+                        {(msg as any).isStreaming && (
+                          <span style={{ display: 'inline-block', animation: 'blink 1s steps(1) infinite' }}>|</span>
+                        )}
+                      </div>
                     )}
                   </div>
+                  {isPersisted && (
+                    <Button
+                      size="small"
+                      type="text"
+                      className="msg-copy-btn"
+                      icon={isCopied ? <CheckOutlined style={{ color: '#52c41a' }} /> : <CopyOutlined />}
+                      onClick={() => handleCopyMessage(msg, idx)}
+                      title="复制"
+                    />
+                  )}
+                </div>
+                {/* 消息时间戳 */}
+                {(msg as any).created_at && (
+                  <Text
+                    type="secondary"
+                    style={{ fontSize: 11, marginTop: 4, padding: '0 4px' }}
+                  >
+                    {new Date((msg as any).created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                  </Text>
                 )}
               </div>
-              {/* 消息时间戳 */}
-              {(msg as any).created_at && (
-                <Text
-                  type="secondary"
-                  style={{ fontSize: 11, marginTop: 4, padding: '0 4px' }}
-                >
-                  {new Date((msg as any).created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-                </Text>
-              )}
-            </div>
-          ))}
+            );
+          })}
           {/* 思考中提示（无气泡、无光标，独立提示卡片） */}
           {isStreaming && thinkingContent && !streamingContent && (
             <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 16 }}>
@@ -380,6 +570,13 @@ const Chat: React.FC = () => {
         @keyframes blink {
           0%, 100% { opacity: 1; }
           50% { opacity: 0; }
+        }
+        .msg-copy-btn {
+          opacity: 0;
+          transition: opacity 0.15s;
+        }
+        .msg-row:hover .msg-copy-btn {
+          opacity: 1;
         }
         .thinking-dots {
           display: inline-flex;

@@ -81,6 +81,8 @@ class AppContext:
     user_storage: UserStorage | None = None
     # 知识库分享存储（Phase 3）
     share_storage: Any = None
+    # 聊天会话分享存储（Phase 3）
+    chat_share_storage: Any = None
     # 知识自迭代引擎实例（Phase 2，可选）
     # 实际类型为 KnowledgeIngester | None，使用 Any 避免循环导入
     knowledge_ingester: Any = None
@@ -88,6 +90,8 @@ class AppContext:
     news_agent: Any = None
     # 科技资讯定时调度器（Phase 5，可选）
     news_scheduler: Any = None
+    # 招聘分析 Agent 实例（Phase 2，可选）
+    job_agent: Any = None
 
 
 async def initialize_app(config_path: str = "config.yaml") -> AppContext:
@@ -201,6 +205,10 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
     from app.storage.share_storage import ShareStorage
     share_storage = ShareStorage(storage_dir)
 
+    # 11.2 初始化聊天会话分享存储（Phase 3）
+    from app.storage.chat_share_storage import ChatShareStorage
+    chat_share_storage = ChatShareStorage(storage_dir)
+
     # 12. 构建 LangGraph 工作流（延迟导入，避免模块加载阶段引入 langgraph）
     from app.graph.builder import GraphBuilder
 
@@ -222,6 +230,14 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         news_agent = NewsAgent(config.news, llm_factory)
         logger.info("科技资讯 Agent 已启用", rss_sources=len(config.news.rss_sources))
 
+    # 12.2 装配招聘分析 Agent（Phase 2，可选）
+    job_agent = None
+    if config.job.enabled:
+        from app.agents.job.service import JobAgent
+
+        job_agent = JobAgent(config.job, llm_factory)
+        logger.info("招聘分析 Agent 已启用", llm_role=config.job.llm_role)
+
     logger.info("应用初始化完成")
 
     # 保存全局上下文引用
@@ -238,8 +254,10 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         vector_store=vector_store,
         user_storage=user_storage,
         share_storage=share_storage,
+        chat_share_storage=chat_share_storage,
         knowledge_ingester=knowledge_ingester,
         news_agent=news_agent,
+        job_agent=job_agent,
     )
     return _app_context
 

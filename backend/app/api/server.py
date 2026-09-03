@@ -241,8 +241,10 @@ def create_app() -> FastAPI:
     # 延迟导入：避免在模块加载阶段触发路由对 get_app_context 的解析失败
     from app.api.routes.auth import router as auth_router
     from app.api.routes.chat import router as chat_router
+    from app.api.routes.chat_share import router as chat_share_router
     from app.api.routes.conversations import router as conv_router
     from app.api.routes.health import router as health_router
+    from app.api.routes.job import router as job_router
     from app.api.routes.knowledge import router as knowledge_router
     from app.api.routes.metrics import router as metrics_router
     from app.api.routes.monitoring import router as monitoring_router
@@ -252,8 +254,10 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(chat_router)
+    app.include_router(chat_share_router)
     app.include_router(conv_router)
     app.include_router(health_router)
+    app.include_router(job_router)
     app.include_router(knowledge_router)
     app.include_router(metrics_router)
     app.include_router(monitoring_router)
@@ -263,7 +267,7 @@ def create_app() -> FastAPI:
 
     logger.info(
         "FastAPI 路由注册完成",
-        routers=["auth", "chat", "conversations", "health", "knowledge", "metrics", "monitoring", "news", "share", "upload"],
+        routers=["auth", "chat", "chat-share", "conversations", "health", "job", "knowledge", "metrics", "monitoring", "news", "share", "upload"],
         cors_origins=config.api.cors_origins or ["*"],
     )
 

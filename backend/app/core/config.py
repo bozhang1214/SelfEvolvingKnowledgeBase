@@ -347,6 +347,12 @@ class NewsConfig(BaseModel):
     monthly_cron: str = "0 9 1 * *"       # 月报：每月 1 日 09:00
 
 
+class JobConfig(BaseModel):
+    """招聘分析 Agent 配置（Phase 2）"""
+    enabled: bool = False                 # 是否启用
+    llm_role: str = "job_analysis"        # 分析用的 LLM 角色（JSON 输出）
+
+
 class AppConfig(BaseModel):
     """应用全局配置（对应 config.yaml 的根结构）"""
     app: AppConfigSection
@@ -363,6 +369,7 @@ class AppConfig(BaseModel):
     api: ApiConfig = ApiConfig()
     logging: LoggingConfig = LoggingConfig()
     news: NewsConfig = NewsConfig()
+    job: JobConfig = JobConfig()
 
 
 # ============================================================

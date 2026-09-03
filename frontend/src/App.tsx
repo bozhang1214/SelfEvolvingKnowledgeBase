@@ -6,6 +6,7 @@ import Register from '@/pages/Register';
 import Chat from '@/pages/Chat';
 import AppLayout from '@/components/Layout/AppLayout';
 import SharedKnowledge from '@/pages/SharedKnowledge';
+import SharedChat from '@/pages/SharedChat';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isLoggedIn = useUserStore((s) => s.isLoggedIn);
@@ -26,6 +27,8 @@ const App: React.FC = () => {
       <Route path="/register" element={<Register />} />
       {/* 分享知识库页面：独立全屏布局，内部处理登录校验与跳转 */}
       <Route path="/share/:shareId" element={<SharedKnowledge />} />
+      {/* 分享聊天会话页面：只读对话历史（更具体的路径优先匹配） */}
+      <Route path="/share/chat/:shareId" element={<SharedChat />} />
       <Route
         path="/*"
         element={
