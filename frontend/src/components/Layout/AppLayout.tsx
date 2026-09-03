@@ -7,6 +7,7 @@ import {
   SettingOutlined,
   LogoutOutlined,
   UserOutlined,
+  ReadOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Routes, Route } from 'react-router-dom';
 import { useUserStore } from '@/stores/user';
@@ -14,6 +15,7 @@ import Chat from '@/pages/Chat';
 import Files from '@/pages/Files';
 import Knowledge from '@/pages/Knowledge';
 import Settings from '@/pages/Settings';
+import News from '@/pages/News';
 
 const { Sider, Content } = Layout;
 const { Text } = Typography;
@@ -22,6 +24,7 @@ const menuItems = [
   { key: '/', icon: <MessageOutlined />, label: '聊天' },
   { key: '/files', icon: <FileOutlined />, label: '文件管理' },
   { key: '/knowledge', icon: <DatabaseOutlined />, label: '知识库' },
+  { key: '/news', icon: <ReadOutlined />, label: '资讯日报' },
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },
 ];
 
@@ -78,6 +81,7 @@ const AppLayout: React.FC = () => {
             <Route index element={<Chat />} />
             <Route path="files" element={<Files />} />
             <Route path="knowledge" element={<Knowledge />} />
+            <Route path="news" element={<News />} />
             <Route path="settings" element={<Settings />} />
           </Routes>
         </Content>
