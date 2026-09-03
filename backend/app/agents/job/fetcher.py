@@ -126,6 +126,7 @@ def _normalize(card: dict[str, Any]) -> dict[str, Any]:
         "city": job.get("dq") or card.get("dq") or card.get("city") or "",
         "job_url": f"https://www.liepin.com/job/{job_id}" if job_id else "",
         "jd_text": job.get("jd") or card.get("jd") or card.get("jobAbstract") or "",
+        "source": "猎聘",
     }
 
 
