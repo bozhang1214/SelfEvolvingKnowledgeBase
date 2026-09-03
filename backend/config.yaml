@@ -395,3 +395,8 @@ news:
 job:
   enabled: true                         # 是否启用（Phase 2）
   llm_role: job_analysis                # 分析用的 LLM 角色（JSON 输出）
+  # 职位采集默认筛选条件（Agent 相关职位、北京、月薪≥50K）
+  default_keyword: Agent                # 默认搜索关键词
+  default_city: 北京                     # 默认城市
+  default_city_code: "010"              # 猎聘城市码（北京 010，全国 410）
+  default_min_salary_k: 50              # 最低月薪（K），即 50K×14

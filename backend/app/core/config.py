@@ -351,6 +351,11 @@ class JobConfig(BaseModel):
     """招聘分析 Agent 配置（Phase 2）"""
     enabled: bool = False                 # 是否启用
     llm_role: str = "job_analysis"        # 分析用的 LLM 角色（JSON 输出）
+    # 职位采集默认筛选条件
+    default_keyword: str = "Agent"        # 默认搜索关键词（Agent 相关职位）
+    default_city: str = "北京"            # 默认城市
+    default_city_code: str = "010"        # 猎聘城市码（北京 010，全国 410）
+    default_min_salary_k: int = 50        # 最低月薪（K），即 50K×14
 
 
 class AppConfig(BaseModel):

@@ -32,10 +32,10 @@ class JobAnalyzeRequest(BaseModel):
 class JobFetchRequest(BaseModel):
     """职位采集请求体。"""
 
-    keyword: str = Field(..., min_length=1, description="搜索关键词（如 AI / Agent / 大模型）")
-    city: str = Field("410", description="城市编码，410=全国")
+    keyword: str = Field("", description="搜索关键词（空则用配置默认 default_keyword）")
+    city: str = Field("", description="城市过滤（空则用配置默认 default_city）")
     page: int = Field(0, ge=0, description="页码，从 0 开始")
-    limit: int = Field(20, ge=1, le=40, description="每页数量（猎聘固定返回约 40）")
+    limit: int = Field(20, ge=1, le=40, description="每页数量（部分源固定返回约 40）")
 
 
 def _require_job_agent() -> Any:
@@ -61,16 +61,29 @@ async def analyze_job(body: JobAnalyzeRequest, user_id: str = Depends(get_curren
 
 @router.post("/fetch")
 async def fetch_jobs(body: JobFetchRequest, user_id: str = Depends(get_current_user)):
-    """从猎聘采集真实职位列表。"""
+    """从各渠道采集真实职位列表，并应用默认筛选（关键词/城市/薪资）。"""
+    ctx = get_app_context()
     _require_job_agent()
-    from app.agents.job.fetcher import LiepinJobFetcher
+    from app.agents.job.fetcher import LiepinJobFetcher, filter_jobs
+
+    cfg = ctx.config.job
+    keyword = (body.keyword or "").strip() or cfg.default_keyword
+    city = (body.city or "").strip() or cfg.default_city
 
     fetcher = LiepinJobFetcher()
     try:
-        jobs = await fetcher.fetch(
-            keyword=body.keyword, city=body.city, page=body.page, limit=body.limit
-        )
+        # 猎聘用全国码采集，再客户端按城市/薪资过滤
+        raw = await fetcher.fetch(keyword=keyword, city="410", page=body.page, limit=body.limit)
     except Exception as e:
         logger.error("职位采集失败", error=str(e), exc_info=True)
         raise HTTPException(500, f"职位采集失败: {e}")
-    return {"keyword": body.keyword, "count": len(jobs), "jobs": jobs}
+
+    jobs = filter_jobs(raw, city=city, min_salary_k=cfg.default_min_salary_k)
+    return {
+        "keyword": keyword,
+        "city": city,
+        "min_salary_k": cfg.default_min_salary_k,
+        "total_raw": len(raw),
+        "count": len(jobs),
+        "jobs": jobs,
+    }

@@ -16,6 +16,7 @@ Cookie + X-Xsrf-Token + X-Fscp-* 网关头 POST」两步流程，且请求体需
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from typing import Any
 from urllib.parse import quote
@@ -126,6 +127,52 @@ def _normalize(card: dict[str, Any]) -> dict[str, Any]:
         "job_url": f"https://www.liepin.com/job/{job_id}" if job_id else "",
         "jd_text": job.get("jd") or card.get("jd") or card.get("jobAbstract") or "",
     }
+
+
+def parse_min_salary(salary: str) -> int | None:
+    """
+    解析薪资下限（K/月），无法解析返回 None。
+
+    支持格式：`20-35k`、`25-40k·14薪`、`50-80K`、`30k`、`3-5万` 等。
+    """
+    if not salary:
+        return None
+    # 范围：20-35k / 25-40k·14薪 / 3-5万
+    m = re.search(r"(\d+)\s*[-~—到至]\s*(\d+)", salary)
+    if m:
+        return int(m.group(1))
+    # 单值：30k / 50K
+    m = re.search(r"(\d+)\s*[kK]", salary)
+    if m:
+        return int(m.group(1))
+    # 万：3-5万 / 5万
+    m = re.search(r"(\d+)\s*万", salary)
+    if m:
+        return int(m.group(1)) * 10
+    return None
+
+
+def filter_jobs(
+    jobs: list[dict[str, Any]],
+    city: str = "",
+    min_salary_k: int = 0,
+) -> list[dict[str, Any]]:
+    """
+    对职位做客户端筛选：城市前缀匹配 + 薪资下限过滤。
+
+    - city: 城市名前缀（如「北京」）；为空表示不过滤城市。
+    - min_salary_k: 最低月薪（K）；0 表示不过滤。薪资无法解析（面议）时保留。
+    """
+    out: list[dict[str, Any]] = []
+    for j in jobs:
+        if city and j.get("city") and not str(j["city"]).startswith(city):
+            continue
+        if min_salary_k > 0:
+            mn = parse_min_salary(j.get("salary") or "")
+            if mn is not None and mn < min_salary_k:
+                continue
+        out.append(j)
+    return out
 
 
 class LiepinJobFetcher:
