@@ -1,5 +1,5 @@
 """
-资讯日报 API 路由（Phase 5）。
+科技资讯 API 路由（Phase 5）。
 
 - ``POST /api/v1/news/refresh``   手动触发一次日报生成
 - ``GET  /api/v1/news/reports``   列出历史日报
@@ -23,10 +23,10 @@ router = APIRouter(prefix="/api/v1/news", tags=["news"])
 
 
 def _require_news_agent() -> Any:
-    """获取资讯日报 Agent，未启用则 503。"""
+    """获取科技资讯 Agent，未启用则 503。"""
     ctx = get_app_context()
     if ctx.news_agent is None:
-        raise HTTPException(503, "资讯日报未启用（news.enabled=false）")
+        raise HTTPException(503, "科技资讯未启用（news.enabled=false）")
     return ctx.news_agent
 
 

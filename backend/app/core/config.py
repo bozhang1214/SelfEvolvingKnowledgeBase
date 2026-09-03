@@ -324,13 +324,13 @@ class LoggingConfig(BaseModel):
 
 
 class CategoryConfig(BaseModel):
-    """资讯日报大类配置：名称 + 分类关键词。"""
+    """科技资讯大类配置：名称 + 分类关键词。"""
     name: str = ""
     keywords: list[str] = []
 
 
 class NewsConfig(BaseModel):
-    """资讯日报 Agent 配置（Phase 5）"""
+    """科技资讯 Agent 配置（Phase 5）"""
     enabled: bool = False
     rss_sources: list[str] = []          # RSS 源列表（URL）
     keywords: list[str] = []              # 命中关键词（标题/摘要包含即保留）

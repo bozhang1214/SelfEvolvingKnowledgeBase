@@ -154,8 +154,8 @@ const News: React.FC = () => {
   const activeKey = isDaily ? currentDate : pPeriod;
   const activeDetail = isDaily ? current : pCurrent;
   const detailTitle = isDaily
-    ? `AI 资讯日报 · ${currentDate}`
-    : `AI 资讯${tab === 'weekly' ? '周报' : '月报'} · ${pPeriod}`;
+    ? `AI 科技资讯 · ${currentDate}`
+    : `AI 科技${tab === 'weekly' ? '周报' : '月报'} · ${pPeriod}`;
 
   return (
     <Layout style={{ minHeight: '100%' }}>
@@ -166,7 +166,7 @@ const News: React.FC = () => {
       >
         <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0f0' }}>
           <Space direction="vertical" size={8} style={{ width: '100%' }}>
-            <Text strong style={{ fontSize: 15 }}>资讯日报</Text>
+            <Text strong style={{ fontSize: 15 }}>科技资讯</Text>
             <Tabs
               size="small"
               activeKey={tab}

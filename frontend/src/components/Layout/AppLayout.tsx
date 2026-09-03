@@ -24,7 +24,7 @@ const menuItems = [
   { key: '/', icon: <MessageOutlined />, label: '聊天' },
   { key: '/files', icon: <FileOutlined />, label: '文件管理' },
   { key: '/knowledge', icon: <DatabaseOutlined />, label: '知识库' },
-  { key: '/news', icon: <ReadOutlined />, label: '资讯日报' },
+  { key: '/news', icon: <ReadOutlined />, label: '科技资讯' },
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },
 ];
 

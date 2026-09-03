@@ -131,7 +131,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("FastAPI 应用启动中", config_path=config_path)
     _context = await initialize_app(config_path)
 
-    # 启动资讯日报定时调度（若启用）
+    # 启动科技资讯定时调度（若启用）
     if _context.news_agent is not None:
         from app.scheduler.scheduler import NewsScheduler
 

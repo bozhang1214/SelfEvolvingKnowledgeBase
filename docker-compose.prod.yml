@@ -128,7 +128,7 @@ services:
           memory: 256M
           cpus: "0.5"
 
-  # ============ RSSHub（资讯日报鸿蒙/掘金/少数派等专属路由中转，内部服务）============
+  # ============ RSSHub（科技资讯鸿蒙/掘金/少数派等专属路由中转，内部服务）============
   # 公共 RSSHub 实例路由残缺且不稳定，故自建；仅 backend 内部访问，不对外暴露。
   rsshub:
     image: diygod/rsshub:latest

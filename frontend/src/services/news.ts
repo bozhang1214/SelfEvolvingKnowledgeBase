@@ -2,7 +2,7 @@ import apiClient from './api';
 import { logger } from '@/utils/logger';
 
 /**
- * 资讯日报 API（与 backend/app/api/routes/news.py 对齐）。
+ * 科技资讯 API（与 backend/app/api/routes/news.py 对齐）。
  * 后端直接返回裸对象，不包 ApiResponse，直接用 res.data 取业务数据。
  */
 

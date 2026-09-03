@@ -1,5 +1,5 @@
 """
-资讯日报 Agent 服务编排。
+科技资讯 Agent 服务编排。
 
 串联流水线：RSS 采集 → 关键词筛选 → 原文正文抽取 → LLM 生成日报 → 存储。
 """
@@ -25,7 +25,7 @@ _CONTENT_MAX_CHARS = 1200
 
 
 class NewsAgent:
-    """资讯日报 Agent。"""
+    """科技资讯 Agent。"""
 
     def __init__(self, config: Any, llm_factory: Any) -> None:
         self._config = config

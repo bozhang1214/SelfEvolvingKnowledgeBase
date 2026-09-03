@@ -7,7 +7,7 @@
 ```
 prompt/
 ├── README.md                    # 本文件
-├── news/                        # 资讯日报 Agent（Phase 1）
+├── news/                        # 科技资讯 Agent（Phase 1）
 │   ├── daily_report.md          #   日报生成主提示词
 │   └── weekly_report.md         #   周报/月报生成提示词
 └── job/                         # 职位分析 Agent（Phase 2）

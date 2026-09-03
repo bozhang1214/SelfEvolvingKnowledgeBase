@@ -57,7 +57,7 @@ llm:
       model: deepseek-chat
       temperature: 0.7                 # 高温度保证闲聊自然度
       max_tokens: 1000
-    news_report:                       # 资讯日报生成：结构化长报告（每条含要点/来源）
+    news_report:                       # 科技资讯生成：结构化长报告（每条含要点/来源）
       model: deepseek-chat
       temperature: 0.3
       max_tokens: 8000                 # 日报条目多（每类 10+），需要较大输出上限
@@ -285,7 +285,7 @@ logging:
     - authorization                     # 鉴权头
     - token                             # Token
 
-# ============ 资讯日报 Agent ============
+# ============ 科技资讯 Agent ============
 news:
   enabled: true                         # 是否启用（Phase 5 已部署，开启）
   llm_role: news_report                 # 生成日报用的 LLM 角色（大 token 上限）

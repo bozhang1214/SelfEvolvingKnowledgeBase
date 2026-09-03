@@ -141,7 +141,7 @@ class NewsStorage:
     @staticmethod
     def _to_markdown(day: str, report: dict) -> str:
         """把日报 JSON 渲染为结构清晰的 Markdown（含头条 + 总结预测 + 打分）。"""
-        lines = [f"# AI 资讯日报 · {day}", ""]
+        lines = [f"# AI 科技资讯 · {day}", ""]
 
         # 头条（当天最重要的一条，置顶）
         headline = report.get("headline") or {}
@@ -208,7 +208,7 @@ class NewsStorage:
     def _to_periodic_markdown(report_type: str, period: str, report: dict) -> str:
         """把周报/月报 JSON 渲染为 Markdown。"""
         label = "周报" if report_type == "weekly" else "月报"
-        lines = [f"# AI 资讯{label} · {period}", ""]
+        lines = [f"# AI 科技{label} · {period}", ""]
 
         themes = report.get("themes") or []
         if themes:

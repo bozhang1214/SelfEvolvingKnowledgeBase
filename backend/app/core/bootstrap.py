@@ -84,9 +84,9 @@ class AppContext:
     # 知识自迭代引擎实例（Phase 2，可选）
     # 实际类型为 KnowledgeIngester | None，使用 Any 避免循环导入
     knowledge_ingester: Any = None
-    # 资讯日报 Agent 实例（Phase 5，可选）
+    # 科技资讯 Agent 实例（Phase 5，可选）
     news_agent: Any = None
-    # 资讯日报定时调度器（Phase 5，可选）
+    # 科技资讯定时调度器（Phase 5，可选）
     news_scheduler: Any = None
 
 
@@ -214,13 +214,13 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
     )
     graph = graph_builder.build()
 
-    # 12.1 装配资讯日报 Agent（Phase 5，可选）
+    # 12.1 装配科技资讯 Agent（Phase 5，可选）
     news_agent = None
     if config.news.enabled:
         from app.agents.news.service import NewsAgent
 
         news_agent = NewsAgent(config.news, llm_factory)
-        logger.info("资讯日报 Agent 已启用", rss_sources=len(config.news.rss_sources))
+        logger.info("科技资讯 Agent 已启用", rss_sources=len(config.news.rss_sources))
 
     logger.info("应用初始化完成")
 
