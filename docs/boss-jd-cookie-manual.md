@@ -14,7 +14,7 @@
 |------|--------|------|
 | BOSS **手机 App** | ❌ 不能 | App 用的是原生登录 token，不是网页 Cookie；采集用的是网页（Playwright 浏览器）方案，需要**网页 Cookie** |
 | BOSS **手机浏览器**（网页版） | ⚠️ 能用但难提取 | 手机浏览器抓 Cookie 很麻烦，不推荐 |
-| BOSS **电脑浏览器**（网页版） | ✅ 推荐 | 用 F12 开发者工具一键复制 Cookie，最方便 |
+| BOSS **电脑浏览器**（网页版） | ✅ 推荐 | 用开发者工具或 Cookie 扩展复制 Cookie（F12 被禁时的替代方案见下文） |
 
 **结论：请用电脑浏览器登录 BOSS 网页版来拿 Cookie。**
 
@@ -29,6 +29,30 @@
 7. 把复制的 Cookie 内容贴到本手册末尾的「我提供的 Cookie」栏（或直接发给我）。
 
 > 注意：Cookie 里含 `__zp_stoken__` 这个登录态关键字段，请**整段完整复制**，不要只复制部分。
+
+### BOSS 打不开 F12 怎么办？—— 三种替代方案（推荐方案一）
+
+BOSS 网页版有反调试（禁用 F12 / 右键），直接用 F12 抓不到。改用下面任一方法：
+
+**方案一（最省事，无需复制 Cookie）：用 MCP 自带扫码登录**
+
+`boss-mcp-job-hunting` 这个 MCP 内置了扫码登录流程，你只需在手机 BOSS App 扫码，它会自动把登录态 Cookie 存到自己的浏览器 profile 里，**完全不用你手动抓 Cookie**：
+1. 启动 MCP，调用 `start_boss_qr_login()` → 生成一张登录二维码；
+2. 用手机 BOSS App 扫这张二维码确认登录；
+3. 调用 `complete_boss_qr_login()` 等它把登录态保存下来；
+4. 之后直接调 `search_boss_jobs(keyword="...", city="北京", ...)` 搜职位。
+
+**方案二（手动抓 Cookie 的变通）：先开控制台再进 BOSS**
+
+BOSS 的反调试只拦截「页面加载后」按 F12。换个顺序即可绕过：
+1. 先开一个**空白新标签页**；
+2. 在这个空白页上按 **F12**（或 Mac `Cmd+Option+I` / Windows `Ctrl+Shift+I`）打开开发者工具；
+3. 保持控制台开着，在地址栏输入 `https://www.zhipin.com/web/geek/jobs` 回车进入 BOSS 并登录；
+4. 之后照上面的「Network → 请求头 → Cookie」复制即可。
+
+**方案三（用浏览器扩展导出 Cookie）：**
+
+装一个 Cookie 管理扩展（如 **Cookie-Editor**，Chrome/Edge 商店免费），登录 BOSS 后点扩展图标 → 一键「Export」→ 选「Header String」格式，直接得到可粘贴的 Cookie 串。
 
 ### 我们拿到 Cookie 后会怎么用
 
@@ -45,7 +69,7 @@
 **建议**：京东社招职位直接**手动复制 JD** 粘贴到「招聘分析」页，同样能跑全流程分析，不依赖采集。
 
 如果你坚持要自动化京东，需要提供：
-- 登录京东后的 Cookie（同上 F12 方法）；
+- 登录京东后的 Cookie（同上，F12 或 Cookie 扩展）；
 - 以及愿意接受「签名算法随时失效、需要维护」的代价。
 
 ---
