@@ -172,6 +172,8 @@ def start_qr_login(req: LoginReq) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
         raise HTTPException(500, f"扫码登录启动失败: {e}")
 
 

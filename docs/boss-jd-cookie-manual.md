@@ -56,9 +56,16 @@ BOSS 的反调试只拦截「页面加载后」按 F12。换个顺序即可绕�
 
 ### 我们拿到 Cookie 后会怎么用
 
-- 通过 `boss-mcp-job-hunting` 这类 MCP 的 `import_boss_cookies(cookie_header="你给的 Cookie")` 导入登录态，用 Playwright 打开 BOSS 页面按关键词搜索职位。
-- 你的 Cookie 只会放在**服务器环境变量/配置文件里**，不会硬编码进代码、不会提交到 Git。
-- Cookie 会**过期**（一般几天到几周），失效后需要你按上面步骤重新复制一次。
+- 现在服务器上已部署了一个**通用浏览器登录/采集服务（sekb-browser）**，它提供：
+  - `POST /cookies`：导入某站点的 Cookie（你给的 Cookie 就从这里导入，持久化保存）；
+  - `POST /login/qr/start` + `/login/qr/complete`：扫码登录（BOSS 二维码，best-effort，见下方说明）；
+  - `POST /scrape`：用已登录态采集职位（BOSS 为首个站点，可插拔扩展其它站）。
+- 你的 Cookie 只会放在**服务器持久化卷**里，不会硬编码进代码、不会提交到 Git。
+- Cookie 会**过期**（一般几天到几周），失效后需要你重新复制一次、再导入一次。
+
+### 扫码登录（可选，best-effort）
+
+BOSS 登录页的二维码在懒加载的 iframe 里，扫码登录流程较脆弱，当前作为备用。**推荐用「导入 Cookie」为主路径**（更稳定）。扫码登录我后续会继续调优。
 
 ---
 
