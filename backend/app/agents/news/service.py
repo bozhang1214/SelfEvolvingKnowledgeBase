@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.agents.news.content_extractor import fetch_article_text
@@ -27,6 +27,9 @@ _CONTENT_MAX_CHARS = 1200
 class NewsAgent:
     """科技资讯 Agent。"""
 
+    # 各周期的时间窗口（小时）：日报用配置值，周报/月报按跨度放宽
+    _WINDOW_HOURS = {"daily": None, "weekly": 7 * 24, "monthly": 30 * 24}
+
     def __init__(self, config: Any, llm_factory: Any) -> None:
         self._config = config
         self._fetcher = RSSFetcher(config.rss_sources)
@@ -35,43 +38,59 @@ class NewsAgent:
         all_keywords = list(config.keywords or [])
         for c in config.categories or []:
             all_keywords.extend(c.keywords or [])
-        self._filter = NewsFilter(
-            keywords=list(dict.fromkeys(all_keywords)),  # 去重保序
-            exclude_keywords=config.exclude_keywords,
-            time_window_hours=config.time_window_hours,
-        )
+        self._keywords = list(dict.fromkeys(all_keywords))  # 去重保序
+        self._exclude_keywords = config.exclude_keywords
         self._generator = DailyReportGenerator(llm_factory)
         self._storage = NewsStorage(config.report_dir, config.retention_days)
 
     async def refresh(self) -> dict:
-        """执行一次完整日报刷新，返回结果摘要。"""
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        """执行一次完整日报刷新。"""
+        return await self._generate_report("daily")
 
-        # 1. 采集
+    async def _generate_report(self, report_type: str, period: str | None = None) -> dict:
+        """日报/周报/月报共用流水线：采集 → 按时间窗口筛选 → 正文抽取 → 逐类生成 → 存储。"""
+        # 1. 时间窗口（小时）
+        window_hours = self._WINDOW_HOURS[report_type]
+        if window_hours is None:
+            window_hours = self._config.time_window_hours
+
+        # 2. 采集 + 筛选
         items = await self._fetcher.fetch_all()
-        # 2. 筛选
-        filtered = self._filter.filter(items)
-        # 3. 原文正文抽取（RSS 摘要/全文不足时抓取原文，供 150~200 字摘要用）
-        items_json = [self._item_to_dict(it) for it in filtered]
-        items_json = await self._enrich_content(items_json)
-        # 4. 生成（逐类）
+        flt = NewsFilter(
+            keywords=self._keywords,
+            exclude_keywords=self._exclude_keywords,
+            time_window_hours=window_hours,
+        )
+        filtered = flt.filter(items)
+
+        # 3. 原文正文抽取
+        items_json = await self._enrich_content([self._item_to_dict(it) for it in filtered])
+
+        # 4. 生成（头条 + 逐类 + 综合分析，时间语境随 report_type 变化）
         report = await self._generator.generate(
             items_json,
             self._config.llm_role,
             self._config.categories,
+            period_type=report_type,
         )
+
         # 5. 存储
-        path = self._storage.save_daily(day, report)
+        if report_type == "daily":
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            path = self._storage.save_daily(day, report)
+            period_label = day
+        else:
+            period_label = self._period_label(report_type, period)
+            path = self._storage.save_periodic(report_type, period_label, report)
 
         logger.info(
-            "日报刷新完成",
-            date=day,
-            fetched=len(items),
-            filtered=len(filtered),
-            path=path,
+            "报告生成完成",
+            type=report_type, period=period_label,
+            fetched=len(items), filtered=len(filtered), path=path,
         )
         return {
-            "date": day,
+            "type": report_type,
+            "period": period_label,
             "fetched": len(items),
             "filtered": len(filtered),
             "path": path,
@@ -100,91 +119,24 @@ class NewsAgent:
         period: str | None = None,
         supplement: list[dict] | None = None,
     ) -> dict:
-        """生成周报/月报。period 缺省按「上一周期」计算。"""
+        """生成周报/月报（与日报同格式，时间跨度为一周/一个月）。supplement 保留兼容但已不使用。"""
         if report_type not in ("weekly", "monthly"):
             raise ValueError(f"未知报告类型: {report_type}")
+        return await self._generate_report(report_type, period)
 
+    @staticmethod
+    def _period_label(report_type: str, period: str | None) -> str:
+        """计算周期标签（文件名用）：周报=周一日期，月报=YYYY-MM。"""
         today = datetime.now(timezone.utc).date()
-        start, end = self._period_range(report_type, period, today)
-        period = self._period_label(report_type, start)
-
-        # 1. 收集该周期内的日报（结构化 JSON，供聚合）
-        daily_reports: list[dict] = []
-        for rep in self._storage.list_reports():
-            d_str = rep.get("date", "")
-            try:
-                d = date.fromisoformat(d_str)
-            except ValueError:
-                continue
-            if start <= d <= end:
-                structured = self._storage.read_daily_structured(d_str)
-                if structured:
-                    daily_reports.append(self._condense_daily(d_str, structured))
-
-        # 2. 生成 + 存储
-        report = await self._generator.generate_periodic(
-            report_type, period, daily_reports, supplement, self._config.llm_role
-        )
-        path = self._storage.save_periodic(report_type, period, report)
-        logger.info(
-            "周期报告生成完成",
-            type=report_type, period=period,
-            daily_count=len(daily_reports), supplement=len(supplement or []),
-        )
-        return {
-            "type": report_type,
-            "period": period,
-            "path": path,
-            "report": report,
-            "daily_count": len(daily_reports),
-        }
-
-    @staticmethod
-    def _period_range(report_type: str, period: str | None, today: date) -> tuple[date, date]:
-        """计算周期起止日期。"""
         if report_type == "weekly":
-            this_monday = today - timedelta(days=today.weekday())
             if period:
-                start = date.fromisoformat(period)
-                return start, start + timedelta(days=6)
-            # 缺省 = 上周
-            start = this_monday - timedelta(days=7)
-            return start, start + timedelta(days=6)
-        # monthly
+                return period
+            this_monday = today - timedelta(days=today.weekday())
+            return (this_monday - timedelta(days=7)).isoformat()  # 上周一
         if period:
-            y, m = (int(x) for x in period.split("-"))
-            start = date(y, m, 1)
-            if m == 12:
-                end = date(y + 1, 1, 1) - timedelta(days=1)
-            else:
-                end = date(y, m + 1, 1) - timedelta(days=1)
-            return start, end
-        # 缺省 = 上个月
+            return period
         first_this_month = today.replace(day=1)
-        last_month = first_this_month - timedelta(days=1)
-        return last_month.replace(day=1), last_month
-
-    @staticmethod
-    def _period_label(report_type: str, start: date) -> str:
-        if report_type == "weekly":
-            return start.isoformat()  # 周一日期
-        return start.strftime("%Y-%m")
-
-    @staticmethod
-    def _condense_daily(day: str, report: dict) -> dict:
-        """把日报压缩成周报/月报聚合所需的精简结构（头条 + 各分类总结 + 综合分析）。"""
-        return {
-            "date": day,
-            "headline": {
-                "title": (report.get("headline") or {}).get("title", ""),
-                "analysis": (report.get("headline") or {}).get("analysis", ""),
-            },
-            "sections": [
-                {"category": s.get("category", ""), "summary": s.get("summary", "")}
-                for s in report.get("sections", [])
-            ],
-            "comprehensive": report.get("comprehensive") or {},
-        }
+        return (first_this_month - timedelta(days=1)).strftime("%Y-%m")  # 上月
 
     @staticmethod
     def _item_to_dict(item: Any) -> dict:

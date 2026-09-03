@@ -181,5 +181,5 @@ class TestNewsStorage:
         assert "🔮 综合分析" in read["markdown"]
         assert "关联分析" in read["markdown"]
         assert "大模型与Agent的关联分析。" in read["markdown"]
-        assert "未来半月预测" in read["markdown"]
+        assert "趋势预测" in read["markdown"]
         assert "未来半月预计有重大发布会。" in read["markdown"]

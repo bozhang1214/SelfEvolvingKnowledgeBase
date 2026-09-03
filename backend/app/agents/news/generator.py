@@ -32,10 +32,27 @@ _COMPREHENSIVE_FALLBACK_PROMPT = """你是资深技术资讯主编，请对当�
 输出严格 JSON：{"correlation":"300~500字跨大类关联分析","forecast":"300~500字未来半月重大事件预测（3~6条）"}。
 只基于输入，不编造，预测用不确定措辞。"""
 
-# 周报/月报兜底提示词
-_PERIODIC_FALLBACK_PROMPT = """你是 AI 行业趋势分析师，请把一段时间内的日报/补充资讯汇总成周期报告。
-输出严格 JSON：{"period":"...","type":"weekly 或 monthly","themes":[{"title","summary","implication","watch_next"}],"timeline":[{"date","event","comment"}],"outlook":["..."]}。
-只基于输入，不编造。"""
+# 各周期的时间语境（用于填充提示词里的 {{trigger}}/{{time_span}}/{{period_label}}/{{forecast_horizon}}）
+_PERIOD_CONTEXTS = {
+    "daily": {
+        "trigger": "每天 09:00",
+        "time_span": "过去 24 小时",
+        "period_label": "当天",
+        "forecast_horizon": "未来半个月",
+    },
+    "weekly": {
+        "trigger": "每周一 09:00",
+        "time_span": "过去一周",
+        "period_label": "本周",
+        "forecast_horizon": "未来一个月",
+    },
+    "monthly": {
+        "trigger": "每月 1 日 09:00",
+        "time_span": "过去一个月",
+        "period_label": "本月",
+        "forecast_horizon": "未来两个月",
+    },
+}
 
 
 def _resolve_prompt_path(
@@ -87,21 +104,18 @@ class DailyReportGenerator:
             self._comprehensive_prompt = _COMPREHENSIVE_FALLBACK_PROMPT
             logger.warning("综合分析提示词文件未找到，使用内置兜底提示词")
 
-        periodic_path = _resolve_prompt_path(None, "weekly_report.md")
-        if periodic_path:
-            self._periodic_prompt = periodic_path.read_text(encoding="utf-8")
-            logger.info("已加载周期报告提示词", path=str(periodic_path))
-        else:
-            self._periodic_prompt = _PERIODIC_FALLBACK_PROMPT
-            logger.warning("周期报告提示词文件未找到，使用内置兜底提示词")
+        # 周期语境默认按日报；生成周报/月报时由 generate(period_type=...) 覆盖
+        self._ctx = self._PERIOD_CONTEXTS["daily"]
 
     async def generate(
         self,
         items: list[dict],
         role: str = "news_report",
         categories: list[Any] | None = None,
+        period_type: str = "daily",
     ) -> dict:
-        """逐类生成日报，返回 {"sections": [...], "total_count": N}。"""
+        """按给定周期生成结构化报告（头条 + 逐类 + 综合分析），日报/周报/月报共用。"""
+        self._ctx = self._PERIOD_CONTEXTS.get(period_type, self._PERIOD_CONTEXTS["daily"])
         cats = categories or []
 
         # 1. 关键词分类（多归属：一条资讯可同时归入多个大类）
@@ -154,6 +168,12 @@ class DailyReportGenerator:
                     classified[c.name].append(it)
         return classified
 
+    def _apply_period(self, prompt: str) -> str:
+        """把提示词里的时间语境占位符替换为当前周期（日报/周报/月报）的值。"""
+        for key, value in self._ctx.items():
+            prompt = prompt.replace("{{" + key + "}}", value)
+        return prompt
+
     # ---------- 单类生成 ----------
 
     # 单类输入条目上限：降低 token 成本，并减少内容风控误判概率
@@ -165,7 +185,7 @@ class DailyReportGenerator:
         self, category_name: str, items: list[dict], role: str
     ) -> dict:
         """调用 LLM 生成单类的总结预测 + 打分条目（带重试与降噪回退）。"""
-        prompt = self._system_prompt.replace("{{category}}", category_name)
+        prompt = self._apply_period(self._system_prompt).replace("{{category}}", category_name)
         items = items[: self._MAX_ITEMS_PER_CATEGORY]
 
         llm = self._llm_factory.get(role)
@@ -264,9 +284,9 @@ class DailyReportGenerator:
             "content": (content or "")[:2000],
         }
         messages = [
-            SystemMessage(content=self._headline_prompt),
+            SystemMessage(content=self._apply_period(self._headline_prompt)),
             HumanMessage(
-                content=f"以下是今天最重要的一条资讯：\n{json.dumps(payload, ensure_ascii=False)}\n\n请写头条深度分析。"
+                content=f"以下是{self._ctx['period_label']}最重要的一条资讯：\n{json.dumps(payload, ensure_ascii=False)}\n\n请写头条深度分析。"
             ),
         ]
         try:
@@ -300,12 +320,12 @@ class DailyReportGenerator:
             ],
         }
         messages = [
-            SystemMessage(content=self._comprehensive_prompt),
+            SystemMessage(content=self._apply_period(self._comprehensive_prompt)),
             HumanMessage(
                 content=(
-                    f"以下是当日日报的头条与各分类总结：\n"
+                    f"以下是{self._ctx['period_label']}报告的头条与各分类总结：\n"
                     f"{json.dumps(context, ensure_ascii=False)}\n\n"
-                    "请做跨大类关联分析 + 未来半月重大事件预测。"
+                    f"请做跨大类关联分析 + {self._ctx['forecast_horizon']}重大事件预测。"
                 )
             ),
         ]
@@ -320,41 +340,6 @@ class DailyReportGenerator:
             }
         except Exception as e:  # noqa: BLE001
             logger.error("综合分析生成失败", error=str(e)[:200])
-            return {}
-
-    # ---------- 周报/月报 ----------
-
-    async def generate_periodic(
-        self,
-        report_type: str,
-        period: str,
-        daily_reports: list[dict],
-        supplement: list[dict] | None,
-        role: str,
-    ) -> dict:
-        """把周期内的日报 + 补充资讯汇总成周报/月报。"""
-        payload = {
-            "type": report_type,
-            "period": period,
-            "daily_reports": daily_reports,
-            "supplement_items": supplement or [],
-        }
-        prompt = self._periodic_prompt.replace(
-            "{{daily_reports}}", json.dumps(daily_reports, ensure_ascii=False)
-        ).replace("{{supplement_items}}", json.dumps(supplement or [], ensure_ascii=False))
-        messages = [
-            SystemMessage(content=prompt),
-            HumanMessage(
-                content=f"请汇总生成 {report_type} 周期报告（周期：{period}）。\n{json.dumps(payload, ensure_ascii=False)}"
-            ),
-        ]
-        try:
-            llm = self._llm_factory.get(role)
-            resp = await llm.ainvoke(messages)
-            raw = resp.content if hasattr(resp, "content") else str(resp)
-            return self._parse_json(raw)
-        except Exception as e:  # noqa: BLE001
-            logger.error("周期报告生成失败", type=report_type, period=period, error=str(e)[:200])
             return {}
 
     # ---------- 解析 ----------

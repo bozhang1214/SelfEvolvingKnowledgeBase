@@ -29,7 +29,7 @@ class NewsStorage:
     def save_daily(self, day: str, report: dict) -> str:
         """保存某天的日报，返回 Markdown 文件路径。"""
         md_path = self._dir / f"daily_{day}.md"
-        md_path.write_text(self._to_markdown(day, report), encoding="utf-8")
+        md_path.write_text(self._to_markdown(f"AI 科技资讯 · {day}", report), encoding="utf-8")
         # 额外落一份结构化 JSON，供周报/月报聚合使用
         json_path = self._dir / f"daily_{day}.json"
         json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -65,10 +65,11 @@ class NewsStorage:
     # ---------- 周期报告（周报/月报） ----------
 
     def save_periodic(self, report_type: str, period: str, report: dict) -> str:
-        """保存周报/月报，返回 Markdown 文件路径。"""
+        """保存周报/月报（与日报同格式），返回 Markdown 文件路径。"""
         md_path = self._dir / f"{report_type}_{period}.md"
+        label = "周报" if report_type == "weekly" else "月报"
         md_path.write_text(
-            self._to_periodic_markdown(report_type, period, report), encoding="utf-8"
+            self._to_markdown(f"AI 科技{label} · {period}", report), encoding="utf-8"
         )
         return str(md_path)
 
@@ -139,11 +140,11 @@ class NewsStorage:
                 continue
 
     @staticmethod
-    def _to_markdown(day: str, report: dict) -> str:
-        """把日报 JSON 渲染为结构清晰的 Markdown（含头条 + 总结预测 + 打分）。"""
-        lines = [f"# AI 科技资讯 · {day}", ""]
+    def _to_markdown(title: str, report: dict) -> str:
+        """把日报/周报/月报 JSON 渲染为结构清晰的 Markdown（含头条 + 总结预测 + 打分）。"""
+        lines = [f"# {title}", ""]
 
-        # 头条（当天最重要的一条，置顶）
+        # 头条（本周期最重要的一条，置顶）
         headline = report.get("headline") or {}
         if headline.get("title"):
             lines.append("## 🔥 头条")
@@ -191,55 +192,15 @@ class NewsStorage:
                     lines.append(f"- 🔗 [原文链接]({link})")
                 lines.append("")
 
-        # 篇尾综合分析：跨大类关联分析 + 未来半月预测
+        # 篇尾综合分析：跨大类关联分析 + 趋势预测
         comp = report.get("comprehensive") or {}
         if comp.get("correlation") or comp.get("forecast"):
-            lines.append("## 🔮 综合分析 · 未来半月展望")
+            lines.append("## 🔮 综合分析 · 趋势展望")
             lines.append("")
             if comp.get("correlation"):
                 lines.append(f"> **🔗 关联分析**：{comp.get('correlation')}")
                 lines.append("")
             if comp.get("forecast"):
-                lines.append(f"> **🔮 未来半月预测**：{comp.get('forecast')}")
+                lines.append(f"> **🔮 趋势预测**：{comp.get('forecast')}")
                 lines.append("")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _to_periodic_markdown(report_type: str, period: str, report: dict) -> str:
-        """把周报/月报 JSON 渲染为 Markdown。"""
-        label = "周报" if report_type == "weekly" else "月报"
-        lines = [f"# AI 科技{label} · {period}", ""]
-
-        themes = report.get("themes") or []
-        if themes:
-            lines.append("## 主线梳理")
-            lines.append("")
-            for t in themes:
-                lines.append(f"### {t.get('title', '')}")
-                if t.get("summary"):
-                    lines.append(f"- 发生了什么：{t.get('summary')}")
-                if t.get("implication"):
-                    lines.append(f"- 意味着什么：{t.get('implication')}")
-                if t.get("watch_next"):
-                    lines.append(f"- 下一步关注：{t.get('watch_next')}")
-                lines.append("")
-
-        timeline = report.get("timeline") or []
-        if timeline:
-            lines.append("## 重大事件回顾")
-            lines.append("")
-            for ev in timeline:
-                date = ev.get("date", "")
-                event = ev.get("event", "")
-                comment = ev.get("comment", "")
-                lines.append(f"- **{date}** {event}" + (f" —— {comment}" if comment else ""))
-            lines.append("")
-
-        outlook = report.get("outlook") or []
-        if outlook:
-            lines.append("## 下周 / 下月展望")
-            lines.append("")
-            for i, o in enumerate(outlook, 1):
-                lines.append(f"{i}. {o}")
-            lines.append("")
         return "\n".join(lines)
