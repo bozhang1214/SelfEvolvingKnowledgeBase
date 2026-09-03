@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -51,7 +52,7 @@ def _fetch_sync(keyword: str, city: str, page: int, limit: int) -> list[dict[str
         "User-Agent": _UA,
         "Content-Type": "application/json;charset=UTF-8",
         "Origin": "https://www.liepin.com",
-        "Referer": f"https://www.liepin.com/zhaopin/?key={keyword}",
+        "Referer": f"https://www.liepin.com/zhaopin/?key={quote(keyword)}",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-CN,zh;q=0.9",
         "X-Client-Type": "web",
