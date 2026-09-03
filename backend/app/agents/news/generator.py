@@ -105,7 +105,7 @@ class DailyReportGenerator:
             logger.warning("综合分析提示词文件未找到，使用内置兜底提示词")
 
         # 周期语境默认按日报；生成周报/月报时由 generate(period_type=...) 覆盖
-        self._ctx = self._PERIOD_CONTEXTS["daily"]
+        self._ctx = _PERIOD_CONTEXTS["daily"]
 
     async def generate(
         self,
@@ -115,7 +115,7 @@ class DailyReportGenerator:
         period_type: str = "daily",
     ) -> dict:
         """按给定周期生成结构化报告（头条 + 逐类 + 综合分析），日报/周报/月报共用。"""
-        self._ctx = self._PERIOD_CONTEXTS.get(period_type, self._PERIOD_CONTEXTS["daily"])
+        self._ctx = _PERIOD_CONTEXTS.get(period_type, _PERIOD_CONTEXTS["daily"])
         cats = categories or []
 
         # 1. 关键词分类（多归属：一条资讯可同时归入多个大类）
