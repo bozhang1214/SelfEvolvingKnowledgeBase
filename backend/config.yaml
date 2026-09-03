@@ -308,6 +308,15 @@ news:
     - https://www.ifanr.com/feed                     # 爱范儿（消费电子/移动端）
     - https://www.ithome.com/rss/                    # IT之家（科技/数码/移动）
     - https://www.oschina.net/news/rss               # 开源中国（开源/前端/后端）
+    # ---- iOS / Android / 前端 / 开源 / 融资（8，服务器已验证 200+XML）----
+    - https://9to5mac.com/feed/                      # 9to5Mac（iOS/苹果）
+    - https://www.swift.org/atom.xml                 # Swift.org 官方博客（iOS/Swift）
+    - https://www.theverge.com/rss/apple/index.xml   # The Verge Apple（iOS/苹果）
+    - https://9to5google.com/feed/                   # 9to5Google（Android/谷歌）
+    - https://www.smashingmagazine.com/feed/         # Smashing Magazine（前端/设计）
+    - https://www.cncf.io/feed/                      # CNCF（云原生/开源）
+    - https://changelog.com/posts/feed               # Changelog（开发者工具链/开源）
+    - https://techcrunch.com/feed/                   # TechCrunch（融资/商业/政策）
     # ---- 英文（10）----
     - https://simonwillison.net/atom/everything/     # Simon Willison（LLM 工程，顶级）
     - https://openai.com/news/rss.xml                # OpenAI News

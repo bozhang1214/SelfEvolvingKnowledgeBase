@@ -23,8 +23,13 @@ class NewsAgent:
     def __init__(self, config: Any, llm_factory: Any) -> None:
         self._config = config
         self._fetcher = RSSFetcher(config.rss_sources)
+        # 关键词筛选用「顶层 keywords ∪ 所有大类关键词」，确保融资/安全/开源等
+        # 大类相关内容不会在分类前被顶层筛选误杀。
+        all_keywords = list(config.keywords or [])
+        for c in config.categories or []:
+            all_keywords.extend(c.keywords or [])
         self._filter = NewsFilter(
-            keywords=config.keywords,
+            keywords=list(dict.fromkeys(all_keywords)),  # 去重保序
             exclude_keywords=config.exclude_keywords,
             time_window_hours=config.time_window_hours,
         )

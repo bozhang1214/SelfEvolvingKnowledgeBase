@@ -62,8 +62,14 @@ class DailyReportGenerator:
         """逐类生成日报，返回 {"sections": [...], "total_count": N}。"""
         cats = categories or []
 
-        # 1. 关键词分类
+        # 1. 关键词分类（多归属：一条资讯可同时归入多个大类）
         classified = self._classify(items, cats)
+        for cat in cats:
+            n = len(classified.get(cat.name, []))
+            if n == 0:
+                logger.warning("大类无分类条目", category=cat.name)
+            else:
+                logger.info("大类分类条目数", category=cat.name, count=n)
 
         # 2. 逐类生成
         sections = []
@@ -85,14 +91,13 @@ class DailyReportGenerator:
     # ---------- 分类 ----------
 
     def _classify(self, items: list[dict], categories: list[Any]) -> dict[str, list[dict]]:
-        """按关键词把条目归入各大类（命中即归入第一个匹配类）。"""
+        """按关键词把条目归入各大类（多归属：命中多个大类则同时归入，避免后序大类被饿死）。"""
         classified: dict[str, list[dict]] = {c.name: [] for c in categories}
         for it in items:
             text = f"{it.get('title', '')} {it.get('summary', '')}".lower()
             for c in categories:
                 if any(k.lower() in text for k in c.keywords):
                     classified[c.name].append(it)
-                    break
         return classified
 
     # ---------- 单类生成 ----------

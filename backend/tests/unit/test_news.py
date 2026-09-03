@@ -75,7 +75,7 @@ class TestParseJson:
 
 
 class TestNewsGeneratorClassify:
-    def test_classify_by_keyword_first_match(self):
+    def test_classify_by_keyword(self):
         from app.core.config import CategoryConfig
 
         gen = object.__new__(DailyReportGenerator)
@@ -94,6 +94,24 @@ class TestNewsGeneratorClassify:
             "安卓性能优化",
         ]
         assert [it["title"] for it in classified["前端"]] == ["React 19 特性"]
+
+    def test_classify_multi_assign(self):
+        # 一条资讯同时命中多个大类时，应同时归入多个大类（多归属）
+        from app.core.config import CategoryConfig
+
+        gen = object.__new__(DailyReportGenerator)
+        cats = [
+            CategoryConfig(name="大模型", keywords=["大模型", "模型"]),
+            CategoryConfig(name="前端", keywords=["react", "前端"]),
+        ]
+        items = [{"title": "React 19 驱动大模型前端应用", "summary": ""}]
+        classified = DailyReportGenerator._classify(gen, items, cats)
+        assert [it["title"] for it in classified["大模型"]] == [
+            "React 19 驱动大模型前端应用"
+        ]
+        assert [it["title"] for it in classified["前端"]] == [
+            "React 19 驱动大模型前端应用"
+        ]
 
     def test_classify_unmatched_dropped(self):
         from app.core.config import CategoryConfig
