@@ -219,14 +219,20 @@ def filter_jobs(
     min_salary_k: int = 0,
 ) -> list[dict[str, Any]]:
     """
-    对职位做客户端筛选：城市前缀匹配 + 薪资下限过滤。
+    对职位做客户端筛选：城市包含匹配 + 薪资下限过滤。
 
-    - city: 城市名前缀（如「北京」）；为空表示不过滤城市。
+    - city: 城市名（如「北京」）；为空或「不限/全国」表示不过滤城市。
+      采用「包含」而非前缀匹配，以便识别多地职位（如「浙江 / 北京市」仍算北京）。
     - min_salary_k: 最低月薪（K）；0 表示不过滤。薪资无法解析（面议）时保留。
     """
+    # 归一化城市条件：空 / 不限 / 全国 均视为不过滤
+    target = (city or "").strip()
+    if target in ("不限", "全国"):
+        target = ""
+
     out: list[dict[str, Any]] = []
     for j in jobs:
-        if city and j.get("city") and not str(j["city"]).startswith(city):
+        if target and j.get("city") and target not in str(j["city"]):
             continue
         if min_salary_k > 0:
             mn = parse_min_salary(j.get("salary") or "")

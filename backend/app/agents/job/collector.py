@@ -2,7 +2,7 @@
 多源职位采集器。
 
 并行调用多个招聘渠道（猎聘 + 字节/腾讯/百度/小米/阿里/小红书等），
-合并去重后统一做客户端筛选（城市前缀 + 薪资下限）。
+合并去重后统一做客户端筛选（城市包含匹配 + 薪资下限）。
 
 各源提供统一接口：``async def fetch(keyword, page=0, limit=20) -> list[dict]``，
 返回归一化职位字典（title/company/salary/city/job_url/jd_text/source）。
