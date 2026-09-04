@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
-  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List, Modal, Divider, Alert, Select, Pagination, Popover,
+  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List, Modal, Divider, Alert, Select, Pagination, Popover, Table,
 } from 'antd';
 import {
   ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined, QrcodeOutlined,
@@ -63,6 +63,25 @@ const SECTION_ORDER: SectionKey[] = [
 // 职位采集筛选选项
 const CITY_OPTIONS = ['不限', '北京', '上海', '深圳', '杭州', '广州', '成都', '全国'];
 const SALARY_OPTIONS = ['不限', '20K+', '30K+', '40K+', '50K+', '60K+', '80K+', '100K+'];
+
+// 职位类型分类（按标题关键词）
+const ROLE_RULES: Array<[string, string[]]> = [
+  ['评测/质量', ['评测', '评估', 'Evaluation', '测试']],
+  ['安全', ['安全']],
+  ['算法/模型', ['算法', 'NLP', '大模型', 'LLM', '模型', 'AIOps']],
+  ['架构师/Leader', ['架构师', 'Tech Lead', '技术负责人', 'Leader', '架构研发']],
+  ['产品经理', ['产品经理', '产品', 'PM', '策略']],
+  ['运营/策略', ['运营', '数据策略', '数据']],
+  ['研发/工程', ['后端', '引擎', '研发工程师', '开发工程师', 'Harness', 'Infra', '基础设施', '编排', 'Orchestration', '应用']],
+];
+
+function classifyRole(title: string): string {
+  const t = (title || '').toLowerCase();
+  for (const [role, kws] of ROLE_RULES) {
+    if (kws.some((k) => t.includes(k.toLowerCase()))) return role;
+  }
+  return '其他';
+}
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -187,7 +206,8 @@ const Job: React.FC = () => {
   const [fetchSalary, setFetchSalary] = useState('不限');
   const [fetching, setFetching] = useState(false);
   const [fetchedJobs, setFetchedJobs] = useState<FetchedJob[]>([]);
-  const [companyFilter, setCompanyFilter] = useState('');
+  // 复选框选中的职位（多选批量分析）
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   // 批量报告职位列表分页（受控，修复「N 条/页」不生效）
   const [jobPage, setJobPage] = useState(1);
   const [jobPageSize, setJobPageSize] = useState(20);
@@ -376,18 +396,13 @@ const Job: React.FC = () => {
 
   /** 点击采集到的职位：有 JD 文本则填入分析框并切到「单职位分析」，否则跳转原链接 */
   const handlePickJob = (job: FetchedJob) => {
+    setJdText(job.jd_text || '');
+    setMeta({ company: job.company, position: job.title, city: job.city, salary: job.salary });
+    setAnalysisMode('single');
     if (job.jd_text && job.jd_text.trim()) {
-      setJdText(job.jd_text);
-      setMeta({ company: job.company, position: job.title, city: job.city, salary: job.salary });
-      setAnalysisMode('single');
       message.success('已填入职位描述，请点击「开始分析」');
     } else {
-      if (job.job_url) {
-        window.open(job.job_url, '_blank');
-        message.info('该职位未返回 JD 文本，已打开职位详情页，请复制 JD 粘贴到上方分析框');
-      } else {
-        message.warning('该职位缺少 JD 文本，请手动粘贴职位描述');
-      }
+      message.info('该职位暂无 JD 文本，请粘贴 JD 后点击「开始分析」');
     }
   };
 
@@ -520,7 +535,7 @@ const Job: React.FC = () => {
             ref={fileInputRef}
             type="file"
             multiple
-            accept=".txt,.md,.text,.json"
+            accept=".txt,.md,.markdown,.pdf,.docx"
             style={{ display: 'none' }}
             onChange={handleImportFiles}
           />
@@ -528,55 +543,97 @@ const Job: React.FC = () => {
             批量上传职位文件
           </Button>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            支持 .txt/.md，每个文件一个职位（文件名作标题、正文作 JD），导入后自动加入下方列表
+            支持 .txt/.md/.docx/.pdf，每个文件一个职位（文件名作标题、正文作 JD），导入后补充到下方列表（不覆盖）
           </Text>
         </Space>
         {fetchedJobs.length > 0 && (
-          <Input
-            placeholder="按公司筛选（如：字节 / 智谱 / 月之暗面）"
-            value={companyFilter}
-            onChange={(e) => setCompanyFilter(e.target.value)}
-            allowClear
-            style={{ marginTop: 12 }}
-            prefix={<Text type="secondary">公司</Text>}
-          />
-        )}
-        {fetchedJobs.length > 0 && (
-          <List
-            size="small"
-            style={{ marginTop: 12 }}
-            dataSource={fetchedJobs.filter((j) =>
-              !companyFilter.trim() || (j.company || '').toLowerCase().includes(companyFilter.trim().toLowerCase())
-            )}
-            renderItem={(job) => (
-              <List.Item
-                key={job.job_id || `${job.title}-${job.company}`}
-                onClick={() => handlePickJob(job)}
-                style={{ cursor: 'pointer' }}
-                actions={[
-                  <Button key="pick" size="small" type="link">
-                    {job.jd_text ? '填入分析' : '打开详情'}
-                  </Button>,
-                ]}
-              >
-                <List.Item.Meta
-                  title={
-                    <Space size={8}>
+          <>
+            <Space style={{ marginTop: 12, width: '100%', justifyContent: 'space-between' }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>共 {fetchedJobs.length} 条职位</Text>
+              {selectedRowKeys.length > 0 && (
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<BarChartOutlined />}
+                  loading={batchAnalyzing}
+                  onClick={() => {
+                    const keys = selectedRowKeys.map(String);
+                    const selected = fetchedJobs.filter((j) => keys.includes(j.job_id || `${j.title}-${j.company}`));
+                    setAnalysisMode('batch');
+                    handleBatchAnalyze(false, selected);
+                  }}
+                >
+                  批量分析选中（{selectedRowKeys.length}）
+                </Button>
+              )}
+            </Space>
+            <Table
+              size="small"
+              style={{ marginTop: 8 }}
+              rowKey={(j) => j.job_id || `${j.title}-${j.company}`}
+              dataSource={fetchedJobs}
+              rowSelection={{
+                selectedRowKeys,
+                onChange: setSelectedRowKeys,
+              }}
+              pagination={{
+                pageSize: 20,
+                size: 'small',
+                showSizeChanger: true,
+                pageSizeOptions: [10, 20, 50, 100],
+                showTotal: (t) => `共 ${t} 条`,
+              }}
+              columns={[
+                {
+                  title: '职位名',
+                  dataIndex: 'title',
+                  key: 'title',
+                  render: (_, job) => (
+                    <Space size={6}>
                       <JobDetailPopover job={job}><Text strong>{job.title}</Text></JobDetailPopover>
-                      <Tag color="blue">{job.salary || '面议'}</Tag>
-                      {job.source && <Tag style={{ fontSize: 11 }}>{job.source}</Tag>}
+                      {job.salary && <Tag color="blue" style={{ fontSize: 11 }}>{job.salary}</Tag>}
                     </Space>
-                  }
-                  description={
-                    <Space size={8}>
-                      <Text strong>{job.company}</Text>
-                      {job.city && <Text type="secondary">{job.city}</Text>}
-                    </Space>
-                  }
-                />
-              </List.Item>
-            )}
-          />
+                  ),
+                },
+                {
+                  title: '职位类型',
+                  key: 'role',
+                  width: 120,
+                  render: (_, job) => <Tag style={{ fontSize: 11 }}>{classifyRole(job.title)}</Tag>,
+                  filters: [...new Set(fetchedJobs.map((j) => classifyRole(j.title)))].map((r) => ({ text: r, value: r })),
+                  onFilter: (value, job) => classifyRole(job.title) === value,
+                },
+                {
+                  title: '数据来源',
+                  dataIndex: 'source',
+                  key: 'source',
+                  width: 100,
+                  render: (s) => <Tag style={{ fontSize: 11 }}>{s || '-'}</Tag>,
+                  filters: [...new Set(fetchedJobs.map((j) => j.source || '未知'))].map((s) => ({ text: s, value: s })),
+                  onFilter: (value, job) => (job.source || '未知') === value,
+                },
+                {
+                  title: '公司',
+                  dataIndex: 'company',
+                  key: 'company',
+                  render: (c) => <Text strong>{c || '-'}</Text>,
+                  filters: [...new Set(fetchedJobs.map((j) => j.company || '未知'))].map((c) => ({ text: c, value: c })),
+                  onFilter: (value, job) => (job.company || '未知') === value,
+                  filterSearch: true,
+                },
+                {
+                  title: '操作',
+                  key: 'action',
+                  width: 90,
+                  render: (_, job) => (
+                    <Button size="small" type="link" onClick={() => handlePickJob(job)}>
+                      填入分析
+                    </Button>
+                  ),
+                },
+              ]}
+            />
+          </>
         )}
                 </Card>
               </>

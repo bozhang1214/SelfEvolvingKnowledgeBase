@@ -16,6 +16,7 @@ Cookie + X-Xsrf-Token + X-Fscp-* 网关头 POST」两步流程，且请求体需
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import re
 import uuid
 from typing import Any
@@ -34,6 +35,10 @@ _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
+
+# 详情页 JD 容器：<dd data-selector="job-intro-content">岗位职责...</dd>
+_JD_RE = re.compile(r'<dd data-selector="job-intro-content">(.*?)</dd>', re.S)
+_JD_CONCURRENCY = 6  # 详情页抓取并发数（过大易被猎聘限流）
 
 
 def _fetch_sync(keyword: str, city: str, page: int, limit: int) -> list[dict[str, Any]]:
@@ -110,7 +115,9 @@ def _fetch_sync(keyword: str, city: str, page: int, limit: int) -> list[dict[str
     data = payload.get("data") or {}
     inner = data.get("data") if isinstance(data, dict) else {}
     cards = inner.get("jobCardList") or data.get("jobCardList") or []
-    return [_normalize(c) for c in cards if isinstance(c, dict)]
+    jobs = [_normalize(c) for c in cards if isinstance(c, dict)]
+    # 列表接口不带 JD，并发抓详情页补全（共享登录 Cookie 避免被风控）
+    return _fetch_jds(jobs, session.cookies.get_dict())
 
 
 def _normalize(card: dict[str, Any]) -> dict[str, Any]:
@@ -118,16 +125,52 @@ def _normalize(card: dict[str, Any]) -> dict[str, Any]:
     job = card.get("job") if isinstance(card.get("job"), dict) else {}
     comp = card.get("comp") if isinstance(card.get("comp"), dict) else {}
     job_id = job.get("jobId") or card.get("jobId") or card.get("job_id") or ""
+    link = job.get("link") or card.get("link") or (f"https://www.liepin.com/job/{job_id}.shtml" if job_id else "")
     return {
         "job_id": str(job_id),
         "title": job.get("title") or card.get("title") or "",
         "company": comp.get("compName") or card.get("companyName") or "",
         "salary": job.get("salary") or card.get("salary") or "",
         "city": job.get("dq") or card.get("dq") or card.get("city") or "",
-        "job_url": f"https://www.liepin.com/job/{job_id}" if job_id else "",
+        "job_url": link,
         "jd_text": job.get("jd") or card.get("jd") or card.get("jobAbstract") or "",
         "source": "猎聘",
     }
+
+
+def _fetch_jd(link: str, cookies: dict[str, str]) -> str:
+    """抓取单个猎聘职位详情页的 JD 文本（独立 session + 共享 Cookie）。"""
+    if not link:
+        return ""
+    try:
+        s = requests.Session()
+        s.cookies.update(cookies)
+        r = s.get(link, headers={"User-Agent": _UA, "Accept-Language": "zh-CN,zh;q=0.9"}, timeout=15)
+        if r.status_code != 200:
+            return ""
+        m = _JD_RE.search(r.text)
+        if not m:
+            return ""
+        text = re.sub(r"<[^>]+>", " ", m.group(1))
+        return re.sub(r"\s+", " ", text).strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _fetch_jds(jobs: list[dict[str, Any]], cookies: dict[str, str]) -> list[dict[str, Any]]:
+    """并发抓取所有职位的 JD 文本，回填到 job 的 jd_text。"""
+    if not jobs:
+        return jobs
+    links = [j.get("job_url") or "" for j in jobs]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_JD_CONCURRENCY) as pool:
+        jds = list(pool.map(lambda l: _fetch_jd(l, cookies) if l else "", links))
+    filled = 0
+    for j, jd in zip(jobs, jds):
+        if jd:
+            j["jd_text"] = jd
+            filled += 1
+    logger.info("猎聘职位 JD 补全完成", total=len(jobs), filled=filled)
+    return jobs
 
 
 def parse_min_salary(salary: str) -> int | None:
