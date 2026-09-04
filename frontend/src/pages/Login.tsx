@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { Form, Input, Button, Card, Typography, message, Space, Alert } from 'antd';
 import { MailOutlined, LockOutlined } from '@ant-design/icons';
 import { useUserStore } from '@/stores/user';
@@ -10,6 +10,7 @@ const { Title, Text } = Typography;
 const Login: React.FC = () => {
   const navigate = useNavigate();
   const login = useUserStore((s) => s.login);
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
 
@@ -20,7 +21,9 @@ const Login: React.FC = () => {
     try {
       await login(values);
       message.success('登录成功');
-      navigate('/');
+      // 登录后回跳原始目标（如飞书告警深链的 /chat?conversation_id=xxx）；非法值回首页
+      const redirect = searchParams.get('redirect') || '';
+      navigate(redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/');
     } catch (err: any) {
       const status = err?.response?.status;
       const msg = err?.response?.data?.message || '登录失败，请检查邮箱和密码';

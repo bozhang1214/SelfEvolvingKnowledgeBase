@@ -111,9 +111,11 @@ groups:
         for: 15m
         labels:
           severity: warning
+          # 透传会话 ID，供飞书「查看对话记录」按钮深链到具体对话
+          conversation_id: "{{ $labels.conversation_id }}"
         annotations:
           summary: "答案锚定度偏低"
-          description: "近 15 分钟答案锚定度均低于 0.6，可能存在幻觉风险"
+          description: "近 15 分钟答案锚定度均低于 0.6，可能存在幻觉风险（会话：{{ $labels.conversation_id }}）"
 
       # LLM 降级频繁
       - alert: LLMDegradationHigh

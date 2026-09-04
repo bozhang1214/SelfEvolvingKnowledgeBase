@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Layout, List, Input, Button, Typography, Space, Spin, Popconfirm, Checkbox, message as antMsg,
 } from 'antd';
@@ -110,11 +111,21 @@ const Chat: React.FC = () => {
   const [sharing, setSharing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [searchParams] = useSearchParams();
 
   // 加载会话列表
   useEffect(() => {
     loadConversations();
   }, [loadConversations]);
+
+  // 深链：从 URL 的 conversation_id 参数定位到指定会话
+  // （飞书告警「查看对话记录」按钮跳转 /sekb/chat?conversation_id=xxx）
+  useEffect(() => {
+    const convId = searchParams.get('conversation_id');
+    if (convId) {
+      selectConversation(convId);
+    }
+  }, [searchParams, selectConversation]);
 
   // 自动滚动到底部
   useEffect(() => {

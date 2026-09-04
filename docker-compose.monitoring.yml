@@ -178,9 +178,10 @@ services:
       # 飞书机器人 webhook 地址（在 .env.prod 中配置）
       FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
       FEISHU_SECRET: ${FEISHU_SECRET:-}
-      # 告警卡片操作按钮跳转地址（默认 Tailscale 内网地址，可在 .env.prod 覆盖）
+      # 告警卡片操作按钮跳转地址（可在 .env.prod 覆盖）
       GRAFANA_URL: ${GRAFANA_URL:-http://100.71.24.105:3001}
-      FRONTEND_URL: ${FRONTEND_URL:-http://100.71.24.105}
+      # 前端应用地址（含 /sekb 子路径、不带尾斜杠）；「查看对话记录」深链到 /chat 由网关拼接
+      FRONTEND_URL: ${FRONTEND_URL:-https://bos-studio.tech/sekb}
     ports:
       - "${FEISHU_GATEWAY_PORT:-5001}:5001"
     networks:

@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useUserStore } from '@/stores/user';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
@@ -10,7 +10,12 @@ import SharedChat from '@/pages/SharedChat';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isLoggedIn = useUserStore((s) => s.isLoggedIn);
-  if (!isLoggedIn) return <Navigate to="/login" replace />;
+  const location = useLocation();
+  if (!isLoggedIn) {
+    // 未登录时跳登录页，并携带原始路径（含 query 如 conversation_id）供登录后回跳
+    const redirect = encodeURIComponent(location.pathname + location.search);
+    return <Navigate to={`/login?redirect=${redirect}`} replace />;
+  }
   return <>{children}</>;
 };
 

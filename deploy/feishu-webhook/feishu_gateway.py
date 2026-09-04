@@ -45,7 +45,7 @@ _ALERT_GUIDE = {
 }
 
 
-def _build_action_buttons() -> list[dict]:
+def _build_action_buttons(conversation_id: str = "") -> list[dict]:
     """构建操作按钮（跳转链接，未配置 URL 则不显示）。"""
     buttons = []
     if GRAFANA_URL:
@@ -56,11 +56,16 @@ def _build_action_buttons() -> list[dict]:
             "url": GRAFANA_URL,
         })
     if FRONTEND_URL:
+        # FRONTEND_URL 已含 /sekb 子路径（如 https://bos-studio.tech/sekb）
+        # 深链到 /chat，携带 conversation_id 时前端自动定位到对应会话
+        chat_url = FRONTEND_URL + "/chat"
+        if conversation_id:
+            chat_url += f"?conversation_id={conversation_id}"
         buttons.append({
             "tag": "button",
             "text": {"tag": "plain_text", "content": "查看对话记录"},
             "type": "default",
-            "url": FRONTEND_URL,
+            "url": chat_url,
         })
     return buttons
 
@@ -134,8 +139,16 @@ def _build_card(alerts: list[dict]) -> dict:
     if elements and elements[-1].get("tag") == "hr":
         elements.pop()
 
+    # 提取 conversation_id（用于「查看对话记录」深链，多条告警取第一个有效的）
+    conversation_id = ""
+    for alert in alerts:
+        cid = alert.get("labels", {}).get("conversation_id", "")
+        if cid:
+            conversation_id = cid
+            break
+
     # 操作按钮（跳转链接，未配置则不显示）
-    buttons = _build_action_buttons()
+    buttons = _build_action_buttons(conversation_id)
     if buttons:
         elements.append({"tag": "hr"})
         elements.append({"tag": "action", "actions": buttons})

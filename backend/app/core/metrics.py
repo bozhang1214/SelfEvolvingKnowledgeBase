@@ -122,9 +122,11 @@ replan_count_total = Counter(
 )
 
 # 答案锚定度（防幻觉），最近一次值
+# conversation_id 标签用于告警时定位到具体会话（飞书「查看对话记录」深链）
 answer_groundedness = Gauge(
     "sekb_answer_groundedness",
     "Latest answer groundedness score (0-1)",
+    ["conversation_id"],
 )
 
 # ============================================================
@@ -280,7 +282,11 @@ def record_chat_metrics(result: dict) -> None:
         # 质量指标
         groundedness = metrics.get("answer_groundedness")
         if isinstance(groundedness, (int, float)):
-            answer_groundedness.set(float(groundedness))
+            conv_id = str(result.get("conversation_id") or "unknown")
+            # 先清空旧会话序列：避免历史低分序列长期残留导致告警误报，
+            # 同时保证指标仅保留「最近一次」会话这一条序列（与原先无标签语义一致）
+            answer_groundedness.clear()
+            answer_groundedness.labels(conversation_id=conv_id).set(float(groundedness))
 
         replan = metrics.get("replan_count", 0)
         if replan > 0:
