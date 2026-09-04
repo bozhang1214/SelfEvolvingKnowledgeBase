@@ -36,7 +36,6 @@ export interface JobAnalyzeResult {
   interview_qa: JsonMap;
   gap_analysis: JsonMap;
   resume_advice: JsonMap;
-  learning_plan: JsonMap;
   project_iteration: JsonMap;
   job_strategy: JsonMap;
 }
@@ -138,10 +137,10 @@ export interface MarketReport {
     role_distribution: Array<{ name: string; count: number }>;
     hot_keywords: Array<{ keyword: string; count: number }>;
   };
-  overview: string;
-  trends: string[];
-  opportunities: Array<{ title: string; company: string; reason: string }>;
-  recommendations: string[];
+  /** 市场行情（批量职位分析.md 的输出：赛道热力/技能栈门槛线/经验水位/薪资锚点） */
+  market: JsonMap;
+  /** 知识迭代（职位知识迭代.md 的输出：断舍离/里程碑/试金石/开源镀金） */
+  knowledge_iteration: JsonMap;
   jobs: FetchedJob[];
 }
 

@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections import Counter
@@ -20,6 +21,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agents.job.generator import _resolve_prompt_dir
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -44,16 +46,79 @@ _HOT_KEYWORDS = [
     "Claw", "ArkClaw", "RAG", "大模型", "LLM", "多模态", "AIOps", "SOC", "安全",
 ]
 
-_SYSTEM_PROMPT = """你是资深招聘分析师。根据给定的职位采集统计与用户画像，生成一份市场分析报告。
+# 批量分析提示词（prompt/job 目录下，站在「求职者选赛道」视角）
+_PROMPT_MARKET = "批量职位分析.md"
+_PROMPT_KNOWLEDGE = "职位知识迭代.md"
 
-要求：
-- overview：3~5 句话概括整体市场概况
-- trends：2~4 条市场趋势（Agent 方向的技术/岗位趋势）
-- opportunities：5~8 个重点机会职位，每个给出 title/company/reason，reason 要结合用户画像说明为什么适合
-- recommendations：3~5 条求职行动建议（投递方向/补短板/简历包装等）
+# 每份 JD 喂给 LLM 的摘要截断长度（控制 token，避免几十份 JD 全文超限）
+_JD_BRIEF_MAX = 400
 
-只输出 JSON，格式：
-{"overview": "...", "trends": ["..."], "opportunities": [{"title": "...", "company": "...", "reason": "..."}], "recommendations": ["..."]}"""
+
+def _load_prompt(filename: str) -> str:
+    """加载 prompt/job 下的提示词文件；缺失返回空串。"""
+    base = _resolve_prompt_dir()
+    if not base:
+        return ""
+    p = base / filename
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def _extract_json(raw: Any) -> dict:
+    """从 LLM 响应中稳健提取 JSON 对象，失败返回空结构。"""
+    text = raw if isinstance(raw, str) else str(raw)
+    text = text.strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        logger.error("批量分析 LLM 返回非 JSON", raw=text[:200])
+        return {}
+    try:
+        return json.loads(text[start : end + 1])
+    except json.JSONDecodeError as e:
+        logger.error("批量分析 JSON 解析失败", error=str(e))
+        return {}
+
+
+def _build_job_summaries(jobs: list[dict[str, Any]]) -> str:
+    """构造 JD 摘要文本（职位名/公司/薪资/城市 + JD 截断），供 LLM 分析。"""
+    lines: list[str] = []
+    for i, j in enumerate(jobs, 1):
+        title = (j.get("title") or "").strip() or "（无标题）"
+        meta = " | ".join(
+            x for x in [
+                (j.get("company") or "").strip(),
+                (j.get("salary") or "").strip(),
+                (j.get("city") or "").strip(),
+            ] if x
+        )
+        jd = (j.get("jd_text") or "").strip()
+        brief = jd[:_JD_BRIEF_MAX] + ("…" if len(jd) > _JD_BRIEF_MAX else "")
+        line = f"{i}. 【{title}】{meta}" if meta else f"{i}. 【{title}】"
+        if brief:
+            line += f"\n   {brief}"
+        lines.append(line)
+    return "\n\n".join(lines)
+
+
+async def _llm_call(
+    llm_factory: Any, filename: str, user_profile: str, job_summaries: str
+) -> dict:
+    """用 prompt/job 下的提示词调用 LLM，返回解析后的 JSON；失败降级为空结构。"""
+    prompt = _load_prompt(filename)
+    if not prompt:
+        logger.warning("批量分析提示词缺失，跳过", filename=filename)
+        return {}
+    llm = llm_factory.get("job_analysis")
+    payload = f"用户画像：\n{user_profile}\n\nJD 摘要列表：\n{job_summaries}"
+    try:
+        resp = await llm.ainvoke([
+            SystemMessage(content=prompt),
+            HumanMessage(content=payload),
+        ])
+        raw = resp.content if hasattr(resp, "content") else str(resp)
+        return _extract_json(raw)
+    except Exception as e:  # noqa: BLE001
+        logger.error("批量分析 LLM 调用失败", filename=filename, error=str(e)[:200])
+        return {}
 
 
 def _load_cache() -> dict[str, Any]:
@@ -122,43 +187,6 @@ def compute_stats(jobs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-async def _llm_synthesize(
-    llm_factory: Any,
-    user_profile: str,
-    keyword: str,
-    city: str,
-    job_count: int,
-    stats: dict[str, Any],
-    title_samples: str,
-) -> dict[str, Any]:
-    """调用 LLM 生成 overview/trends/opportunities/recommendations。"""
-    payload = (
-        f"用户画像：\n{user_profile}\n\n"
-        f"职位采集（关键词={keyword}，城市={city}，共 {job_count} 个职位）：\n"
-        f"公司分布：{json.dumps(stats['company_distribution'], ensure_ascii=False)}\n"
-        f"职位方向分布：{json.dumps(stats['role_distribution'], ensure_ascii=False)}\n"
-        f"热点技术关键词：{json.dumps(stats['hot_keywords'], ensure_ascii=False)}\n"
-        f"职位标题样例（按公司）：\n{title_samples}"
-    )
-    llm = llm_factory.get("job_analysis")
-    resp = await llm.ainvoke([
-        SystemMessage(content=_SYSTEM_PROMPT),
-        HumanMessage(content=payload),
-    ])
-    raw = resp.content if hasattr(resp, "content") else str(resp)
-    # 稳健提取 JSON
-    text = raw.strip()
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end <= start:
-        logger.error("市场报告 LLM 返回非 JSON", raw=text[:200])
-        return {}
-    try:
-        return json.loads(text[start : end + 1])
-    except json.JSONDecodeError as e:
-        logger.error("市场报告 JSON 解析失败", error=str(e))
-        return {}
-
-
 def _normalize_job(j: dict[str, Any]) -> dict[str, Any]:
     """归一化前端传入的职位字典，补齐必需字段。"""
     return {
@@ -209,24 +237,12 @@ async def analyze_market(
         ]
 
     stats = compute_stats(jobs)
+    job_summaries = _build_job_summaries(jobs)
 
-    # 标题样例：每家公司最多 6 条
-    by_company: dict[str, list[str]] = {}
-    for j in jobs:
-        by_company.setdefault(j.get("company") or "未知", []).append(j.get("title") or "")
-    samples_lines = []
-    for c, titles in by_company.items():
-        samples_lines.append(f"- {c}：{'、'.join(titles[:6])}")
-    title_samples = "\n".join(samples_lines)
-
-    llm = await _llm_synthesize(
-        llm_factory=llm_factory,
-        user_profile=user_profile,
-        keyword=keyword,
-        city=city,
-        job_count=len(jobs),
-        stats=stats,
-        title_samples=title_samples,
+    # 并行：市场行情（批量职位分析）+ 知识迭代（职位知识迭代），各自独立降级
+    market, knowledge = await asyncio.gather(
+        _llm_call(llm_factory, _PROMPT_MARKET, user_profile, job_summaries),
+        _llm_call(llm_factory, _PROMPT_KNOWLEDGE, user_profile, job_summaries),
     )
 
     # 组装报告
@@ -237,10 +253,8 @@ async def analyze_market(
         "city": city,
         "job_count": len(jobs),
         "stats": stats,
-        "overview": llm.get("overview", ""),
-        "trends": llm.get("trends", []),
-        "opportunities": llm.get("opportunities", []),
-        "recommendations": llm.get("recommendations", []),
+        "market": market,
+        "knowledge_iteration": knowledge,
         "jobs": [
             {
                 "job_id": j.get("job_id", ""),

@@ -34,7 +34,6 @@ type SectionKey =
   | 'interview_qa'
   | 'gap_analysis'
   | 'resume_advice'
-  | 'learning_plan'
   | 'project_iteration'
   | 'job_strategy';
 
@@ -44,7 +43,6 @@ const SECTION_LABELS: Record<SectionKey, string> = {
   interview_qa: '面试 Q&A',
   gap_analysis: '差距分析',
   resume_advice: '简历建议',
-  learning_plan: '学习计划',
   project_iteration: '项目迭代',
   job_strategy: '求职策略',
 };
@@ -55,7 +53,6 @@ const SECTION_ORDER: SectionKey[] = [
   'interview_qa',
   'gap_analysis',
   'resume_advice',
-  'learning_plan',
   'project_iteration',
   'job_strategy',
 ];
@@ -221,9 +218,6 @@ const Job: React.FC = () => {
   const [fetchedJobs, setFetchedJobs] = useState<FetchedJob[]>([]);
   // 复选框选中的职位（多选批量分析）
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
-  // 批量报告职位列表分页（受控，修复「N 条/页」不生效）
-  const [jobPage, setJobPage] = useState(1);
-  const [jobPageSize, setJobPageSize] = useState(20);
   // 收集列表表格分页（受控）
   const [tablePage, setTablePage] = useState(1);
   const [tablePageSize, setTablePageSize] = useState(20);
@@ -713,13 +707,6 @@ const Job: React.FC = () => {
               style={{ marginBottom: 12 }}
               message={`分析于 ${marketReport.analyzed_at?.replace('T', ' ').slice(0, 19) || ''} · 共 ${marketReport.job_count} 个职位 · 关键词「${marketReport.keyword}」· ${marketReport.city}`}
             />
-            {marketReport.overview && (
-              <>
-                <Paragraph strong style={{ marginBottom: 4 }}>市场概况</Paragraph>
-                <Paragraph>{marketReport.overview}</Paragraph>
-              </>
-            )}
-
             <Row gutter={16}>
               <Col xs={24} sm={8}>
                 <Paragraph strong style={{ marginBottom: 4 }}>公司分布</Paragraph>
@@ -747,91 +734,21 @@ const Job: React.FC = () => {
               </Col>
             </Row>
 
-            {marketReport.trends && marketReport.trends.length > 0 && (
+            {marketReport.market && !isEmptyValue(marketReport.market) && (
               <>
                 <Divider style={{ margin: '12px 0' }} />
-                <Paragraph strong style={{ marginBottom: 4 }}>市场趋势</Paragraph>
-                <List
-                  size="small"
-                  dataSource={marketReport.trends}
-                  renderItem={(t) => <List.Item>· {t}</List.Item>}
-                />
+                <Paragraph strong style={{ marginBottom: 8 }}>市场行情</Paragraph>
+                <JsonBlock data={marketReport.market} />
               </>
             )}
 
-            {marketReport.opportunities && marketReport.opportunities.length > 0 && (
+            {marketReport.knowledge_iteration && !isEmptyValue(marketReport.knowledge_iteration) && (
               <>
                 <Divider style={{ margin: '12px 0' }} />
-                <Paragraph strong style={{ marginBottom: 4 }}>重点机会</Paragraph>
-                <List
-                  size="small"
-                  dataSource={marketReport.opportunities}
-                  renderItem={(o) => (
-                    <List.Item>
-                      <List.Item.Meta
-                        title={<Text strong>{o.title}</Text>}
-                        description={<Text type="secondary">{o.company}</Text>}
-                      />
-                      <Text type="secondary" style={{ fontSize: 12, maxWidth: 420 }}>{o.reason}</Text>
-                    </List.Item>
-                  )}
-                />
+                <Paragraph strong style={{ marginBottom: 8 }}>知识迭代</Paragraph>
+                <JsonBlock data={marketReport.knowledge_iteration} />
               </>
             )}
-
-            {marketReport.recommendations && marketReport.recommendations.length > 0 && (
-              <>
-                <Divider style={{ margin: '12px 0' }} />
-                <Paragraph strong style={{ marginBottom: 4 }}>行动建议</Paragraph>
-                <List
-                  size="small"
-                  dataSource={marketReport.recommendations}
-                  renderItem={(r) => <List.Item>· {r}</List.Item>}
-                />
-              </>
-            )}
-
-            <Divider style={{ margin: '12px 0' }} />
-            <Paragraph strong style={{ marginBottom: 8 }}>全部职位（{marketReport.job_count}）</Paragraph>
-            <List
-              size="small"
-              dataSource={(marketReport.jobs || []).slice((jobPage - 1) * jobPageSize, jobPage * jobPageSize)}
-              renderItem={(job) => (
-                <List.Item
-                  key={job.job_id || `${job.title}-${job.company}`}
-                  actions={[
-                    <Button key="analyze" size="small" type="link" onClick={() => handlePickJob(job)}>
-                      填入分析
-                    </Button>,
-                  ]}
-                >
-                  <List.Item.Meta
-                    title={
-                      <Space size={8}>
-                        <JobTitle job={job} />
-                        {job.source && <Tag style={{ fontSize: 11 }}>{job.source}</Tag>}
-                      </Space>
-                    }
-                    description={<Text strong>{job.company}</Text>}
-                  />
-                </List.Item>
-              )}
-            />
-            <div style={{ textAlign: 'right', marginTop: 12 }}>
-              <Pagination
-                current={jobPage}
-                pageSize={jobPageSize}
-                total={marketReport.jobs?.length || 0}
-                size="small"
-                showSizeChanger
-                pageSizeOptions={[10, 20, 50, 100]}
-                showTotal={(total) => `共 ${total} 条`}
-                onChange={(page, size) => {
-                  setJobPage(page);
-                  setJobPageSize(size);
-                }}
-              />
-            </div>
           </div>
         ) : (
           <Empty description="点击「一键分析」生成市场分析报告" />

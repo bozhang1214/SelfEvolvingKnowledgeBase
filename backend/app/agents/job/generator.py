@@ -3,7 +3,7 @@
 
 单个 JD 的流程：
     02 深度分析 → 03 知识点优先级 + 05 差距分析（并行）
-        → 04 面试 Q&A + 06 简历建议 + 07 学习计划 + 08 项目迭代 + 09 求职策略（并行）
+        → 04 面试 Q&A + 06 简历建议 + 08 项目迭代 + 09 求职策略（并行）
 
 每一步独立降级：LLM 调用异常或 JSON 解析失败时记录日志并返回空结构，
 不让整个分析崩溃（下游步骤用空结构继续执行）。
@@ -26,13 +26,14 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 # 各步骤 → 提示词文件名
+# 注：learning_plan（07）已从单职位流程移除——学习/知识迭代规划上移到批量分析的「职位知识迭代」，
+# 因为它本质是「基于市场共性」的长期成长，而非「基于单个 JD」的碎片化计划。
 _STEP_PROMPT_FILES = {
     "job_analysis": "02_job_analysis.md",
     "knowledge_priority": "03_knowledge_priority.md",
     "interview_qa": "04_interview_qa.md",
     "gap_analysis": "05_gap_analysis.md",
     "resume_advice": "06_resume_advice.md",
-    "learning_plan": "07_learning_plan.md",
     "project_iteration": "08_project_iteration.md",
     "job_strategy": "09_job_strategy.md",
 }
@@ -96,11 +97,10 @@ class JobAnalysisGenerator:
             self._step_gap_analysis(job_analysis, user_profile, role),
         )
 
-        # 3) 并行：面试 Q&A（依赖 03）+ 简历建议/学习计划/项目迭代（依赖 05）+ 求职策略（依赖 02）
-        interview, resume, learning, project, strategy = await asyncio.gather(
+        # 3) 并行：面试 Q&A（依赖 03）+ 简历建议/项目迭代（依赖 05）+ 求职策略（依赖 02）
+        interview, resume, project, strategy = await asyncio.gather(
             self._step_interview_qa(job_analysis, priorities, user_profile, role),
             self._step_resume_advice(job_analysis, gap, user_profile, role, resume_summary),
-            self._step_learning_plan(gap, user_profile, role),
             self._step_project_iteration(gap, user_profile, role, existing_projects),
             self._step_job_strategy(job_analysis, user_profile, role),
         )
@@ -111,7 +111,6 @@ class JobAnalysisGenerator:
             "interview_qa": interview,
             "gap_analysis": gap,
             "resume_advice": resume,
-            "learning_plan": learning,
             "project_iteration": project,
             "job_strategy": strategy,
         }
@@ -170,13 +169,6 @@ class JobAnalysisGenerator:
                 "gap_analysis": self._dumps(gap),
                 "resume_summary": resume_summary or "无",
             },
-            role,
-        )
-
-    async def _step_learning_plan(self, gap: dict, user_profile: str, role: str) -> dict:
-        return await self._call_step(
-            "learning_plan",
-            {"gap_analysis": self._dumps(gap), "user_profile": user_profile},
             role,
         )
 

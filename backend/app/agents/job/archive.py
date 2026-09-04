@@ -22,7 +22,6 @@ _SINGLE_SECTIONS = {
     "interview_qa": "面试 Q&A",
     "gap_analysis": "差距分析",
     "resume_advice": "简历建议",
-    "learning_plan": "学习计划",
     "project_iteration": "项目迭代",
     "job_strategy": "求职策略",
 }
@@ -60,9 +59,6 @@ def _batch_to_md(title: str, report: dict[str, Any]) -> str:
     lines.append(f"- 职位数: {report.get('job_count', 0)}")
     lines.append("")
 
-    if report.get("overview"):
-        lines += ["## 市场概况", report["overview"], ""]
-
     stats = report.get("stats") or {}
     if stats.get("company_distribution"):
         lines.append("## 公司分布")
@@ -77,21 +73,14 @@ def _batch_to_md(title: str, report: dict[str, Any]) -> str:
         lines += [f"- {c['keyword']} × {c['count']}" for c in stats["hot_keywords"]]
         lines.append("")
 
-    if report.get("trends"):
-        lines.append("## 市场趋势")
-        lines += [f"- {t}" for t in report["trends"]]
+    if report.get("market"):
+        lines.append("## 市场行情")
+        lines.extend(_render_value(report["market"]))
         lines.append("")
 
-    if report.get("opportunities"):
-        lines.append("## 重点机会")
-        for o in report["opportunities"]:
-            lines.append(f"### {o.get('title', '')}（{o.get('company', '')}）")
-            lines.append(o.get("reason", ""))
-            lines.append("")
-
-    if report.get("recommendations"):
-        lines.append("## 行动建议")
-        lines += [f"- {r}" for r in report["recommendations"]]
+    if report.get("knowledge_iteration"):
+        lines.append("## 知识迭代")
+        lines.extend(_render_value(report["knowledge_iteration"]))
         lines.append("")
 
     jobs = report.get("jobs") or []
