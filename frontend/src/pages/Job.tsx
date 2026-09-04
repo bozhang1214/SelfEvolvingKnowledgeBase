@@ -640,7 +640,7 @@ const Job: React.FC = () => {
                   title={
                     <Space>
                       <FileSearchOutlined />
-                      <Text strong>招聘分析</Text>
+                      <Text strong>职位分析</Text>
             <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
               粘贴职位 JD，自动产出岗位定位 / 知识点 / 面试题 / 差距 / 简历建议 / 求职策略
             </Text>

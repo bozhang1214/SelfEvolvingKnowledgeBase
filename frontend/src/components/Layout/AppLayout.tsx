@@ -30,7 +30,7 @@ const menuItems = [
   { key: '/files', icon: <FileOutlined />, label: '文件管理' },
   { key: '/knowledge', icon: <DatabaseOutlined />, label: '知识库' },
   { key: '/news', icon: <ReadOutlined />, label: '科技资讯' },
-  { key: '/job', icon: <SolutionOutlined />, label: '招聘分析' },
+  { key: '/job', icon: <SolutionOutlined />, label: '职位分析' },
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },
 ];
 
