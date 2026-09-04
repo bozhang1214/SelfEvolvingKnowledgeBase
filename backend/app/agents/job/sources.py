@@ -546,9 +546,11 @@ class MokahrSource(_BaseSource):
 
     def _normalize(self, j: dict[str, Any]) -> dict[str, Any]:
         jid = str(j.get("id") or "")
+        # 优先取 cityName（市名），缺市名时才用 provinceName（省名）兜底：
+        # 避免「浙江」这类省名顶替「杭州」市名，导致按市筛选（如「杭州」）漏匹配
         cities = " / ".join(
             dict.fromkeys(
-                (loc.get("provinceName") or loc.get("cityName") or "")
+                (loc.get("cityName") or loc.get("provinceName") or "")
                 for loc in (j.get("locations") or [])
                 if isinstance(loc, dict)
             )
