@@ -64,6 +64,8 @@ RUN rm -f /etc/nginx/conf.d/default.conf
 
 # 复制构建产物到 nginx 托管目录（/sekb 子路径，与其他应用共用域名时区分）
 COPY --from=builder /app/dist /usr/share/nginx/html/sekb
+# 根路径占位页（/ 不跳转，仅展示服务目录 + 链接到 /sekb/）
+COPY --from=builder /app/root-index.html /usr/share/nginx/html/index.html
 
 # nginx 配置由外部挂载提供（deploy/nginx.conf），保持镜像与配置解耦：
 # - 镜像只负责托管静态资源

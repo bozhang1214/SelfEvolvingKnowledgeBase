@@ -8,44 +8,56 @@ interface UserState {
   token: string | null;
   isLoggedIn: boolean;
 
-  init: () => Promise<void>;
+  init: () => void;
   login: (data: LoginRequest) => Promise<void>;
   register: (data: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
 }
 
-export const useUserStore = create<UserState>((set) => ({
-  user: null,
-  token: null,
-  isLoggedIn: false,
+/** 同步从 localStorage 读取会话（模块加载时执行，避免刷新后闪现登录页）。 */
+function readStoredSession(): { user: User | null; token: string | null; isLoggedIn: boolean } {
+  const token = localStorage.getItem('sekb_token');
+  const raw = localStorage.getItem('sekb_user');
+  if (!token || !raw) {
+    return { user: null, token: null, isLoggedIn: false };
+  }
+  try {
+    const user = JSON.parse(raw) as User;
+    return { user, token, isLoggedIn: true };
+  } catch {
+    localStorage.removeItem('sekb_token');
+    localStorage.removeItem('sekb_user');
+    return { user: null, token: null, isLoggedIn: false };
+  }
+}
 
-  init: async () => {
-    const token = localStorage.getItem('sekb_token');
-    const raw = localStorage.getItem('sekb_user');
-    if (token && raw) {
-      // 自动续租：临近过期时静默换新 token；已过期则登出
-      const fresh = await authService.ensureFreshToken();
-      if (!fresh) {
-        logger.warn('session_expired', { reason: 'token 过期且续租失败' });
-        localStorage.removeItem('sekb_token');
-        localStorage.removeItem('sekb_user');
-        set({ user: null, token: null, isLoggedIn: false });
-        return;
-      }
-      try {
-        const user = JSON.parse(raw) as User;
-        const freshToken = localStorage.getItem('sekb_token');
-        set({ user, token: freshToken, isLoggedIn: true });
-        logger.info('session_restore', {
-          user_id: user.user_id,
-          token: maskToken(freshToken || ''),
-        });
-      } catch {
-        logger.warn('session_restore_failed', { reason: 'invalid_json' });
-        localStorage.removeItem('sekb_token');
-        localStorage.removeItem('sekb_user');
-      }
-    }
+const stored = readStoredSession();
+
+export const useUserStore = create<UserState>((set) => ({
+  user: stored.user,
+  token: stored.token,
+  isLoggedIn: stored.isLoggedIn,
+
+  // 登录态已由上面的同步读取恢复；这里只做后台静默续租（不阻塞渲染）。
+  init: () => {
+    if (!stored.isLoggedIn) return;
+    authService
+      .ensureFreshToken()
+      .then((fresh) => {
+        if (!fresh) {
+          // token 已过期且续租失败：登出
+          logger.warn('session_expired', { reason: 'token 过期且续租失败' });
+          localStorage.removeItem('sekb_token');
+          localStorage.removeItem('sekb_user');
+          set({ user: null, token: null, isLoggedIn: false });
+        } else {
+          // 续租成功：token 已写入 localStorage，刷新内存中的 token 引用
+          set({ token: localStorage.getItem('sekb_token') });
+        }
+      })
+      .catch((err: any) => {
+        logger.warn('token_refresh_failed', { msg: err?.message });
+      });
   },
 
   login: async (data: LoginRequest) => {
