@@ -182,11 +182,10 @@ function _uploadFileXHR(
     onError('上传超时', 0);
   };
 
-  // 构造 URL（与 api.ts 的 baseURL 对齐逻辑）
-  let uploadUrl =
-    import.meta.env.PROD && import.meta.env.VITE_API_BASE
-      ? `${import.meta.env.VITE_API_BASE}/api/v1/upload`
-      : '/api/v1/upload';
+  // 构造 URL（与 api.ts 的 baseURL 对齐逻辑，生产部署在 /sekb/ 子路径）
+  let uploadUrl = import.meta.env.PROD
+    ? `${import.meta.env.VITE_API_BASE || '/sekb'}/api/v1/upload`
+    : '/api/v1/upload';
   if (overwrite) {
     uploadUrl += '?overwrite=true';
   }

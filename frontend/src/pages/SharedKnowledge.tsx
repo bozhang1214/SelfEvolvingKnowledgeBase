@@ -6,7 +6,7 @@ import {
 import {
   ArrowLeftOutlined, SendOutlined, DatabaseOutlined, UserOutlined, MessageOutlined,
 } from '@ant-design/icons';
-import apiClient, { unwrap } from '@/services/api';
+import apiClient, { unwrap, API_BASE } from '@/services/api';
 import { useUserStore } from '@/stores/user';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -133,7 +133,7 @@ const SharedKnowledge: React.FC = () => {
     abortRef.current = controller;
     const token = localStorage.getItem('sekb_token');
 
-    fetch(`/api/v1/share/${shareId}/chat/stream`, {
+    fetch(`${API_BASE}/share/${shareId}/chat/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

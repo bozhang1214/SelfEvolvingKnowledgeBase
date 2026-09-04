@@ -81,7 +81,11 @@ const REPORT_LEVELS: Set<LogLevel> = new Set(['warn', 'error']);
 
 const MAX_QUEUE_SIZE = 20;        // 队列满立即 flush
 const FLUSH_INTERVAL_MS = 5000;   // 定时 flush 周期
-const REPORT_ENDPOINT = '/api/v1/monitoring/client-event';
+// 上报端点：生产部署在 /sekb/ 子路径，开发走 Vite 代理 /api
+const _API_BASE = import.meta.env.PROD
+  ? `${import.meta.env.VITE_API_BASE || '/sekb'}/api/v1`
+  : '/api/v1';
+const REPORT_ENDPOINT = `${_API_BASE}/monitoring/client-event`;
 
 // 上报开关与采样率（通过环境变量配置）
 // VITE_LOG_REPORT_ENABLED=false 完全关闭上报（仅本地 console）

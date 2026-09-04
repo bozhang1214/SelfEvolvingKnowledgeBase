@@ -191,7 +191,7 @@ async def create_share(
         "title": share.title,
         "permission": share.permission,
         "created_at": _fmt_dt(share.created_at),
-        "share_url": f"/share/{share.share_id}",
+        "share_url": f"/sekb/share/{share.share_id}",
         "entries_count": total,
     }
 
@@ -221,7 +221,7 @@ async def list_my_shares(
             "created_at": _fmt_dt(s.created_at),
             "is_active": s.is_active,
             "has_expired": not s.is_valid(),
-            "share_url": f"/share/{s.share_id}",
+            "share_url": f"/sekb/share/{s.share_id}",
             "entries_count": entries_count,
         })
     return {"shares": result, "total": len(result)}

@@ -116,7 +116,8 @@ services:
         condition: service_healthy
     healthcheck:
       # 使用 127.0.0.1 避免 busybox wget 优先解析 localhost 为 IPv6 ::1 导致连接拒绝
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      # 部署在 /sekb/ 子路径，检查 /sekb/ 而非根路径（根路径会 301 到 /sekb/）
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/sekb/"]
       interval: 30s
       timeout: 5s
       retries: 3

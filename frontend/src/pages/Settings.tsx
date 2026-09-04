@@ -1,14 +1,20 @@
 import React from 'react';
-import { Card, Typography, Form, Input, Select, InputNumber, Button, Divider, message, Space, Avatar } from 'antd';
-import { UserOutlined, ApiOutlined } from '@ant-design/icons';
+import { Card, Typography, Form, Input, Select, InputNumber, Button, Divider, message, Space, Avatar, Tag } from 'antd';
+import { UserOutlined, ApiOutlined, SafetyOutlined } from '@ant-design/icons';
 import { useUserStore } from '@/stores/user';
 import apiClient from '@/services/api';
+import { getTokenExpiry } from '@/services/auth';
 
 const { Title, Text } = Typography;
 
 const Settings: React.FC = () => {
   const { user } = useUserStore();
   const [form] = Form.useForm();
+  const [expiry, setExpiry] = React.useState<Date | null>(null);
+
+  React.useEffect(() => {
+    setExpiry(getTokenExpiry());
+  }, []);
 
   React.useEffect(() => {
     if (user) {
@@ -69,6 +75,22 @@ const Settings: React.FC = () => {
               <Button type="primary" htmlType="submit">保存</Button>
             </Form.Item>
           </Form>
+        </Space>
+      </Card>
+
+      {/* 登录态（90 天自动续租） */}
+      <Card title={<Space><SafetyOutlined />登录态</Space>} style={{ marginBottom: 16 }}>
+        <Space direction="vertical" size={4}>
+          <Text>
+            登录有效期 <Tag color="green">90 天</Tag>，到期自动续租（接近免登录）。
+          </Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            只要 90 天内使用过系统，token 会自动续成新的 90 天，无需重新登录。
+          </Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            当前 token 到期时间：
+            {expiry ? expiry.toLocaleString('zh-CN') : '（无法解析）'}
+          </Text>
         </Space>
       </Card>
 

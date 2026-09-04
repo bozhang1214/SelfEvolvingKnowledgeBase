@@ -8,7 +8,7 @@ import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <ConfigProvider locale={zhCN}>
-    <BrowserRouter>
+    <BrowserRouter basename="/sekb">
       <App />
     </BrowserRouter>
   </ConfigProvider>

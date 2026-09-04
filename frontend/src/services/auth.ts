@@ -77,3 +77,11 @@ export async function ensureFreshToken(): Promise<boolean> {
   }
   return true;
 }
+
+/** 返回当前 token 的到期时间（Date），无 token 或无法解码返回 null。 */
+export function getTokenExpiry(): Date | null {
+  const token = getToken();
+  if (!token) return null;
+  const exp = decodeJwtExp(token);
+  return exp ? new Date(exp) : null;
+}

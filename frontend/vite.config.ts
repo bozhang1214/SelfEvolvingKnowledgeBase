@@ -10,6 +10,8 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    // 部署在 /sekb/ 子路径下（与其他应用共用域名/端口时用路径区分）
+    base: '/sekb/',
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

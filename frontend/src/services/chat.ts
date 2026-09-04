@@ -1,4 +1,4 @@
-import apiClient, { unwrap } from './api';
+import apiClient, { unwrap, API_BASE } from './api';
 import type { ApiResponse } from '@/types/api';
 import type { Conversation, Message, ChatMeta } from '@/types/chat';
 
@@ -43,8 +43,8 @@ export function streamChat(
   const controller = new AbortController();
   const token = getToken();
 
-  // SSE 通过 Vite 代理转发（开发模式）
-  const streamUrl = '/api/v1/chat/stream';
+  // SSE 通过 Vite 代理转发（开发模式）；生产走 /sekb/api/v1
+  const streamUrl = `${API_BASE}/chat/stream`;
 
   fetch(streamUrl, {
     method: 'POST',

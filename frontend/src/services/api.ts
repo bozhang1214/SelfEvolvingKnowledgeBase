@@ -3,9 +3,9 @@ import type { ApiResponse } from '@/types/api';
 import { logger } from '@/utils/logger';
 
 // 开发模式：走 Vite 代理（相对路径），避免 CORS 和直连问题
-// 生产模式：通过 VITE_API_BASE 直连后端
-const API_BASE = import.meta.env.PROD && import.meta.env.VITE_API_BASE
-  ? `${import.meta.env.VITE_API_BASE}/api/v1`
+// 生产模式：部署在 /sekb/ 子路径下，API 走 /sekb/api/v1（nginx 反向代理到后端）
+const API_BASE = import.meta.env.PROD
+  ? `${import.meta.env.VITE_API_BASE || '/sekb'}/api/v1`
   : '/api/v1';
 
 const apiClient = axios.create({

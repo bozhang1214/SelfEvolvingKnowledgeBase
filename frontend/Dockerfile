@@ -62,15 +62,15 @@ FROM nginx:alpine
 # 清空默认配置，避免与自定义配置冲突
 RUN rm -f /etc/nginx/conf.d/default.conf
 
-# 复制构建产物到 nginx 托管目录
-COPY --from=builder /app/dist /usr/share/nginx/html
+# 复制构建产物到 nginx 托管目录（/sekb 子路径，与其他应用共用域名时区分）
+COPY --from=builder /app/dist /usr/share/nginx/html/sekb
 
 # nginx 配置由外部挂载提供（deploy/nginx.conf），保持镜像与配置解耦：
 # - 镜像只负责托管静态资源
 # - 部署时通过 volume 挂载 nginx.conf，便于不同环境定制路由
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget -q --spider http://localhost/ || exit 1
+    CMD wget -q --spider http://localhost/sekb/ || exit 1
 
 EXPOSE 80
 

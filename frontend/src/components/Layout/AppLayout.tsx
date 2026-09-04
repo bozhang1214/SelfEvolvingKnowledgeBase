@@ -9,9 +9,11 @@ import {
   UserOutlined,
   ReadOutlined,
   SolutionOutlined,
+  HomeOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Routes, Route } from 'react-router-dom';
 import { useUserStore } from '@/stores/user';
+import Home from '@/pages/Home';
 import Chat from '@/pages/Chat';
 import Files from '@/pages/Files';
 import Knowledge from '@/pages/Knowledge';
@@ -23,7 +25,8 @@ const { Sider, Content } = Layout;
 const { Text } = Typography;
 
 const menuItems = [
-  { key: '/', icon: <MessageOutlined />, label: '聊天' },
+  { key: '/', icon: <HomeOutlined />, label: '功能说明' },
+  { key: '/chat', icon: <MessageOutlined />, label: 'AI 对话' },
   { key: '/files', icon: <FileOutlined />, label: '文件管理' },
   { key: '/knowledge', icon: <DatabaseOutlined />, label: '知识库' },
   { key: '/news', icon: <ReadOutlined />, label: '科技资讯' },
@@ -81,7 +84,8 @@ const AppLayout: React.FC = () => {
       <Layout>
         <Content style={{ padding: 0, overflow: 'auto' }}>
           <Routes>
-            <Route index element={<Chat />} />
+            <Route index element={<Home />} />
+            <Route path="chat" element={<Chat />} />
             <Route path="files" element={<Files />} />
             <Route path="knowledge" element={<Knowledge />} />
             <Route path="news" element={<News />} />
