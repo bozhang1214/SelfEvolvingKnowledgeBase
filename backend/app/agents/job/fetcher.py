@@ -173,6 +173,23 @@ def _fetch_jds(jobs: list[dict[str, Any]], cookies: dict[str, str]) -> list[dict
     return jobs
 
 
+async def refresh_job_jd(job_url: str, source: str) -> str:
+    """刷新单个职位的 JD（重新抓详情页），仅支持猎聘；返回 JD 文本（失败返回空串）。"""
+    if source != "猎聘" or not job_url:
+        return ""
+
+    def _do() -> str:
+        s = requests.Session()
+        s.get(_LIEPIN_HOME, headers={"User-Agent": _UA, "Accept-Language": "zh-CN,zh;q=0.9"}, timeout=10)
+        return _fetch_jd(job_url, s.cookies.get_dict())
+
+    try:
+        return await asyncio.to_thread(_do)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("刷新猎聘职位 JD 失败", url=job_url, error=str(e)[:120])
+        return ""
+
+
 def parse_min_salary(salary: str) -> int | None:
     """
     解析薪资下限（K/月），无法解析返回 None。

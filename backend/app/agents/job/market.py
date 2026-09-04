@@ -25,7 +25,7 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 _CACHE_FILE = Path("data/job_market_report.json")
-_CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 天
+_CACHE_TTL_SECONDS = 14 * 24 * 3600  # 14 天
 
 # 职位方向分类关键词（按优先级，首个命中即归类）
 _ROLE_RULES: list[tuple[str, list[str]]] = [

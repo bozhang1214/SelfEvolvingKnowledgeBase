@@ -78,9 +78,10 @@ export interface JobFetchResult {
   sources?: Record<string, { raw: number; count: number }>;
   count: number;
   jobs: FetchedJob[];
+  cached?: boolean;
 }
 
-/** 从多源采集真实职位列表。 */
+/** 从多源采集真实职位列表（14 天内命中缓存直接返回）。 */
 export async function fetchJobs(payload: {
   keyword: string;
   city?: string;
@@ -89,7 +90,19 @@ export async function fetchJobs(payload: {
   limit?: number;
 }): Promise<JobFetchResult> {
   const res = await apiClient.post<JobFetchResult>('/job/fetch', payload);
-  logger.info('job_fetch_done', { keyword: payload.keyword, count: res.data.count });
+  logger.info('job_fetch_done', { keyword: payload.keyword, count: res.data.count, cached: res.data.cached });
+  return res.data;
+}
+
+/** 刷新单个职位的 JD。 */
+export async function refreshJob(jobUrl: string, source: string): Promise<{ jd_text: string; refreshed: boolean }> {
+  const res = await apiClient.post('/job/refresh', { job_url: jobUrl, source });
+  return res.data;
+}
+
+/** 保存（覆盖）职位缓存（单职位删除/刷新后同步）。 */
+export async function saveJobCache(payload: { keyword: string; city: string; min_salary_k: number; jobs: FetchedJob[] }): Promise<{ saved: number }> {
+  const res = await apiClient.post('/job/cache/save', payload);
   return res.data;
 }
 

@@ -83,10 +83,11 @@ async def analyze_job(body: JobAnalyzeRequest, user_id: str = Depends(get_curren
 
 @router.post("/fetch")
 async def fetch_jobs(body: JobFetchRequest, user_id: str = Depends(get_current_user)):
-    """从多源采集真实职位列表，并应用默认筛选（关键词/城市/薪资）。"""
+    """从多源采集真实职位列表（14 天内命中缓存直接返回）。"""
     ctx = get_app_context()
     _require_job_agent()
     from app.agents.job.collector import JobCollector
+    from app.agents.job.job_cache import cache_key, get_cached_jobs, save_cached_jobs
 
     cfg = ctx.config.job
     keyword = (body.keyword or "").strip() or cfg.default_keyword
@@ -94,6 +95,22 @@ async def fetch_jobs(body: JobFetchRequest, user_id: str = Depends(get_current_u
     city = (body.city or "").strip()
     if city in ("不限", "全部", "全国"):
         city = ""
+
+    key = cache_key(user_id, keyword, city, body.min_salary_k)
+
+    # 命中缓存直接返回（14 天内）
+    cached = get_cached_jobs(key)
+    if cached is not None:
+        return {
+            "keyword": keyword,
+            "city": city,
+            "min_salary_k": body.min_salary_k,
+            "source_count": len({j.get("source") for j in cached if j.get("source")}),
+            "sources": {},
+            "count": len(cached),
+            "jobs": cached,
+            "cached": True,
+        }
 
     collector = JobCollector(
         city=city,
@@ -106,14 +123,17 @@ async def fetch_jobs(body: JobFetchRequest, user_id: str = Depends(get_current_u
         logger.error("职位采集失败", error=str(e), exc_info=True)
         raise HTTPException(500, f"职位采集失败: {e}")
 
+    save_cached_jobs(key, result["jobs"])
+
     return {
         "keyword": keyword,
         "city": city,
-        "min_salary_k": cfg.default_min_salary_k,
+        "min_salary_k": body.min_salary_k,
         "source_count": len(result["sources"]),
         "sources": result["sources"],
         "count": result["count"],
         "jobs": result["jobs"],
+        "cached": False,
     }
 
 
@@ -275,6 +295,47 @@ async def import_jobs(
             "jd_text": content,
         })
     return {"jobs": jobs, "count": len(jobs)}
+
+
+class RefreshJobReq(BaseModel):
+    """单职位刷新请求。"""
+
+    job_url: str = Field("", description="职位详情链接")
+    source: str = Field("", description="数据来源（猎聘等）")
+
+
+@router.post("/refresh")
+async def refresh_job(body: RefreshJobReq, user_id: str = Depends(get_current_user)):
+    """刷新单个职位的 JD（重新抓详情页），返回新的 JD 文本。"""
+    _require_job_agent()
+    from app.agents.job.fetcher import refresh_job_jd
+
+    jd = await refresh_job_jd(body.job_url, body.source)
+    return {"jd_text": jd, "refreshed": bool(jd)}
+
+
+class SaveCacheReq(BaseModel):
+    """保存职位缓存请求（删除/刷新后同步）。"""
+
+    keyword: str = Field("", description="采集关键词")
+    city: str = Field("", description="城市")
+    min_salary_k: int = Field(0, ge=0, description="最低月薪（K）")
+    jobs: list[dict[str, Any]] = Field(default_factory=list, description="当前职位列表")
+
+
+@router.post("/cache/save")
+async def save_job_cache(body: SaveCacheReq, user_id: str = Depends(get_current_user)):
+    """保存（覆盖）职位缓存，用于单职位删除/刷新后同步。"""
+    _require_job_agent()
+    from app.agents.job.job_cache import cache_key, save_cached_jobs
+
+    keyword = (body.keyword or "").strip() or "Agent"
+    city = (body.city or "").strip()
+    if city in ("不限", "全部", "全国"):
+        city = ""
+    key = cache_key(user_id, keyword, city, body.min_salary_k)
+    save_cached_jobs(key, body.jobs)
+    return {"saved": len(body.jobs)}
 
 
 @router.get("/reports")

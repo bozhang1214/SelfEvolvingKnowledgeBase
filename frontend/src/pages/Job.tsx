@@ -18,6 +18,8 @@ import {
   listJobReports,
   getJobReport,
   deleteJobReport,
+  refreshJob,
+  saveJobCache,
   type JobAnalyzeResult,
   type JobMeta,
   type FetchedJob,
@@ -406,6 +408,48 @@ const Job: React.FC = () => {
     }
   };
 
+  /** 职位唯一 key（job_id 缺失时用标题+公司兜底）。 */
+  const jobKey = (j: FetchedJob) => j.job_id || `${j.title}-${j.company}`;
+
+  /** 把当前列表同步回缓存（删除/刷新后调用）。 */
+  const syncJobCache = async (jobs: FetchedJob[]) => {
+    const salaryK = fetchSalary === '不限' ? 0 : parseInt(fetchSalary, 10) || 0;
+    try {
+      await saveJobCache({
+        keyword: fetchKeyword.trim() || 'Agent',
+        city: fetchCity === '不限' ? '' : fetchCity,
+        min_salary_k: salaryK,
+        jobs,
+      });
+    } catch {
+      // 缓存同步失败不阻断主流程
+    }
+  };
+
+  /** 刷新单个职位的 JD（重新抓详情页）并同步缓存。 */
+  const handleRefreshJob = async (job: FetchedJob) => {
+    try {
+      const { jd_text } = await refreshJob(job.job_url || '', job.source || '');
+      const key = jobKey(job);
+      const newJobs = fetchedJobs.map((j) => (jobKey(j) === key ? { ...j, jd_text: jd_text || j.jd_text } : j));
+      setFetchedJobs(newJobs);
+      await syncJobCache(newJobs);
+      message.success(jd_text ? '已刷新职位 JD' : '未获取到 JD（该职位可能已下线或非猎聘源）');
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '刷新失败');
+    }
+  };
+
+  /** 删除单个职位并同步缓存。 */
+  const handleDeleteJob = async (job: FetchedJob) => {
+    const key = jobKey(job);
+    const newJobs = fetchedJobs.filter((j) => jobKey(j) !== key);
+    setFetchedJobs(newJobs);
+    setSelectedRowKeys((prev) => prev.filter((k) => String(k) !== key));
+    await syncJobCache(newJobs);
+    message.success('已删除该职位');
+  };
+
   const handleAnalyze = async () => {
     const text = jdText.trim();
     if (!text) {
@@ -624,11 +668,13 @@ const Job: React.FC = () => {
                 {
                   title: '操作',
                   key: 'action',
-                  width: 90,
+                  width: 180,
                   render: (_, job) => (
-                    <Button size="small" type="link" onClick={() => handlePickJob(job)}>
-                      填入分析
-                    </Button>
+                    <Space size={0}>
+                      <Button size="small" type="link" onClick={() => handlePickJob(job)}>填入分析</Button>
+                      <Button size="small" type="link" icon={<ReloadOutlined />} onClick={() => handleRefreshJob(job)}>刷新</Button>
+                      <Button size="small" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDeleteJob(job)}>删除</Button>
+                    </Space>
                   ),
                 },
               ]}
