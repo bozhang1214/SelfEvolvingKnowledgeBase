@@ -131,3 +131,53 @@ async def boss_qr_status(body: BossQrStatusReq, user_id: str = Depends(get_curre
     except Exception as e:
         logger.error("BOSS 扫码状态查询失败", error=str(e), exc_info=True)
         raise HTTPException(500, f"BOSS 扫码状态查询失败: {e}")
+
+
+class BatchAnalyzeReq(BaseModel):
+    """批量分析请求体。"""
+
+    keyword: str = Field("", description="采集关键词（空则用配置默认）")
+    city: str = Field("", description="城市（空则用配置默认）")
+    force: bool = Field(False, description="true 强制重新分析（忽略 7 天缓存）")
+
+
+@router.post("/batch-analyze")
+async def batch_analyze(body: BatchAnalyzeReq, user_id: str = Depends(get_current_user)):
+    """
+    一键批量分析采集结果，生成市场分析报告。
+
+    7 天内已分析过则直接返回缓存报告；``force=true`` 或缓存被删除时重新分析。
+    """
+    ctx = get_app_context()
+    _require_job_agent()
+    from app.agents.job.market import analyze_market, delete_report
+    from app.agents.job.profile import load_user_profile
+
+    cfg = ctx.config.job
+    keyword = (body.keyword or "").strip() or cfg.default_keyword
+    city = (body.city or "").strip() or cfg.default_city
+
+    try:
+        if body.force:
+            delete_report(user_id)
+        return await analyze_market(
+            ctx=ctx,
+            user_id=user_id,
+            keyword=keyword,
+            city=city,
+            llm_factory=ctx.llm_factory,
+            user_profile=load_user_profile(),
+        )
+    except Exception as e:
+        logger.error("批量分析失败", error=str(e), exc_info=True)
+        raise HTTPException(500, f"批量分析失败: {e}")
+
+
+@router.delete("/batch-analyze")
+async def delete_batch_analysis(user_id: str = Depends(get_current_user)):
+    """删除批量分析缓存（下次进入会重新分析）。"""
+    _require_job_agent()
+    from app.agents.job.market import delete_report
+
+    deleted = delete_report(user_id)
+    return {"deleted": deleted}

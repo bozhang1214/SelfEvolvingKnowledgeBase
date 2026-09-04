@@ -109,3 +109,37 @@ export async function bossQrStatus(qr_id: string): Promise<BossQrStatus> {
   const res = await apiClient.post('/job/boss/qr/status', { qr_id });
   return res.data;
 }
+
+/** 批量市场分析报告。 */
+export interface MarketReport {
+  analyzed_at: string;
+  keyword: string;
+  city: string;
+  job_count: number;
+  stats: {
+    company_distribution: Array<{ name: string; count: number }>;
+    role_distribution: Array<{ name: string; count: number }>;
+    hot_keywords: Array<{ keyword: string; count: number }>;
+  };
+  overview: string;
+  trends: string[];
+  opportunities: Array<{ title: string; company: string; reason: string }>;
+  recommendations: string[];
+  jobs: FetchedJob[];
+}
+
+/** 一键批量分析采集结果（7 天缓存）。 */
+export async function batchAnalyze(payload: {
+  keyword?: string;
+  city?: string;
+  force?: boolean;
+}): Promise<{ cached: boolean; report: MarketReport }> {
+  const res = await apiClient.post('/job/batch-analyze', payload, { timeout: 120000 });
+  return res.data;
+}
+
+/** 删除批量分析缓存（强制下次重新分析）。 */
+export async function deleteBatchAnalysis(): Promise<{ deleted: boolean }> {
+  const res = await apiClient.delete('/job/batch-analyze');
+  return res.data;
+}

@@ -1,18 +1,22 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List, Modal,
+  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List, Modal, Divider, Alert,
 } from 'antd';
 import {
   ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined, QrcodeOutlined,
+  BarChartOutlined, DeleteOutlined, ReloadOutlined,
 } from '@ant-design/icons';
 import {
   analyzeJob,
   fetchJobs,
   bossQrStart,
   bossQrStatus,
+  batchAnalyze,
+  deleteBatchAnalysis,
   type JobAnalyzeResult,
   type JobMeta,
   type FetchedJob,
+  type MarketReport,
 } from '@/services/job';
 
 const { Text, Paragraph } = Typography;
@@ -138,6 +142,49 @@ const Job: React.FC = () => {
   const [qrImageUrl, setQrImageUrl] = useState('');
   const [qrWaiting, setQrWaiting] = useState(false);
   const [qrTip, setQrTip] = useState('');
+
+  // 批量市场分析
+  const [batchAnalyzing, setBatchAnalyzing] = useState(false);
+  const [marketReport, setMarketReport] = useState<MarketReport | null>(null);
+
+  const handleBatchAnalyze = async (force = false) => {
+    setBatchAnalyzing(true);
+    try {
+      const { cached, report } = await batchAnalyze({ keyword: fetchKeyword.trim() || undefined, force });
+      setMarketReport(report);
+      message.success(cached ? '已加载缓存的分析报告（7 天内）' : '批量分析完成');
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '批量分析失败');
+    } finally {
+      setBatchAnalyzing(false);
+    }
+  };
+
+  const handleDeleteReport = async () => {
+    try {
+      await deleteBatchAnalysis();
+      setMarketReport(null);
+      message.success('分析报告已删除，可重新分析');
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '删除失败');
+    }
+  };
+
+  // 进入页面自动加载/触发批量分析（7 天内命中缓存则直接展示，否则自动分析）
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const { report } = await batchAnalyze({});
+        if (mounted) setMarketReport(report);
+      } catch {
+        // 静默失败，用户可手动点「一键分析」
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleBossQrLogin = async () => {
     setQrOpen(true);
@@ -361,6 +408,159 @@ const Job: React.FC = () => {
               </List.Item>
             )}
           />
+        )}
+      </Card>
+
+      {/* 批量市场分析 */}
+      <Card
+        title={
+          <Space>
+            <BarChartOutlined />
+            <Text strong>批量市场分析</Text>
+            <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
+              一键分析采集结果（7 天内命中缓存直接展示）
+            </Text>
+          </Space>
+        }
+        extra={
+          <Space>
+            {marketReport && (
+              <>
+                <Button size="small" icon={<ReloadOutlined />} loading={batchAnalyzing} onClick={() => handleBatchAnalyze(true)}>
+                  重新分析
+                </Button>
+                <Button size="small" danger icon={<DeleteOutlined />} onClick={handleDeleteReport}>
+                  删除报告
+                </Button>
+              </>
+            )}
+            <Button type="primary" size="small" icon={<BarChartOutlined />} loading={batchAnalyzing} onClick={() => handleBatchAnalyze(false)}>
+              一键分析
+            </Button>
+          </Space>
+        }
+        style={{ maxWidth: 1080, margin: '0 auto 16px' }}
+      >
+        {batchAnalyzing && !marketReport ? (
+          <Spin tip="正在采集职位并生成市场分析报告，约需 30~60 秒…">
+            <div style={{ minHeight: 120 }} />
+          </Spin>
+        ) : marketReport ? (
+          <div>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={`分析于 ${marketReport.analyzed_at?.replace('T', ' ').slice(0, 19) || ''} · 共 ${marketReport.job_count} 个职位 · 关键词「${marketReport.keyword}」· ${marketReport.city}`}
+            />
+            {marketReport.overview && (
+              <>
+                <Paragraph strong style={{ marginBottom: 4 }}>市场概况</Paragraph>
+                <Paragraph>{marketReport.overview}</Paragraph>
+              </>
+            )}
+
+            <Row gutter={16}>
+              <Col xs={24} sm={8}>
+                <Paragraph strong style={{ marginBottom: 4 }}>公司分布</Paragraph>
+                <Space wrap size={[4, 4]}>
+                  {marketReport.stats?.company_distribution?.map((c) => (
+                    <Tag key={c.name} color="blue">{c.name} × {c.count}</Tag>
+                  ))}
+                </Space>
+              </Col>
+              <Col xs={24} sm={8}>
+                <Paragraph strong style={{ marginBottom: 4 }}>职位方向</Paragraph>
+                <Space wrap size={[4, 4]}>
+                  {marketReport.stats?.role_distribution?.map((c) => (
+                    <Tag key={c.name} color="geekblue">{c.name} × {c.count}</Tag>
+                  ))}
+                </Space>
+              </Col>
+              <Col xs={24} sm={8}>
+                <Paragraph strong style={{ marginBottom: 4 }}>热点关键词</Paragraph>
+                <Space wrap size={[4, 4]}>
+                  {marketReport.stats?.hot_keywords?.map((c) => (
+                    <Tag key={c.keyword} color="purple">{c.keyword} × {c.count}</Tag>
+                  ))}
+                </Space>
+              </Col>
+            </Row>
+
+            {marketReport.trends && marketReport.trends.length > 0 && (
+              <>
+                <Divider style={{ margin: '12px 0' }} />
+                <Paragraph strong style={{ marginBottom: 4 }}>市场趋势</Paragraph>
+                <List
+                  size="small"
+                  dataSource={marketReport.trends}
+                  renderItem={(t) => <List.Item>· {t}</List.Item>}
+                />
+              </>
+            )}
+
+            {marketReport.opportunities && marketReport.opportunities.length > 0 && (
+              <>
+                <Divider style={{ margin: '12px 0' }} />
+                <Paragraph strong style={{ marginBottom: 4 }}>重点机会</Paragraph>
+                <List
+                  size="small"
+                  dataSource={marketReport.opportunities}
+                  renderItem={(o) => (
+                    <List.Item>
+                      <List.Item.Meta
+                        title={<Text strong>{o.title}</Text>}
+                        description={<Text type="secondary">{o.company}</Text>}
+                      />
+                      <Text type="secondary" style={{ fontSize: 12, maxWidth: 420 }}>{o.reason}</Text>
+                    </List.Item>
+                  )}
+                />
+              </>
+            )}
+
+            {marketReport.recommendations && marketReport.recommendations.length > 0 && (
+              <>
+                <Divider style={{ margin: '12px 0' }} />
+                <Paragraph strong style={{ marginBottom: 4 }}>行动建议</Paragraph>
+                <List
+                  size="small"
+                  dataSource={marketReport.recommendations}
+                  renderItem={(r) => <List.Item>· {r}</List.Item>}
+                />
+              </>
+            )}
+
+            <Divider style={{ margin: '12px 0' }} />
+            <Paragraph strong style={{ marginBottom: 8 }}>全部职位（{marketReport.job_count}）</Paragraph>
+            <List
+              size="small"
+              dataSource={marketReport.jobs || []}
+              pagination={{ pageSize: 20, size: 'small' }}
+              renderItem={(job) => (
+                <List.Item
+                  key={job.job_id || `${job.title}-${job.company}`}
+                  actions={[
+                    <Button key="analyze" size="small" type="link" onClick={() => handlePickJob(job)}>
+                      填入分析
+                    </Button>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={
+                      <Space size={8}>
+                        <Text strong>{job.title}</Text>
+                        {job.source && <Tag style={{ fontSize: 11 }}>{job.source}</Tag>}
+                      </Space>
+                    }
+                    description={<Text strong>{job.company}</Text>}
+                  />
+                </List.Item>
+              )}
+            />
+          </div>
+        ) : (
+          <Empty description="点击「一键分析」生成市场分析报告" />
         )}
       </Card>
 
