@@ -9,6 +9,9 @@
 环境变量：
     FEISHU_WEBHOOK_URL  飞书机器人 webhook 地址
     FEISHU_SECRET        飞书机器人签名密钥（可选）
+    PROMETHEUS_URL       告警源 Prometheus 地址（「查看告警」按钮，告警由 Prometheus 规则触发）
+    GRAFANA_URL          Grafana 看板地址（「查看看板」按钮，纯可视化辅助）
+    FRONTEND_URL         前端应用地址（「查看对话记录」按钮，深链定位会话）
 """
 
 from __future__ import annotations
@@ -29,6 +32,9 @@ app = FastAPI(title="SEKB Feishu Webhook Gateway")
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
 FEISHU_SECRET = os.getenv("FEISHU_SECRET", "")
 # 操作按钮跳转地址（未配置则不显示按钮）
+# 告警源是 Prometheus（alerts.yml 规则触发），「查看告警」直达其 /alerts 页，保证「告警源→URL」一致
+PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "").rstrip("/")
+# Grafana 是可视化辅助（看板 + 日志），仅作「查看看板」入口
 GRAFANA_URL = os.getenv("GRAFANA_URL", "").rstrip("/")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "").rstrip("/")
 
@@ -46,13 +52,25 @@ _ALERT_GUIDE = {
 
 
 def _build_action_buttons(conversation_id: str = "") -> list[dict]:
-    """构建操作按钮（跳转链接，未配置 URL 则不显示）。"""
+    """构建操作按钮（跳转链接，未配置 URL 则不显示）。
+
+    顺序与主辅分工一致：Prometheus 告警（主）→ Grafana 看板（辅）→ 前端对话定位。
+    """
     buttons = []
+    # 告警源是 Prometheus：主按钮直达告警页（/alerts 列出活跃告警与规则）
+    if PROMETHEUS_URL:
+        buttons.append({
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": "查看告警"},
+            "type": "primary",
+            "url": PROMETHEUS_URL + "/alerts",
+        })
+    # Grafana 是可视化辅助：看板入口
     if GRAFANA_URL:
         buttons.append({
             "tag": "button",
-            "text": {"tag": "plain_text", "content": "查看监控指标"},
-            "type": "primary",
+            "text": {"tag": "plain_text", "content": "查看看板"},
+            "type": "default",
             "url": GRAFANA_URL,
         })
     if FRONTEND_URL:
