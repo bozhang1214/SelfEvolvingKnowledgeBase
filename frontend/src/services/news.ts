@@ -37,10 +37,10 @@ export async function getReport(date: string): Promise<NewsReport> {
   return res.data;
 }
 
-/** 手动触发一次日报生成。 */
-export async function refreshNews(): Promise<NewsRefreshResult> {
-  const res = await apiClient.post<NewsRefreshResult>('/news/refresh');
-  logger.info('news_refresh_triggered');
+/** 手动触发一次日报生成（force=true 重新生成，忽略当日缓存）。 */
+export async function refreshNews(force = true): Promise<NewsRefreshResult> {
+  const res = await apiClient.post<NewsRefreshResult>('/news/refresh', { force });
+  logger.info('news_refresh_triggered', { force });
   return res.data;
 }
 

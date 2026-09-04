@@ -103,8 +103,12 @@ const News: React.FC = () => {
   const handleRefresh = async () => {
     setGenerating(true);
     try {
-      const result = await refreshNews();
-      message.success(`日报生成完成：采集 ${result.fetched} 条，筛选 ${result.filtered} 条`);
+      const result = await refreshNews(true);
+      if ((result as { skipped?: boolean }).skipped) {
+        message.info('今日日报已生成，无需重复生成');
+      } else {
+        message.success(`日报生成完成：采集 ${result.fetched} 条，筛选 ${result.filtered} 条`);
+      }
       await loadReports(true);
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '生成日报失败');
@@ -182,7 +186,7 @@ const News: React.FC = () => {
               loading={generating}
               onClick={() => (isDaily ? handleRefresh() : handleGeneratePeriodic(tab as PeriodicType))}
             >
-              {isDaily ? '生成今日日报' : tab === 'weekly' ? '生成周报' : '生成月报'}
+              {isDaily ? '重新生成日报' : tab === 'weekly' ? '生成周报' : '生成月报'}
             </Button>
             <Button
               block

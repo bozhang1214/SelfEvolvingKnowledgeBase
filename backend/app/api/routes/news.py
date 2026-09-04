@@ -31,11 +31,15 @@ def _require_news_agent() -> Any:
 
 
 @router.post("/refresh")
-async def refresh_news(user_id: str = Depends(get_current_user)):
-    """手动触发一次日报生成。"""
+async def refresh_news(
+    body: dict | None = Body(None),
+    user_id: str = Depends(get_current_user),
+):
+    """手动触发一次日报生成。force=true（默认）表示「重新生成」；false 表示今日已生成则跳过。"""
     agent = _require_news_agent()
+    force = bool((body or {}).get("force", True))
     try:
-        result = await agent.refresh()
+        result = await agent.refresh(force=force)
     except Exception as e:
         logger.error("手动触发日报失败", error=str(e), exc_info=True)
         raise HTTPException(500, f"日报生成失败: {e}")

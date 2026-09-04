@@ -38,6 +38,10 @@ class NewsStorage:
         self._cleanup()
         return str(md_path)
 
+    def daily_exists(self, day: str) -> bool:
+        """判断某天的日报是否已生成（幂等判断用）。"""
+        return (self._dir / f"daily_{day}.md").exists()
+
     def list_reports(self) -> list[dict]:
         """列出所有日报元信息（按日期倒序）。"""
         index = self._read_index()
