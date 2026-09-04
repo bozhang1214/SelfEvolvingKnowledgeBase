@@ -326,6 +326,384 @@ const KnowledgeSection: React.FC<{ data: Record<string, any> }> = ({ data }) => 
   );
 };
 
+/** 把 1~5 的重要度数字渲染成 ⭐ 串（安全截断）。 */
+const renderStars = (n: unknown): string => '⭐'.repeat(Math.min(5, Math.max(0, Math.round(Number(n) || 0))));
+
+/** 单职位分析各板块的语义化渲染（中文标签 + 易读布局，替代生硬 JSON 表格）。 */
+const SectionRenderer: React.FC<{ section: SectionKey; data: Record<string, any> }> = ({ section, data }) => {
+  switch (section) {
+    case 'job_analysis': {
+      const decoding = Array.isArray(data.jd_decoding) ? data.jd_decoding : [];
+      const resp = Array.isArray(data.responsibilities) ? data.responsibilities : [];
+      const kp = Array.isArray(data.knowledge_points) ? data.knowledge_points : [];
+      const hard = Array.isArray(data.hard_requirements) ? data.hard_requirements : [];
+      const iq = Array.isArray(data.interview_questions) ? data.interview_questions : [];
+      return (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          {data.positioning && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 4 }}>岗位定位</Paragraph>
+              <Paragraph style={{ marginBottom: 0 }}>{String(data.positioning)}</Paragraph>
+            </div>
+          )}
+          {decoding.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>JD 潜台词翻译</Paragraph>
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                {decoding.map((d: any, i: number) => (
+                  <div key={i}>
+                    <Text type="secondary" delete>{String(d.surface)}</Text>
+                    <Text>　→　</Text>
+                    <Text>{String(d.meaning)}</Text>
+                  </div>
+                ))}
+              </Space>
+            </div>
+          )}
+          {resp.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>核心职责</Paragraph>
+              <ul style={{ margin: 0, paddingLeft: 20 }}>
+                {resp.map((r: any, i: number) => <li key={i}>{String(r)}</li>)}
+              </ul>
+            </div>
+          )}
+          {kp.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>核心知识点</Paragraph>
+              <Space wrap size={[4, 4]}>
+                {kp.map((k: any, i: number) => <Tag key={i} color="blue">{String(k)}</Tag>)}
+              </Space>
+            </div>
+          )}
+          {hard.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>硬性门槛</Paragraph>
+              <Space wrap size={[4, 4]}>
+                {hard.map((k: any, i: number) => <Tag key={i} color="red">{String(k)}</Tag>)}
+              </Space>
+            </div>
+          )}
+          {iq.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>关键面试问题</Paragraph>
+              <ol style={{ margin: 0, paddingLeft: 20 }}>
+                {iq.map((q: any, i: number) => <li key={i}>{String(q)}</li>)}
+              </ol>
+            </div>
+          )}
+          {data.conclusion && <Alert type="info" showIcon message="分析结论" description={String(data.conclusion)} />}
+        </Space>
+      );
+    }
+
+    case 'knowledge_priority': {
+      const p = data.priorities || {};
+      const groups = [
+        { key: 'p1_core', label: '第一优先级 · 必考核心' },
+        { key: 'p2_framework', label: '第二优先级 · 框架与工程' },
+        { key: 'p3_advanced', label: '第三优先级 · 工程化与进阶' },
+      ];
+      return (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          {groups.map((g) => {
+            const items = Array.isArray(p[g.key]) ? p[g.key] : [];
+            if (items.length === 0) return null;
+            return (
+              <div key={g.key}>
+                <Paragraph strong style={{ marginBottom: 8 }}>{g.label}</Paragraph>
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  {items.map((it: any, i: number) => (
+                    <div key={i}>
+                      <Text strong>{String(it.topic)}</Text>
+                      {it.importance != null && <Text> {renderStars(it.importance)}</Text>}
+                      {it.how_examined && <div><Text type="secondary">考察方式：{String(it.how_examined)}</Text></div>}
+                      {it.why && <div><Text type="secondary">为什么重要：{String(it.why)}</Text></div>}
+                    </div>
+                  ))}
+                </Space>
+              </div>
+            );
+          })}
+          {data.summary && <Alert type="info" showIcon message="优先级总结" description={String(data.summary)} />}
+        </Space>
+      );
+    }
+
+    case 'interview_qa': {
+      const modules = Array.isArray(data.modules) ? data.modules : [];
+      return (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          {modules.map((m: any, i: number) => {
+            const qs = Array.isArray(m.questions) ? m.questions : [];
+            return (
+              <div key={i}>
+                {m.module && <Paragraph strong style={{ marginBottom: 8 }}>{String(m.module)}</Paragraph>}
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  {qs.map((q: any, j: number) => (
+                    <div key={j} style={{ padding: '10px 12px', background: '#fafafa', borderRadius: 8 }}>
+                      <Text strong>{String(q.question)}</Text>
+                      {q.source && <div><Tag color="blue" style={{ marginTop: 4 }}>{String(q.source)}</Tag></div>}
+                      {q.what_examiner_wants && <div style={{ marginTop: 4 }}><Text type="secondary">面试官想听：{String(q.what_examiner_wants)}</Text></div>}
+                      {Array.isArray(q.answer_framework) && q.answer_framework.length > 0 && (
+                        <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+                          {q.answer_framework.map((a: any, k: number) => <li key={k}>{String(a)}</li>)}
+                        </ul>
+                      )}
+                      {q.bonus && <div style={{ marginTop: 4 }}><Text type="success">加分项：{String(q.bonus)}</Text></div>}
+                    </div>
+                  ))}
+                </Space>
+              </div>
+            );
+          })}
+        </Space>
+      );
+    }
+
+    case 'gap_analysis': {
+      const hits = Array.isArray(data.hits) ? data.hits : [];
+      const partial = Array.isArray(data.partial) ? data.partial : [];
+      const gaps = Array.isArray(data.gaps) ? data.gaps : [];
+      return (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          {hits.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8, color: '#389e0d' }}>命中（已有能力）</Paragraph>
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                {hits.map((h: any, i: number) => (
+                  <div key={i}>
+                    <Tag color="green">{String(h.requirement)}</Tag>
+                    {h.evidence && <Text type="secondary">　{String(h.evidence)}</Text>}
+                  </div>
+                ))}
+              </Space>
+            </div>
+          )}
+          {partial.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8, color: '#d46b08' }}>部分命中（可迁移，深度不足）</Paragraph>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {partial.map((h: any, i: number) => (
+                  <div key={i}>
+                    <Tag color="orange">{String(h.requirement)}</Tag>
+                    {h.priority && <Tag>{String(h.priority)}</Tag>}
+                    {h.current && <div><Text type="secondary">现状：{String(h.current)}</Text></div>}
+                    {h.action && <div><Text>补法：{String(h.action)}</Text></div>}
+                  </div>
+                ))}
+              </Space>
+            </div>
+          )}
+          {gaps.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8, color: '#cf1322' }}>缺口（需补齐）</Paragraph>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {gaps.map((g: any, i: number) => (
+                  <div key={i}>
+                    <Tag color="red">{String(g.requirement)}</Tag>
+                    {g.priority && <Tag>{String(g.priority)}</Tag>}
+                    {g.evidence && <div><Text type="secondary">依据：{String(g.evidence)}</Text></div>}
+                    {g.action && <div><Text>补法：{String(g.action)}</Text></div>}
+                  </div>
+                ))}
+              </Space>
+            </div>
+          )}
+          {data.gap_verdict && <Alert type="warning" showIcon message="差距结论" description={String(data.gap_verdict)} />}
+        </Space>
+      );
+    }
+
+    case 'resume_advice': {
+      const emphasize = Array.isArray(data.emphasize) ? data.emphasize : [];
+      const align = Array.isArray(data.align_keywords) ? data.align_keywords : [];
+      const de = Array.isArray(data.de_emphasize) ? data.de_emphasize : [];
+      const rewrites = Array.isArray(data.rewrites) ? data.rewrites : [];
+      const variant = data.variant_adjustments || {};
+      const bulletOrder = Array.isArray(variant.bullet_order) ? variant.bullet_order : [];
+      const skillOrder = Array.isArray(variant.skill_order) ? variant.skill_order : [];
+      return (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          {data.company_type && <Tag color="purple">目标公司类型：{String(data.company_type)}</Tag>}
+          {emphasize.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>要突出强调</Paragraph>
+              <ul style={{ margin: 0, paddingLeft: 20 }}>
+                {emphasize.map((e: any, i: number) => (
+                  <li key={i} style={{ marginBottom: 6 }}>
+                    <Text strong>{String(e.item)}</Text>
+                    {e.reason && <Text type="secondary">（{String(e.reason)}）</Text>}
+                    {e.suggestion && <div><Text>{String(e.suggestion)}</Text></div>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {align.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>关键词对齐（不造假）</Paragraph>
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                {align.map((a: any, i: number) => (
+                  <div key={i}>
+                    <Text type="secondary" delete>{String(a.original)}</Text>
+                    <Text>　→　</Text>
+                    <Text strong>{String(a.rewrite)}</Text>
+                  </div>
+                ))}
+              </Space>
+            </div>
+          )}
+          {rewrites.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>具体改写示例</Paragraph>
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                {rewrites.map((a: any, i: number) => (
+                  <div key={i}>
+                    <Text type="secondary" delete>{String(a.original)}</Text>
+                    <Text>　→　</Text>
+                    <Text strong>{String(a.rewrite)}</Text>
+                  </div>
+                ))}
+              </Space>
+            </div>
+          )}
+          {de.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>弱化/删除</Paragraph>
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                {de.map((d: any, i: number) => (
+                  <div key={i}>
+                    <Text type="secondary" delete>{String(d.item)}</Text>
+                    {d.reason && <Text type="secondary">　（{String(d.reason)}）</Text>}
+                  </div>
+                ))}
+              </Space>
+            </div>
+          )}
+          {(variant.intro_first_line || bulletOrder.length > 0 || skillOrder.length > 0) && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>简历变体调整（按公司类型）</Paragraph>
+              {variant.intro_first_line && <Paragraph style={{ marginBottom: 4 }}>个人简介首句：{String(variant.intro_first_line)}</Paragraph>}
+              {bulletOrder.length > 0 && <div style={{ marginBottom: 4 }}>项目排序：{bulletOrder.join(' → ')}</div>}
+              {skillOrder.length > 0 && <div>技能排序：{skillOrder.join(' → ')}</div>}
+            </div>
+          )}
+        </Space>
+      );
+    }
+
+    case 'project_iteration': {
+      const existing = Array.isArray(data.existing) ? data.existing : [];
+      const fresh = Array.isArray(data.new) ? data.new : [];
+      const renderProject = (p: any, i: number) => (
+        <div key={i} style={{ padding: '8px 12px', background: '#fafafa', borderRadius: 8 }}>
+          {p.gap && <div><Text type="secondary">对应缺口：{String(p.gap)}</Text></div>}
+          {p.idea && <div><Text strong>{String(p.idea)}</Text></div>}
+          {Array.isArray(p.tech_stack) && p.tech_stack.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              {p.tech_stack.map((t: any, j: number) => <Tag key={j} color="blue" style={{ marginRight: 4 }}>{String(t)}</Tag>)}
+            </div>
+          )}
+          {p.resume_value && <div style={{ marginTop: 4 }}><Text>简历表述：{String(p.resume_value)}</Text></div>}
+          {p.effort && <Tag style={{ marginTop: 4 }}>投入：{String(p.effort)}</Tag>}
+        </div>
+      );
+      return (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          {existing.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>现有项目迭代</Paragraph>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {existing.map(renderProject)}
+              </Space>
+            </div>
+          )}
+          {fresh.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>新项目建议</Paragraph>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {fresh.map(renderProject)}
+              </Space>
+            </div>
+          )}
+          {data.summary && <Alert type="info" showIcon message="迭代总结" description={String(data.summary)} />}
+        </Space>
+      );
+    }
+
+    case 'job_strategy': {
+      const insights = Array.isArray(data.company_insights) ? data.company_insights : [];
+      const tier = data.tier_strategy || {};
+      const practice = Array.isArray(tier.practice) ? tier.practice : [];
+      const main = Array.isArray(tier.main_attack) ? tier.main_attack : [];
+      const backup = Array.isArray(tier.backup) ? tier.backup : [];
+      const ranking = Array.isArray(data.match_ranking) ? data.match_ranking : [];
+      const prep = Array.isArray(data.prep_focus) ? data.prep_focus : [];
+      const renderTier = (items: any[], label: string, color: string) => items.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <Tag color={color}>{label}</Tag>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 20 }}>
+            {items.map((t: any, i: number) => (
+              <li key={i}><Text strong>{String(t.position)}</Text>{t.reason && <Text type="secondary">　{String(t.reason)}</Text>}</li>
+            ))}
+          </ul>
+        </div>
+      );
+      return (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          {insights.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>公司岗位特点</Paragraph>
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                {insights.map((c: any, i: number) => (
+                  <div key={i}>
+                    <Text strong>{String(c.company)}</Text>
+                    {c.characteristic && <Text type="secondary">　{String(c.characteristic)}</Text>}
+                  </div>
+                ))}
+              </Space>
+            </div>
+          )}
+          {(practice.length > 0 || main.length > 0 || backup.length > 0) && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>投递分层策略</Paragraph>
+              {renderTier(practice, '练手层', 'default')}
+              {renderTier(main, '主攻层', 'gold')}
+              {renderTier(backup, '保底层', 'blue')}
+            </div>
+          )}
+          {ranking.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>匹配度排序</Paragraph>
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                {ranking.map((r: any, i: number) => (
+                  <div key={i}>
+                    <Text strong>{i + 1}. {String(r.position)}</Text>
+                    {r.match_score != null && <Tag color={matchScoreColor(Number(r.match_score))} style={{ marginLeft: 8 }}>{r.match_score} 分</Tag>}
+                    {r.recommendation && <div><Text type="secondary">{String(r.recommendation)}</Text></div>}
+                  </div>
+                ))}
+              </Space>
+            </div>
+          )}
+          {prep.length > 0 && (
+            <div>
+              <Paragraph strong style={{ marginBottom: 8 }}>准备重点</Paragraph>
+              <ul style={{ margin: 0, paddingLeft: 20 }}>
+                {prep.map((p: any, i: number) => <li key={i}>{String(p)}</li>)}
+              </ul>
+            </div>
+          )}
+        </Space>
+      );
+    }
+
+    default:
+      return <JsonBlock data={data} />;
+  }
+};
+
 /** 职位详情悬浮弹窗（悬停展示标题/公司/薪资/城市 + JD 全文）。 */const JobDetailPopover: React.FC<{ job: FetchedJob; children: React.ReactNode }> = ({ job, children }) => (
   <Popover
     title={
@@ -631,7 +1009,7 @@ const Job: React.FC = () => {
           children: empty ? (
             <Empty description="该步骤未产出结果（可能是 LLM 降级或输入不足）" />
           ) : (
-            <JsonBlock data={data} />
+            <SectionRenderer section={key} data={data as Record<string, any>} />
           ),
         };
       }),
