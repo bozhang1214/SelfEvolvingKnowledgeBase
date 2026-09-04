@@ -610,22 +610,21 @@ const Job: React.FC = () => {
           <>
             <Space style={{ marginTop: 12, width: '100%', justifyContent: 'space-between' }}>
               <Text type="secondary" style={{ fontSize: 12 }}>共 {fetchedJobs.length} 条职位</Text>
-              {selectedRowKeys.length > 0 && (
-                <Button
-                  type="primary"
-                  size="small"
-                  icon={<BarChartOutlined />}
-                  loading={batchAnalyzing}
-                  onClick={() => {
-                    const keys = selectedRowKeys.map(String);
-                    const selected = fetchedJobs.filter((j) => keys.includes(j.job_id || `${j.title}-${j.company}`));
-                    setAnalysisMode('batch');
-                    handleBatchAnalyze(false, selected);
-                  }}
-                >
-                  批量分析选中（{selectedRowKeys.length}）
-                </Button>
-              )}
+              <Button
+                type="primary"
+                size="small"
+                icon={<BarChartOutlined />}
+                disabled={selectedRowKeys.length < 1}
+                loading={batchAnalyzing}
+                onClick={() => {
+                  const keys = selectedRowKeys.map(String);
+                  const selected = fetchedJobs.filter((j) => keys.includes(j.job_id || `${j.title}-${j.company}`));
+                  setAnalysisMode('batch');
+                  handleBatchAnalyze(false, selected);
+                }}
+              >
+                前往批量分析{selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ''}
+              </Button>
             </Space>
             <Table
               size="small"
@@ -720,7 +719,7 @@ const Job: React.FC = () => {
                   title={
           <Space>
             <BarChartOutlined />
-            <Text strong>批量市场分析</Text>
+            <Text strong>批量职位分析</Text>
             <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
               对「职位收集」里已收集的职位（多个）做整体市场分析
             </Text>

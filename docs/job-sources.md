@@ -17,7 +17,7 @@
 | 5 | 小米 | xiaomi.jobs.f.mioffice.cn | `xiaomi.jobs.f.mioffice.cn/api/v1/search/job/posts` | POST | 否 | 同字节 ATSX，社招省略 portal-channel |
 | 6 | 小红书 | job.xiaohongshu.com/social/position | `job.xiaohongshu.com/websiterecruit/position/pageQueryPosition` | POST | 否 | `positionName` 关键词；城市参数被忽略→客户端过滤 |
 | 7 | 大疆 | apply.careers.dji.com | `app.mokahr.com/api/outer/ats-apply/website/jobs/v2?orgId=dji` | POST | 否 | mokahr；响应 AES-128-CBC 密文（key=necromancer/iv=aesIv）；岗位多在深圳，北京过滤后偏少 |
-| 8 | DeepSeek(高飞) | app.mokahr.com/social-recruitment/high-flyer | `app.mokahr.com/api/outer/ats-apply/website/jobs/v2?orgId=high-flyer` | POST | 否 | mokahr；同上 AES 解密 |
+| 8 | DeepSeek(高飞/深度求索) | app.mokahr.com/social-recruitment/high-flyer | `app.mokahr.com/api/outer/ats-apply/website/jobs/v2?orgId=high-flyer` | POST | 否 | mokahr；AES 解密；✅ 已打通（实测 7 个 Agent 职位）；岗位多在「浙江/北京」，城市前缀「北京」会漏掉，建议用「不限」 |
 | 9 | 京东 | zhaopin.jd.com | （社招 HTML 壳 + 密文 XHR + 动态 sign） | — | 是（需逆向签名） | 暂不可免登录自动化 |
 | 10 | BOSS直聘 | zhipin.com/web/geek/jobs | （HTML 壳） | — | 是（登录已打通） | 扫码登录✅；采集❌ 被 `code:37` 反爬签名阻断，见下方跟踪项 |
 
@@ -32,9 +32,10 @@
 
 ## 默认筛选条件
 
-- 关键词：`Agent`（`job.default_keyword`）
-- 城市：北京（客户端按 `city` 前缀过滤；猎聘码 `010`）
-- 薪资：月薪 ≥ 50K（客户端解析 `job.salary` 字符串过滤；猎聘服务端薪资字段不生效）
+- 前端筛选框默认**全部「不限」**（工作地/关键字/薪资），用户自行选择。
+- 关键词：空则用 `Agent`（`job.default_keyword`）；支持空格拼接多个关键词。
+- 城市：客户端按 `city` 前缀过滤（「北京」前缀匹配不到「浙江/北京」这类多城市职位，注意）。
+- 薪资：`salary` 为空（面议/多数源）时保留；猎聘/明文源有薪资时按 `min_salary_k` 过滤。
 
 ## BOSS 直聘关注重点（登录后接入时用）
 

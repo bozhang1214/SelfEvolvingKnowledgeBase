@@ -140,6 +140,7 @@ def _save_index(data: list[dict[str, Any]]) -> None:
 
 def save_report(user_id: str, type_: str, title: str, report: dict[str, Any]) -> str:
     """把报告存为 Markdown 文件，返回报告 id。"""
+    _DIR.mkdir(parents=True, exist_ok=True)  # 先建目录，避免 .md 写入时目录不存在
     rid = uuid.uuid4().hex[:12]
     md = report_to_markdown(type_, title, report)
     (_DIR / f"{rid}.md").write_text(md, encoding="utf-8")
