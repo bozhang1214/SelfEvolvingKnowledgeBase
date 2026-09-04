@@ -174,11 +174,14 @@ const Job: React.FC = () => {
   useEffect(() => {
     let mounted = true;
     (async () => {
+      setBatchAnalyzing(true);
       try {
         const { report } = await batchAnalyze({});
         if (mounted) setMarketReport(report);
       } catch {
         // 静默失败，用户可手动点「一键分析」
+      } finally {
+        if (mounted) setBatchAnalyzing(false);
       }
     })();
     return () => {
