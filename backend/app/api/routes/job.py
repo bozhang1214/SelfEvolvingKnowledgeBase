@@ -6,9 +6,10 @@
 """
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from app.core.auth import get_current_user
@@ -65,6 +66,13 @@ async def analyze_job(body: JobAnalyzeRequest, user_id: str = Depends(get_curren
     try:
         result = await agent.analyze_job(jd, body.job_meta)
         save_analysis(user_id, jd, result)
+        # 自动存档到历史报告
+        from app.agents.job.archive import save_report
+
+        pos = (body.job_meta or {}).get("position") or result.get("job_analysis", {}).get("position") or "单职位分析"
+        comp = (body.job_meta or {}).get("company") or ""
+        title = f"{pos}" + (f" @ {comp}" if comp else "")
+        save_report(user_id, "single", title, result)
         return {**result, "cached": False}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -156,14 +164,18 @@ class BatchAnalyzeReq(BaseModel):
     keyword: str = Field("", description="采集关键词（空则用配置默认）")
     city: str = Field("", description="城市（空则用配置默认）")
     force: bool = Field(False, description="true 强制重新分析（忽略 7 天缓存）")
+    jobs: list[dict[str, Any]] | None = Field(
+        None, description="前端已收集的职位列表（提供则直接分析这批职位，不重复采集）"
+    )
 
 
 @router.post("/batch-analyze")
 async def batch_analyze(body: BatchAnalyzeReq, user_id: str = Depends(get_current_user)):
     """
-    一键批量分析采集结果，生成市场分析报告。
+    一键批量分析职位，生成市场分析报告。
 
-    7 天内已分析过则直接返回缓存报告；``force=true`` 或缓存被删除时重新分析。
+    - ``jobs`` 提供时：直接分析传入的职位（「职位收集 → 批量分析」联动，不重复采集、不缓存）。
+    - ``jobs`` 为空时：自动采集并生成报告，7 天内命中缓存直接返回。
     """
     ctx = get_app_context()
     _require_job_agent()
@@ -177,14 +189,21 @@ async def batch_analyze(body: BatchAnalyzeReq, user_id: str = Depends(get_curren
     try:
         if body.force:
             delete_report(user_id)
-        return await analyze_market(
+        result = await analyze_market(
             ctx=ctx,
             user_id=user_id,
             keyword=keyword,
             city=city,
             llm_factory=ctx.llm_factory,
             user_profile=load_user_profile(),
+            jobs=body.jobs,
         )
+        # 自动存档到历史报告
+        from app.agents.job.archive import save_report
+
+        rep = result["report"]
+        save_report(user_id, "batch", f"批量分析 · {rep['keyword']}（{rep['job_count']} 个职位）", rep)
+        return result
     except Exception as e:
         logger.error("批量分析失败", error=str(e), exc_info=True)
         raise HTTPException(500, f"批量分析失败: {e}")
@@ -197,4 +216,70 @@ async def delete_batch_analysis(user_id: str = Depends(get_current_user)):
     from app.agents.job.market import delete_report
 
     deleted = delete_report(user_id)
+    return {"deleted": deleted}
+
+
+@router.post("/import")
+async def import_jobs(
+    files: list[UploadFile] = File(...),
+    user_id: str = Depends(get_current_user),
+):
+    """
+    批量导入职位文件（每个文件对应一个职位），返回解析后的职位列表。
+
+    支持 .txt/.md 等纯文本文件；文件名（去扩展名）作为职位标题，正文作为 JD。
+    """
+    _require_job_agent()
+    jobs: list[dict[str, Any]] = []
+    for f in files:
+        name = f.filename or "未命名"
+        raw = await f.read()
+        # 优先按 UTF-8 解码，失败退回 GBK（Windows 常见）
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            content = raw.decode("gbk", errors="ignore")
+        content = (content or "").strip()
+        title = os.path.splitext(name)[0].strip() or "未命名职位"
+        jobs.append({
+            "job_id": "",
+            "title": title,
+            "company": "",
+            "salary": "",
+            "city": "",
+            "source": "手动上传",
+            "job_url": "",
+            "jd_text": content,
+        })
+    return {"jobs": jobs, "count": len(jobs)}
+
+
+@router.get("/reports")
+async def list_archived_reports(user_id: str = Depends(get_current_user)):
+    """列出历史存档报告（元信息，不含正文）。"""
+    _require_job_agent()
+    from app.agents.job.archive import list_reports
+
+    return {"reports": list_reports(user_id)}
+
+
+@router.get("/reports/{report_id}")
+async def get_archived_report(report_id: str, user_id: str = Depends(get_current_user)):
+    """读取一份历史存档报告（含正文）。"""
+    _require_job_agent()
+    from app.agents.job.archive import get_report
+
+    report = get_report(user_id, report_id)
+    if report is None:
+        raise HTTPException(404, "报告不存在")
+    return report
+
+
+@router.delete("/reports/{report_id}")
+async def delete_archived_report(report_id: str, user_id: str = Depends(get_current_user)):
+    """删除一份历史存档报告。"""
+    _require_job_agent()
+    from app.agents.job.archive import delete_report
+
+    deleted = delete_report(user_id, report_id)
     return {"deleted": deleted}

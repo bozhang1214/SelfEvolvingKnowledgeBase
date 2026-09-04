@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
-  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List, Modal, Divider, Alert, Select, Pagination,
+  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List, Modal, Divider, Alert, Select, Pagination, Popover,
 } from 'antd';
 import {
   ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined, QrcodeOutlined,
-  BarChartOutlined, DeleteOutlined, ReloadOutlined,
+  BarChartOutlined, DeleteOutlined, ReloadOutlined, UploadOutlined, HistoryOutlined,
 } from '@ant-design/icons';
 import {
   analyzeJob,
@@ -13,10 +13,15 @@ import {
   bossQrStatus,
   batchAnalyze,
   deleteBatchAnalysis,
+  importJobFiles,
+  listJobReports,
+  getJobReport,
+  deleteJobReport,
   type JobAnalyzeResult,
   type JobMeta,
   type FetchedJob,
   type MarketReport,
+  type ArchivedReportMeta,
 } from '@/services/job';
 
 const { Text, Paragraph } = Typography;
@@ -128,6 +133,93 @@ const JsonBlock: React.FC<{ data: unknown }> = ({ data }) => {
   return <Text>{String(data)}</Text>;
 };
 
+/** 职位详情悬浮弹窗（悬停展示标题/公司/薪资/城市 + JD 全文）。 */const JobDetailPopover: React.FC<{ job: FetchedJob; children: React.ReactNode }> = ({ job, children }) => (
+  <Popover
+    title={
+      <Space direction="vertical" size={0}>
+        <Text strong>{job.title || '（无标题）'}</Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {[job.company, job.salary, job.city, job.source].filter(Boolean).join(' · ')}
+        </Text>
+      </Space>
+    }
+    content={
+      <div style={{ maxWidth: 460, maxHeight: 320, overflow: 'auto' }}>
+        {job.jd_text ? (
+          <Text style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>{job.jd_text}</Text>
+        ) : (
+          <Text type="secondary" style={{ fontSize: 12 }}>该职位暂无 JD 详情</Text>
+        )}
+      </div>
+    }
+    trigger="hover"
+    placement="right"
+  >
+    <span>{children}</span>
+  </Popover>
+);
+
+/** 批量报告精简展示（历史报告弹窗用，不含全量职位列表）。 */
+const BatchReportContent: React.FC<{ report: MarketReport }> = ({ report }) => (
+  <div>
+    {report.overview && (
+      <>
+        <Paragraph strong style={{ marginBottom: 4 }}>市场概况</Paragraph>
+        <Paragraph>{report.overview}</Paragraph>
+      </>
+    )}
+    <Paragraph strong style={{ marginBottom: 4 }}>公司分布</Paragraph>
+    <Space wrap size={[4, 4]}>
+      {report.stats?.company_distribution?.map((c) => <Tag key={c.name} color="blue">{c.name} × {c.count}</Tag>)}
+    </Space>
+    <Paragraph strong style={{ marginTop: 12, marginBottom: 4 }}>职位方向</Paragraph>
+    <Space wrap size={[4, 4]}>
+      {report.stats?.role_distribution?.map((c) => <Tag key={c.name} color="geekblue">{c.name} × {c.count}</Tag>)}
+    </Space>
+    {report.trends && report.trends.length > 0 && (
+      <>
+        <Paragraph strong style={{ marginTop: 12, marginBottom: 4 }}>市场趋势</Paragraph>
+        <List size="small" dataSource={report.trends} renderItem={(t) => <List.Item>· {t}</List.Item>} />
+      </>
+    )}
+    {report.opportunities && report.opportunities.length > 0 && (
+      <>
+        <Paragraph strong style={{ marginTop: 12, marginBottom: 4 }}>重点机会</Paragraph>
+        <List
+          size="small"
+          dataSource={report.opportunities}
+          renderItem={(o) => (
+            <List.Item>
+              <List.Item.Meta title={<Text strong>{o.title}</Text>} description={<Text type="secondary">{o.company}</Text>} />
+              <Text type="secondary" style={{ fontSize: 12 }}>{o.reason}</Text>
+            </List.Item>
+          )}
+        />
+      </>
+    )}
+    {report.recommendations && report.recommendations.length > 0 && (
+      <>
+        <Paragraph strong style={{ marginTop: 12, marginBottom: 4 }}>行动建议</Paragraph>
+        <List size="small" dataSource={report.recommendations} renderItem={(r) => <List.Item>· {r}</List.Item>} />
+      </>
+    )}
+  </div>
+);
+
+/** 从分析结果里提取匹配度评分（0~100），无则返回 null。 */function getMatchScore(result: JobAnalyzeResult | null): number | null {
+  const ranking = (result as { job_strategy?: { match_ranking?: Array<{ match_score?: number }> } })?.job_strategy?.match_ranking;
+  if (Array.isArray(ranking) && ranking.length > 0 && typeof ranking[0]?.match_score === 'number') {
+    return ranking[0].match_score;
+  }
+  return null;
+}
+
+function matchScoreColor(score: number): string {
+  if (score >= 80) return 'green';
+  if (score >= 60) return 'blue';
+  return 'orange';
+}
+
 const Job: React.FC = () => {
   const [jdText, setJdText] = useState('');
   const [meta, setMeta] = useState<JobMeta>({});
@@ -155,15 +247,78 @@ const Job: React.FC = () => {
   // 批量市场分析
   const [batchAnalyzing, setBatchAnalyzing] = useState(false);
   const [marketReport, setMarketReport] = useState<MarketReport | null>(null);
-  // 分析模式：职位收集 / 批量分析 / 单职位分析 / BOSS 登录
-  const [analysisMode, setAnalysisMode] = useState<'collect' | 'batch' | 'single' | 'boss'>('collect');
+  // 分析模式：职位收集 / 批量分析 / 单职位分析 / BOSS 登录 / 历史报告
+  const [analysisMode, setAnalysisMode] = useState<'collect' | 'batch' | 'single' | 'boss' | 'history'>('collect');
 
-  const handleBatchAnalyze = async (force = false) => {
+  // 批量上传职位文件
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 历史报告
+  const [reports, setReports] = useState<ArchivedReportMeta[]>([]);
+  const [reportsLoading, setReportsLoading] = useState(false);
+  const [reportDetail, setReportDetail] = useState<{ id: string; type: string; title: string; created_at: string; report: unknown } | null>(null);
+
+  const handleImportClick = () => fileInputRef.current?.click();
+
+  const handleImportFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    setImporting(true);
+    try {
+      const { jobs } = await importJobFiles(files);
+      setFetchedJobs((prev) => [...jobs, ...prev]);
+      message.success(`已导入 ${jobs.length} 个职位，可在下方列表查看`);
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '导入职位文件失败');
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const loadReports = async () => {
+    setReportsLoading(true);
+    try {
+      const { reports: list } = await listJobReports();
+      setReports(list);
+    } catch {
+      // 静默失败
+    } finally {
+      setReportsLoading(false);
+    }
+  };
+
+  const openReport = async (id: string) => {
+    try {
+      const detail = await getJobReport(id);
+      setReportDetail(detail);
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '读取报告失败');
+    }
+  };
+
+  const handleDeleteReportItem = async (id: string) => {
+    try {
+      await deleteJobReport(id);
+      message.success('报告已删除');
+      loadReports();
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '删除失败');
+    }
+  };
+
+  const handleBatchAnalyze = async (force = false, jobs?: FetchedJob[]) => {
+    const targetJobs = jobs ?? fetchedJobs;
+    if (targetJobs.length === 0) {
+      message.warning('请先在「职位收集」tab 收集职位');
+      return;
+    }
     setBatchAnalyzing(true);
     try {
-      const { cached, report } = await batchAnalyze({ keyword: fetchKeyword.trim() || undefined, force });
+      const { report } = await batchAnalyze({ jobs: targetJobs, force });
       setMarketReport(report);
-      message.success(cached ? '已加载缓存的分析报告（7 天内）' : '批量分析完成');
+      message.success('批量分析完成');
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '批量分析失败');
     } finally {
@@ -180,25 +335,6 @@ const Job: React.FC = () => {
       message.error(e?.response?.data?.detail || '删除失败');
     }
   };
-
-  // 进入页面自动加载/触发批量分析（7 天内命中缓存则直接展示，否则自动分析）
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      setBatchAnalyzing(true);
-      try {
-        const { report } = await batchAnalyze({});
-        if (mounted) setMarketReport(report);
-      } catch {
-        // 静默失败，用户可手动点「一键分析」
-      } finally {
-        if (mounted) setBatchAnalyzing(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   const handleBossQrLogin = async () => {
     setQrOpen(true);
@@ -358,7 +494,7 @@ const Job: React.FC = () => {
     <div style={{ padding: 24, overflow: 'auto', background: '#fff', minHeight: '100%' }}>
       <Tabs
         activeKey={analysisMode}
-        onChange={(k) => setAnalysisMode(k as 'collect' | 'batch' | 'single' | 'boss')}
+        onChange={(k) => setAnalysisMode(k as 'collect' | 'batch' | 'single' | 'boss' | 'history')}
         style={{ maxWidth: 1080, margin: '0 auto' }}
         items={[
           {
@@ -377,7 +513,15 @@ const Job: React.FC = () => {
                     </Space>
                   }
                   extra={
-                    <Button size="small" type="link" icon={<BarChartOutlined />} onClick={() => setAnalysisMode('batch')}>
+                    <Button
+                      size="small"
+                      type="link"
+                      icon={<BarChartOutlined />}
+                      onClick={() => {
+                        setAnalysisMode('batch');
+                        handleBatchAnalyze(false);
+                      }}
+                    >
                       去批量分析 →
                     </Button>
                   }
@@ -417,6 +561,22 @@ const Job: React.FC = () => {
         <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
           说明：工作地/薪资默认「不限」；关键字支持按空格拼接多个关键词（如「Agent 大模型」），空则用默认「Agent」。
         </Paragraph>
+        <Space style={{ marginTop: 12 }} align="center">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".txt,.md,.text,.json"
+            style={{ display: 'none' }}
+            onChange={handleImportFiles}
+          />
+          <Button icon={<UploadOutlined />} loading={importing} onClick={handleImportClick}>
+            批量上传职位文件
+          </Button>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            支持 .txt/.md，每个文件一个职位（文件名作标题、正文作 JD），导入后自动加入下方列表
+          </Text>
+        </Space>
         {fetchedJobs.length > 0 && (
           <Input
             placeholder="按公司筛选（如：字节 / 智谱 / 月之暗面）"
@@ -448,7 +608,7 @@ const Job: React.FC = () => {
                 <List.Item.Meta
                   title={
                     <Space size={8}>
-                      <Text strong>{job.title}</Text>
+                      <JobDetailPopover job={job}><Text strong>{job.title}</Text></JobDetailPopover>
                       <Tag color="blue">{job.salary || '面议'}</Tag>
                       {job.source && <Tag style={{ fontSize: 11 }}>{job.source}</Tag>}
                     </Space>
@@ -480,7 +640,7 @@ const Job: React.FC = () => {
             <BarChartOutlined />
             <Text strong>批量市场分析</Text>
             <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
-              一键分析采集结果（7 天内命中缓存直接展示）
+              对「职位收集」里已收集的职位（多个）做整体市场分析
             </Text>
           </Space>
         }
@@ -610,7 +770,7 @@ const Job: React.FC = () => {
                   <List.Item.Meta
                     title={
                       <Space size={8}>
-                        <Text strong>{job.title}</Text>
+                        <JobDetailPopover job={job}><Text strong>{job.title}</Text></JobDetailPopover>
                         {job.source && <Tag style={{ fontSize: 11 }}>{job.source}</Tag>}
                       </Space>
                     }
@@ -727,7 +887,12 @@ const Job: React.FC = () => {
           </Spin>
         ) : (
           <>
-            <Space style={{ marginBottom: 8 }}>
+            <Space style={{ marginBottom: 8 }} align="center">
+              {getMatchScore(result) !== null && (
+                <Tag color={matchScoreColor(getMatchScore(result) as number)} style={{ fontSize: 13, padding: '2px 12px' }}>
+                  匹配度 {getMatchScore(result)} 分
+                </Tag>
+              )}
               <Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 0 }}>
                 岗位定位：{result.job_analysis?.positioning || result.job_analysis?.position || '（未产出）'}
               </Paragraph>
@@ -775,8 +940,80 @@ const Job: React.FC = () => {
               </>
             ),
           },
+          {
+            key: 'history',
+            label: <span><HistoryOutlined /> 历史报告</span>,
+            children: (
+              <>
+                <Card
+                  title={
+                    <Space>
+                      <HistoryOutlined />
+                      <Text strong>历史报告</Text>
+                      <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
+                        批量分析 / 单职位分析的结果自动存档，可随时回顾
+                      </Text>
+                    </Space>
+                  }
+                  extra={<Button size="small" icon={<ReloadOutlined />} onClick={loadReports}>刷新</Button>}
+                  style={{ marginBottom: 16 }}
+                >
+                  <Spin spinning={reportsLoading}>
+                    {reports.length === 0 ? (
+                      <Empty description="暂无存档报告，做一次批量/单职位分析后会自动存档" />
+                    ) : (
+                      <List
+                        size="small"
+                        dataSource={reports}
+                        renderItem={(r) => (
+                          <List.Item
+                            key={r.id}
+                            actions={[
+                              <Button key="view" size="small" type="link" onClick={() => openReport(r.id)}>查看</Button>,
+                              <Button key="del" size="small" type="link" danger onClick={() => handleDeleteReportItem(r.id)}>删除</Button>,
+                            ]}
+                          >
+                            <List.Item.Meta
+                              title={
+                                <Space size={8}>
+                                  <Tag color={r.type === 'batch' ? 'geekblue' : 'purple'} style={{ fontSize: 11 }}>
+                                    {r.type === 'batch' ? '批量' : '单职位'}
+                                  </Tag>
+                                  <Text strong>{r.title}</Text>
+                                </Space>
+                              }
+                              description={<Text type="secondary" style={{ fontSize: 12 }}>{r.created_at?.replace('T', ' ').slice(0, 19)}</Text>}
+                            />
+                          </List.Item>
+                        )}
+                      />
+                    )}
+                  </Spin>
+                </Card>
+              </>
+            ),
+          },
         ]}
       />
+
+      {/* 历史报告详情弹窗 */}
+      <Modal
+        title={reportDetail?.title || '报告详情'}
+        open={!!reportDetail}
+        onCancel={() => setReportDetail(null)}
+        footer={null}
+        width={860}
+      >
+        {reportDetail ? (
+          <div style={{ maxHeight: '70vh', overflow: 'auto' }}>
+            {reportDetail.type === 'batch' ? (
+              <BatchReportContent report={reportDetail.report as MarketReport} />
+            ) : (
+              <JsonBlock data={reportDetail.report} />
+            )}
+          </div>
+        ) : null}
+      </Modal>
 
       {/* BOSS 扫码登录弹窗 */}
       <Modal

@@ -132,11 +132,12 @@ export interface MarketReport {
   jobs: FetchedJob[];
 }
 
-/** 一键批量分析采集结果（7 天缓存）。 */
+/** 一键批量分析采集结果（7 天缓存；传入 jobs 则分析这批职位，不重复采集）。 */
 export async function batchAnalyze(payload: {
   keyword?: string;
   city?: string;
   force?: boolean;
+  jobs?: FetchedJob[];
 }): Promise<{ cached: boolean; report: MarketReport }> {
   const res = await apiClient.post('/job/batch-analyze', payload, { timeout: 120000 });
   return res.data;
@@ -145,5 +146,42 @@ export async function batchAnalyze(payload: {
 /** 删除批量分析缓存（强制下次重新分析）。 */
 export async function deleteBatchAnalysis(): Promise<{ deleted: boolean }> {
   const res = await apiClient.delete('/job/batch-analyze');
+  return res.data;
+}
+
+/** 批量导入职位文件（每个文件一个职位），返回解析后的职位列表。 */
+export async function importJobFiles(files: File[]): Promise<{ jobs: FetchedJob[]; count: number }> {
+  const fd = new FormData();
+  files.forEach((f) => fd.append('files', f));
+  const res = await apiClient.post('/job/import', fd, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  });
+  return res.data;
+}
+
+/** 历史存档报告元信息。 */
+export interface ArchivedReportMeta {
+  id: string;
+  type: 'batch' | 'single';
+  title: string;
+  created_at: string;
+}
+
+/** 列出历史存档报告。 */
+export async function listJobReports(): Promise<{ reports: ArchivedReportMeta[] }> {
+  const res = await apiClient.get('/job/reports');
+  return res.data;
+}
+
+/** 读取一份历史存档报告（含正文）。 */
+export async function getJobReport(reportId: string): Promise<{ id: string; type: string; title: string; created_at: string; report: unknown }> {
+  const res = await apiClient.get(`/job/reports/${reportId}`);
+  return res.data;
+}
+
+/** 删除一份历史存档报告。 */
+export async function deleteJobReport(reportId: string): Promise<{ deleted: boolean }> {
+  const res = await apiClient.delete(`/job/reports/${reportId}`);
   return res.data;
 }

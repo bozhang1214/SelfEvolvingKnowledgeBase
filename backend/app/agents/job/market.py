@@ -159,6 +159,20 @@ async def _llm_synthesize(
         return {}
 
 
+def _normalize_job(j: dict[str, Any]) -> dict[str, Any]:
+    """归一化前端传入的职位字典，补齐必需字段。"""
+    return {
+        "job_id": j.get("job_id", ""),
+        "title": (j.get("title") or "").strip(),
+        "company": (j.get("company") or "").strip(),
+        "salary": (j.get("salary") or "").strip(),
+        "city": (j.get("city") or "").strip(),
+        "source": (j.get("source") or "手动上传").strip(),
+        "job_url": j.get("job_url", ""),
+        "jd_text": (j.get("jd_text") or "").strip(),
+    }
+
+
 async def analyze_market(
     ctx: Any,
     user_id: str,
@@ -166,22 +180,33 @@ async def analyze_market(
     city: str,
     llm_factory: Any,
     user_profile: str,
+    jobs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """执行批量分析（带缓存），返回 {cached, report}。"""
-    cached = get_cached_report(user_id)
-    if cached is not None:
-        return {"cached": True, "report": cached}
+    """执行批量分析，返回 {cached, report}。
 
-    from app.agents.job.collector import JobCollector
+    jobs=None 时自动采集并缓存 7 天；jobs 提供时直接分析传入的职位（不缓存，
+    用于「职位收集 → 批量分析」联动，避免重复采集、保证数据一致）。
+    """
+    from_provided = jobs is not None
+    if not from_provided:
+        cached = get_cached_report(user_id)
+        if cached is not None:
+            return {"cached": True, "report": cached}
 
-    cfg = ctx.config.job
-    collector = JobCollector(
-        city=city,
-        min_salary_k=cfg.default_min_salary_k,
-        exclude_companies=cfg.exclude_companies,
-    )
-    result = await collector.fetch_all(keyword=keyword, page=0, limit=20)
-    jobs = result["jobs"]
+        from app.agents.job.collector import JobCollector
+
+        cfg = ctx.config.job
+        collector = JobCollector(
+            city=city,
+            min_salary_k=cfg.default_min_salary_k,
+            exclude_companies=cfg.exclude_companies,
+        )
+        result = await collector.fetch_all(keyword=keyword, page=0, limit=20)
+        jobs = result["jobs"]
+    else:
+        jobs = [
+            _normalize_job(j) for j in (jobs or []) if (j.get("title") or j.get("jd_text"))
+        ]
 
     stats = compute_stats(jobs)
 
@@ -231,8 +256,11 @@ async def analyze_market(
         ],
     }
 
-    cache = _load_cache()
-    cache[user_id] = report
-    _save_cache(cache)
-    logger.info("市场批量分析完成并缓存", user_id=user_id, jobs=len(jobs))
+    if not from_provided:
+        cache = _load_cache()
+        cache[user_id] = report
+        _save_cache(cache)
+    logger.info(
+        "市场批量分析完成", user_id=user_id, jobs=len(jobs), from_provided=from_provided
+    )
     return {"cached": False, "report": report}
