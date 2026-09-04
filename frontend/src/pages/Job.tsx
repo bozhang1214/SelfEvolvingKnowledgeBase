@@ -150,6 +150,182 @@ const JsonBlock: React.FC<{ data: unknown }> = ({ data }) => {
   return <Text>{String(data)}</Text>;
 };
 
+/** 市场行情区块（批量职位分析.md 输出）：中文标签 + 易读布局，替代生硬的通用 JSON 表格。 */
+const MarketSection: React.FC<{ data: Record<string, any> }> = ({ data }) => {
+  const tracks = Array.isArray(data.track_heatmap) ? data.track_heatmap : [];
+  const skill = data.skill_threshold || {};
+  const must = Array.isArray(skill.must) ? skill.must : [];
+  const nice = Array.isArray(skill.nice_to_have) ? skill.nice_to_have : [];
+  const anchors = Array.isArray(data.salary_anchor) ? data.salary_anchor : [];
+
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {tracks.length > 0 && (
+        <div>
+          <Paragraph strong style={{ marginBottom: 8 }}>赛道热力分布</Paragraph>
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            {tracks.map((t: any, i: number) => (
+              <div key={i}>
+                <Text strong>{t.track || `赛道 ${i + 1}`}</Text>
+                {t.job_count != null && <Tag color="blue" style={{ marginLeft: 8 }}>招聘 {t.job_count} 个</Tag>}
+                {t.salary_signal && <Tag color="gold">{t.salary_signal}</Tag>}
+                {t.comment && <Text type="secondary">　{t.comment}</Text>}
+              </div>
+            ))}
+          </Space>
+        </div>
+      )}
+
+      {(must.length > 0 || nice.length > 0) && (
+        <div>
+          <Paragraph strong style={{ marginBottom: 8 }}>技能栈：门槛线与加分项</Paragraph>
+          {must.length > 0 && (
+            <div style={{ marginBottom: 6 }}>
+              <Text strong style={{ marginRight: 8, color: '#389e0d' }}>入场券</Text>
+              <Space wrap size={[4, 4]}>
+                {must.map((s: any, i: number) => <Tag key={i} color="green">{String(s)}</Tag>)}
+              </Space>
+            </div>
+          )}
+          {nice.length > 0 && (
+            <div>
+              <Text strong style={{ marginRight: 8, color: '#d46b08' }}>加钱项</Text>
+              <Space wrap size={[4, 4]}>
+                {nice.map((s: any, i: number) => <Tag key={i} color="orange">{String(s)}</Tag>)}
+              </Space>
+            </div>
+          )}
+        </div>
+      )}
+
+      {data.experience_reality && (
+        <div>
+          <Paragraph strong style={{ marginBottom: 4 }}>经验年限真实水位</Paragraph>
+          <Paragraph style={{ marginBottom: 0 }}>{String(data.experience_reality)}</Paragraph>
+        </div>
+      )}
+
+      {anchors.length > 0 && (
+        <div>
+          <Paragraph strong style={{ marginBottom: 8 }}>薪资锚点</Paragraph>
+          <Space direction="vertical" size={4}>
+            {anchors.map((a: any, i: number) => (
+              <div key={i}>
+                <Text strong>{a.scope || ''}</Text>
+                {a.median && <Tag color="geekblue" style={{ marginLeft: 8 }}>中位 {String(a.median)}</Tag>}
+                {a.note && <Text type="secondary">　{String(a.note)}</Text>}
+              </div>
+            ))}
+          </Space>
+        </div>
+      )}
+
+      {data.bottom_line && (
+        <Alert type="warning" showIcon message="结论" description={String(data.bottom_line)} />
+      )}
+    </Space>
+  );
+};
+
+/** 知识迭代区块（职位知识迭代.md 输出）：中文标签 + 易读布局。 */
+const KnowledgeSection: React.FC<{ data: Record<string, any> }> = ({ data }) => {
+  const foundation = Array.isArray(data.foundation) ? data.foundation : [];
+  const highlights = Array.isArray(data.highlights) ? data.highlights : [];
+  const skip = Array.isArray(data.skip) ? data.skip : [];
+  const milestones = Array.isArray(data.milestones) ? data.milestones : [];
+  const checkpoints = Array.isArray(data.checkpoints) ? data.checkpoints : [];
+  const polish = Array.isArray(data.polish) ? data.polish : [];
+
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {foundation.length > 0 && (
+        <div>
+          <Paragraph strong style={{ marginBottom: 8 }}>必保底盘</Paragraph>
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            {foundation.map((f: any, i: number) => (
+              <div key={i}>
+                <Text strong>{f.topic || ''}</Text>
+                {f.estimated_days != null && <Tag color="red" style={{ marginLeft: 8 }}>{f.estimated_days} 天</Tag>}
+                {f.why && <div><Text type="secondary">{String(f.why)}</Text></div>}
+              </div>
+            ))}
+          </Space>
+        </div>
+      )}
+
+      {highlights.length > 0 && (
+        <div>
+          <Paragraph strong style={{ marginBottom: 8 }}>亮点加分</Paragraph>
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            {highlights.map((f: any, i: number) => (
+              <div key={i}>
+                <Text strong>{f.topic || ''}</Text>
+                {f.why && <div><Text type="secondary">{String(f.why)}</Text></div>}
+              </div>
+            ))}
+          </Space>
+        </div>
+      )}
+
+      {skip.length > 0 && (
+        <div>
+          <Paragraph strong style={{ marginBottom: 8 }}>暂时别看（市场噱头）</Paragraph>
+          <Space wrap size={[4, 4]}>
+            {skip.map((s: any, i: number) => <Tag key={i}>{String(s)}</Tag>)}
+          </Space>
+        </div>
+      )}
+
+      {milestones.length > 0 && (
+        <div>
+          <Paragraph strong style={{ marginBottom: 8 }}>里程碑路线图</Paragraph>
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            {milestones.map((m: any, i: number) => (
+              <div key={i} style={{ paddingLeft: 8, borderLeft: '3px solid #1677ff' }}>
+                <Text strong>{m.period || ''}</Text>
+                {m.goal && <Text>　{String(m.goal)}</Text>}
+                {m.project && <div><Tag color="blue">{String(m.project)}</Tag></div>}
+              </div>
+            ))}
+          </Space>
+        </div>
+      )}
+
+      {checkpoints.length > 0 && (
+        <div>
+          <Paragraph strong style={{ marginBottom: 8 }}>面试试金石</Paragraph>
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            {checkpoints.map((c: any, i: number) => (
+              <div key={i}>
+                <Text strong>{c.period || ''}</Text>
+                {Array.isArray(c.questions) && c.questions.length > 0 && (
+                  <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                    {c.questions.map((q: any, j: number) => <li key={j}>{String(q)}</li>)}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </Space>
+        </div>
+      )}
+
+      {polish.length > 0 && (
+        <div>
+          <Paragraph strong style={{ marginBottom: 8 }}>开源/博客镀金</Paragraph>
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            {polish.map((p: any, i: number) => (
+              <div key={i}>
+                {p.action && <Text strong>{String(p.action)}</Text>}
+                {p.target && <Text>：{String(p.target)}</Text>}
+              </div>
+            ))}
+          </Space>
+        </div>
+      )}
+    </Space>
+  );
+};
+
 /** 职位详情悬浮弹窗（悬停展示标题/公司/薪资/城市 + JD 全文）。 */const JobDetailPopover: React.FC<{ job: FetchedJob; children: React.ReactNode }> = ({ job, children }) => (
   <Popover
     title={
@@ -738,7 +914,7 @@ const Job: React.FC = () => {
               <>
                 <Divider style={{ margin: '12px 0' }} />
                 <Paragraph strong style={{ marginBottom: 8 }}>市场行情</Paragraph>
-                <JsonBlock data={marketReport.market} />
+                <MarketSection data={marketReport.market as Record<string, any>} />
               </>
             )}
 
@@ -746,7 +922,7 @@ const Job: React.FC = () => {
               <>
                 <Divider style={{ margin: '12px 0' }} />
                 <Paragraph strong style={{ marginBottom: 8 }}>知识迭代</Paragraph>
-                <JsonBlock data={marketReport.knowledge_iteration} />
+                <KnowledgeSection data={marketReport.knowledge_iteration as Record<string, any>} />
               </>
             )}
           </div>
