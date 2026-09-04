@@ -3,15 +3,13 @@ import {
   Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List, Modal, Divider, Alert, Select, Pagination, Popover, Table,
 } from 'antd';
 import {
-  ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined, QrcodeOutlined,
+  ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined,
   BarChartOutlined, DeleteOutlined, ReloadOutlined, UploadOutlined, HistoryOutlined, DownloadOutlined,
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import {
   analyzeJob,
   fetchJobs,
-  bossQrStart,
-  bossQrStatus,
   batchAnalyze,
   deleteBatchAnalysis,
   importJobFiles,
@@ -230,17 +228,11 @@ const Job: React.FC = () => {
   const [tablePage, setTablePage] = useState(1);
   const [tablePageSize, setTablePageSize] = useState(20);
 
-  // BOSS 扫码登录
-  const [qrOpen, setQrOpen] = useState(false);
-  const [qrImageUrl, setQrImageUrl] = useState('');
-  const [qrWaiting, setQrWaiting] = useState(false);
-  const [qrTip, setQrTip] = useState('');
-
-  // 批量市场分析
+  // 批量职位分析
   const [batchAnalyzing, setBatchAnalyzing] = useState(false);
   const [marketReport, setMarketReport] = useState<MarketReport | null>(null);
-  // 分析模式：职位收集 / 批量分析 / 单职位分析 / BOSS 登录 / 历史报告
-  const [analysisMode, setAnalysisMode] = useState<'collect' | 'batch' | 'single' | 'boss' | 'history'>('collect');
+  // 分析模式：职位收集 / 批量分析 / 单职位分析 / 历史报告
+  const [analysisMode, setAnalysisMode] = useState<'collect' | 'batch' | 'single' | 'history'>('collect');
 
   // 批量上传职位文件
   const [importing, setImporting] = useState(false);
@@ -325,61 +317,6 @@ const Job: React.FC = () => {
       message.success('分析报告已删除，可重新分析');
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '删除失败');
-    }
-  };
-
-  const handleBossQrLogin = async () => {
-    setQrOpen(true);
-    setQrWaiting(true);
-    setQrImageUrl('');
-    setQrTip('');
-    let timer: ReturnType<typeof setInterval> | undefined;
-    let finished = false;
-    const finish = () => {
-      finished = true;
-      if (timer) clearInterval(timer);
-      setQrWaiting(false);
-    };
-    try {
-      const { qr_id, qr_image_url } = await bossQrStart();
-      setQrImageUrl(qr_image_url);
-      setQrTip('用手机 BOSS App「扫一扫」此二维码');
-      // 轮询状态机（第一张码扫完会换第二张码）
-      timer = setInterval(async () => {
-        try {
-          const st = await bossQrStatus(qr_id);
-          if (st.qr_image_url) setQrImageUrl(st.qr_image_url);
-          if (st.phase === 'waiting_scan') {
-            setQrTip('用手机 BOSS App「扫一扫」此二维码');
-          } else if (st.phase === 'waiting_second_scan') {
-            setQrTip('已扫描，请再次扫一扫这张新二维码');
-          } else if (st.phase === 'waiting_confirm') {
-            setQrTip('请在 BOSS App 上点击「确认登录」');
-          } else if (st.phase === 'success') {
-            finish();
-            setQrOpen(false);
-            message.success('BOSS 登录成功，Cookie 已保存，现在可以采集 BOSS 职位了');
-          } else if (st.phase === 'expired') {
-            finish();
-            message.warning('二维码已过期，请重新点击「BOSS 扫码登录」');
-          } else if (st.phase === 'login_failed') {
-            finish();
-            message.error(st.message || 'BOSS 登录失败，请重试');
-          }
-        } catch (e: any) {
-          // 单个轮询失败不中断，继续等
-        }
-      }, 1500);
-      // 最长轮询 3 分钟
-      setTimeout(() => {
-        if (!finished) {
-          finish();
-          message.warning('等待扫码超时，请重试');
-        }
-      }, 180000);
-    } catch (e: any) {
-      setQrWaiting(false);
-      message.error(e?.response?.data?.detail || 'BOSS 扫码登录失败');
     }
   };
 
@@ -523,7 +460,7 @@ const Job: React.FC = () => {
     <div style={{ padding: 24, overflow: 'auto', background: '#fff', minHeight: '100%' }}>
       <Tabs
         activeKey={analysisMode}
-        onChange={(k) => setAnalysisMode(k as 'collect' | 'batch' | 'single' | 'boss' | 'history')}
+        onChange={(k) => setAnalysisMode(k as 'collect' | 'batch' | 'single' | 'history')}
         style={{ maxWidth: 1080, margin: '0 auto' }}
         items={[
           {
@@ -993,35 +930,6 @@ const Job: React.FC = () => {
             ),
           },
           {
-            key: 'boss',
-            label: <span><QrcodeOutlined /> BOSS 登录</span>,
-            children: (
-              <>
-                <Card
-                  title={
-                    <Space>
-                      <QrcodeOutlined />
-                      <Text strong>BOSS 直聘扫码登录</Text>
-                    </Space>
-                  }
-                  style={{ maxWidth: 1080, margin: '0 auto' }}
-                >
-                  <Paragraph type="secondary">
-                    登录 BOSS 直聘以获取登录 Cookie，用于后续采集 BOSS 上的职位（当前 BOSS 职位采集仍受反爬签名限制，登录作为备用）。
-                  </Paragraph>
-                  <Space>
-                    <Button type="primary" icon={<QrcodeOutlined />} onClick={handleBossQrLogin}>
-                      扫码登录
-                    </Button>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      用手机 BOSS App「扫一扫」，走两步扫码（扫第一张 → 换第二张 → App 确认）。
-                    </Text>
-                  </Space>
-                </Card>
-              </>
-            ),
-          },
-          {
             key: 'history',
             label: <span><HistoryOutlined /> 历史报告</span>,
             children: (
@@ -1107,33 +1015,6 @@ const Job: React.FC = () => {
             <ReactMarkdown>{reportDetail.markdown}</ReactMarkdown>
           </div>
         ) : null}
-      </Modal>
-
-      {/* BOSS 扫码登录弹窗 */}
-      <Modal
-        title="BOSS 直聘扫码登录"
-        open={qrOpen}
-        onCancel={() => setQrOpen(false)}
-        footer={null}
-        width={360}
-      >
-        <div style={{ textAlign: 'center', padding: '12px 0' }}>
-          {qrImageUrl ? (
-            <>
-              <img src={qrImageUrl} alt="BOSS 登录二维码" style={{ width: 220, height: 220 }} />
-              <Paragraph type="secondary" style={{ marginTop: 12 }}>
-                {qrTip || '用手机 BOSS App「扫一扫」此二维码'}
-              </Paragraph>
-            </>
-          ) : (
-            <Spin tip="正在生成二维码…" />
-          )}
-          {qrWaiting && qrImageUrl && (
-            <Paragraph type="secondary" style={{ marginTop: 8 }}>
-              <Spin size="small" /> 等待扫码确认中…（约 3 分钟超时）
-            </Paragraph>
-          )}
-        </div>
       </Modal>
     </div>
   );
