@@ -155,8 +155,8 @@ const Job: React.FC = () => {
   // 批量市场分析
   const [batchAnalyzing, setBatchAnalyzing] = useState(false);
   const [marketReport, setMarketReport] = useState<MarketReport | null>(null);
-  // 分析模式：批量分析 / 单职位分析 / BOSS 登录
-  const [analysisMode, setAnalysisMode] = useState<'batch' | 'single' | 'boss'>('batch');
+  // 分析模式：职位收集 / 批量分析 / 单职位分析 / BOSS 登录
+  const [analysisMode, setAnalysisMode] = useState<'collect' | 'batch' | 'single' | 'boss'>('collect');
 
   const handleBatchAnalyze = async (force = false) => {
     setBatchAnalyzing(true);
@@ -356,19 +356,33 @@ const Job: React.FC = () => {
 
   return (
     <div style={{ padding: 24, overflow: 'auto', background: '#fff', minHeight: '100%' }}>
-      {/* 职位采集（多源，免登录） */}
-      <Card
-        title={
-          <Space>
-            <SearchOutlined />
-            <Text strong>职位采集</Text>
-            <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
-              多源采集真实职位（猎聘/字节/腾讯/百度/小米/阿里/小红书，免登录），点击职位自动填入下方分析框
-            </Text>
-          </Space>
-        }
-        style={{ maxWidth: 1080, margin: '0 auto 16px' }}
-      >
+      <Tabs
+        activeKey={analysisMode}
+        onChange={(k) => setAnalysisMode(k as 'collect' | 'batch' | 'single' | 'boss')}
+        style={{ maxWidth: 1080, margin: '0 auto' }}
+        items={[
+          {
+            key: 'collect',
+            label: <span><SearchOutlined /> 职位收集</span>,
+            children: (
+              <>
+                <Card
+                  title={
+                    <Space>
+                      <SearchOutlined />
+                      <Text strong>职位收集</Text>
+                      <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
+                        设置筛选条件，收集并浏览真实职位（9 家免登录渠道）
+                      </Text>
+                    </Space>
+                  }
+                  extra={
+                    <Button size="small" type="link" icon={<BarChartOutlined />} onClick={() => setAnalysisMode('batch')}>
+                      去批量分析 →
+                    </Button>
+                  }
+                  style={{ marginBottom: 16 }}
+                >
         <Row gutter={12} align="middle">
           <Col xs={24} sm={4}>
             <Select
@@ -395,9 +409,9 @@ const Job: React.FC = () => {
             />
           </Col>
           <Col xs={24} sm={6}>
-            <Button type="primary" icon={<SearchOutlined />} loading={fetching} onClick={handleFetch} block>
-              采集职位
-            </Button>
+              <Button type="primary" icon={<SearchOutlined />} loading={fetching} onClick={handleFetch} block>
+                收集职位
+              </Button>
           </Col>
         </Row>
         <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
@@ -450,13 +464,10 @@ const Job: React.FC = () => {
             )}
           />
         )}
-      </Card>
-
-      <Tabs
-        activeKey={analysisMode}
-        onChange={(k) => setAnalysisMode(k as 'batch' | 'single' | 'boss')}
-        style={{ maxWidth: 1080, margin: '0 auto' }}
-        items={[
+                </Card>
+              </>
+            ),
+          },
           {
             key: 'batch',
             label: <span><BarChartOutlined /> 批量分析</span>,
@@ -640,7 +651,7 @@ const Job: React.FC = () => {
                   title={
                     <Space>
                       <FileSearchOutlined />
-                      <Text strong>职位分析</Text>
+                      <Text strong>单职位分析</Text>
             <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
               粘贴职位 JD，自动产出岗位定位 / 知识点 / 面试题 / 差距 / 简历建议 / 求职策略
             </Text>
