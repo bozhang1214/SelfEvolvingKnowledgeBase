@@ -213,6 +213,9 @@ const Job: React.FC = () => {
   // 批量报告职位列表分页（受控，修复「N 条/页」不生效）
   const [jobPage, setJobPage] = useState(1);
   const [jobPageSize, setJobPageSize] = useState(20);
+  // 收集列表表格分页（受控）
+  const [tablePage, setTablePage] = useState(1);
+  const [tablePageSize, setTablePageSize] = useState(20);
 
   // BOSS 扫码登录
   const [qrOpen, setQrOpen] = useState(false);
@@ -615,18 +618,12 @@ const Job: React.FC = () => {
               size="small"
               style={{ marginTop: 8 }}
               rowKey={(j) => j.job_id || `${j.title}-${j.company}`}
-              dataSource={fetchedJobs}
+              dataSource={fetchedJobs.slice((tablePage - 1) * tablePageSize, tablePage * tablePageSize)}
               rowSelection={{
                 selectedRowKeys,
                 onChange: setSelectedRowKeys,
               }}
-              pagination={{
-                pageSize: 20,
-                size: 'small',
-                showSizeChanger: true,
-                pageSizeOptions: [10, 20, 50, 100],
-                showTotal: (t) => `共 ${t} 条`,
-              }}
+              pagination={false}
               columns={[
                 {
                   title: '职位名',
@@ -679,6 +676,21 @@ const Job: React.FC = () => {
                 },
               ]}
             />
+            <div style={{ textAlign: 'right', marginTop: 12 }}>
+              <Pagination
+                current={tablePage}
+                pageSize={tablePageSize}
+                total={fetchedJobs.length}
+                size="small"
+                showSizeChanger
+                pageSizeOptions={[10, 20, 50, 100]}
+                showTotal={(t) => `共 ${t} 条`}
+                onChange={(page, size) => {
+                  setTablePage(page);
+                  setTablePageSize(size);
+                }}
+              />
+            </div>
           </>
         )}
                 </Card>
