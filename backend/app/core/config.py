@@ -342,9 +342,10 @@ class NewsConfig(BaseModel):
     retention_days: int = 70              # 日报保留天数
     time_window_hours: int = 24           # 日报信息时效窗口（小时）
     llm_role: str = "chat_simple"         # 生成日报用的 LLM 角色
-    daily_cron: str = "0 9 * * *"         # 日报：每天 09:00
-    weekly_cron: str = "0 9 * * 1"        # 周报：每周一 09:00
-    monthly_cron: str = "0 9 1 * *"       # 月报：每月 1 日 09:00
+    daily_cron: str = "0 8 * * *"         # 日报：每天 08:00（北京时间）
+    weekly_cron: str = "0 8 * * 1"        # 周报：每周一 08:00（北京时间）
+    monthly_cron: str = "0 8 1 * *"       # 月报：每月 1 日 08:00（北京时间）
+    timezone: str = "Asia/Shanghai"       # 定时任务时区（容器默认 UTC，需显式指定北京时间）
 
 
 class JobConfig(BaseModel):

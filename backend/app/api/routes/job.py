@@ -32,8 +32,9 @@ class JobAnalyzeRequest(BaseModel):
 class JobFetchRequest(BaseModel):
     """职位采集请求体。"""
 
-    keyword: str = Field("", description="搜索关键词（空则用配置默认 default_keyword）")
-    city: str = Field("", description="城市过滤（空则用配置默认 default_city）")
+    keyword: str = Field("", description="搜索关键词，支持空格拼接多个关键词（空则用配置默认 default_keyword）")
+    city: str = Field("", description="工作地过滤（空/「不限」= 不过滤）")
+    min_salary_k: int = Field(0, ge=0, description="最低月薪（K），0=不限")
     page: int = Field(0, ge=0, description="页码，从 0 开始")
     limit: int = Field(20, ge=1, le=40, description="每页数量（部分源固定返回约 40）")
 
@@ -81,11 +82,14 @@ async def fetch_jobs(body: JobFetchRequest, user_id: str = Depends(get_current_u
 
     cfg = ctx.config.job
     keyword = (body.keyword or "").strip() or cfg.default_keyword
-    city = (body.city or "").strip() or cfg.default_city
+    # 城市「不限」= 空串 = 不过滤城市
+    city = (body.city or "").strip()
+    if city in ("不限", "全部", "全国"):
+        city = ""
 
     collector = JobCollector(
         city=city,
-        min_salary_k=cfg.default_min_salary_k,
+        min_salary_k=body.min_salary_k,
         exclude_companies=cfg.exclude_companies,
     )
     try:

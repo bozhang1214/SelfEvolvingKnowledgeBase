@@ -91,6 +91,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
         curl \
         ca-certificates \
+        tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # 从 builder 复制已安装的 Python 依赖

@@ -61,6 +61,8 @@ services:
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
       # ---- 运行环境标记 ----
       ENVIRONMENT: production
+      # 容器时区：北京时间（定时任务 cron 依赖此时区）
+      TZ: Asia/Shanghai
       # HuggingFace 镜像（sentence-transformers 下载模型用，加速国内构建）
       HF_ENDPOINT: https://hf-mirror.com
     volumes:

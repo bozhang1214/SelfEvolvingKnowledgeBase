@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List, Modal, Divider, Alert,
+  Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List, Modal, Divider, Alert, Select, Pagination,
 } from 'antd';
 import {
   ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined, QrcodeOutlined,
@@ -53,6 +53,10 @@ const SECTION_ORDER: SectionKey[] = [
   'project_iteration',
   'job_strategy',
 ];
+
+// 职位采集筛选选项
+const CITY_OPTIONS = ['不限', '北京', '上海', '深圳', '杭州', '广州', '成都', '全国'];
+const SALARY_OPTIONS = ['不限', '20K+', '30K+', '40K+', '50K+', '60K+', '80K+', '100K+'];
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -133,9 +137,14 @@ const Job: React.FC = () => {
 
   // 职位采集（多源）
   const [fetchKeyword, setFetchKeyword] = useState('');
+  const [fetchCity, setFetchCity] = useState('不限');
+  const [fetchSalary, setFetchSalary] = useState('不限');
   const [fetching, setFetching] = useState(false);
   const [fetchedJobs, setFetchedJobs] = useState<FetchedJob[]>([]);
   const [companyFilter, setCompanyFilter] = useState('');
+  // 批量报告职位列表分页（受控，修复「N 条/页」不生效）
+  const [jobPage, setJobPage] = useState(1);
+  const [jobPageSize, setJobPageSize] = useState(20);
 
   // BOSS 扫码登录
   const [qrOpen, setQrOpen] = useState(false);
@@ -146,8 +155,8 @@ const Job: React.FC = () => {
   // 批量市场分析
   const [batchAnalyzing, setBatchAnalyzing] = useState(false);
   const [marketReport, setMarketReport] = useState<MarketReport | null>(null);
-  // 分析模式：批量分析 / 单职位分析
-  const [analysisMode, setAnalysisMode] = useState<'batch' | 'single'>('batch');
+  // 分析模式：批量分析 / 单职位分析 / BOSS 登录
+  const [analysisMode, setAnalysisMode] = useState<'batch' | 'single' | 'boss'>('batch');
 
   const handleBatchAnalyze = async (force = false) => {
     setBatchAnalyzing(true);
@@ -252,10 +261,16 @@ const Job: React.FC = () => {
       message.warning('请输入采集关键词');
       return;
     }
+    // 薪资「不限」→ 0；否则解析「30K+」→ 30
+    const salaryK = fetchSalary === '不限' ? 0 : parseInt(fetchSalary, 10) || 0;
     setFetching(true);
     setFetchedJobs([]);
     try {
-      const data = await fetchJobs({ keyword: kw });
+      const data = await fetchJobs({
+        keyword: kw,
+        city: fetchCity === '不限' ? '' : fetchCity,
+        min_salary_k: salaryK,
+      });
       setFetchedJobs(data.jobs);
       if (data.jobs.length === 0) {
         message.info('未采集到职位（接口可能被限流或关键词无结果）');
@@ -269,11 +284,12 @@ const Job: React.FC = () => {
     }
   };
 
-  /** 点击采集到的职位：有 JD 文本则填入分析框，否则跳转原链接 */
+  /** 点击采集到的职位：有 JD 文本则填入分析框并切到「单职位分析」，否则跳转原链接 */
   const handlePickJob = (job: FetchedJob) => {
     if (job.jd_text && job.jd_text.trim()) {
       setJdText(job.jd_text);
       setMeta({ company: job.company, position: job.title, city: job.city, salary: job.salary });
+      setAnalysisMode('single');
       message.success('已填入职位描述，请点击「开始分析」');
     } else {
       if (job.job_url) {
@@ -353,20 +369,40 @@ const Job: React.FC = () => {
         }
         style={{ maxWidth: 1080, margin: '0 auto 16px' }}
       >
-        <Space.Compact style={{ width: '100%' }}>
-          <Input
-            placeholder="采集关键词，如：AI Agent / 大模型应用工程师 / LangGraph"
-            value={fetchKeyword}
-            onChange={(e) => setFetchKeyword(e.target.value)}
-            onPressEnter={handleFetch}
-          />
-          <Button type="primary" icon={<SearchOutlined />} loading={fetching} onClick={handleFetch}>
-            采集职位
-          </Button>
-          <Button icon={<QrcodeOutlined />} onClick={handleBossQrLogin}>
-            BOSS 扫码登录
-          </Button>
-        </Space.Compact>
+        <Row gutter={12} align="middle">
+          <Col xs={24} sm={4}>
+            <Select
+              value={fetchCity}
+              onChange={setFetchCity}
+              style={{ width: '100%' }}
+              options={CITY_OPTIONS.map((c) => ({ value: c, label: c === '不限' ? '工作地：不限' : `工作地：${c}` }))}
+            />
+          </Col>
+          <Col xs={24} sm={9}>
+            <Input
+              placeholder="关键字，多个用空格分隔（如：Agent 大模型）"
+              value={fetchKeyword}
+              onChange={(e) => setFetchKeyword(e.target.value)}
+              onPressEnter={handleFetch}
+            />
+          </Col>
+          <Col xs={24} sm={5}>
+            <Select
+              value={fetchSalary}
+              onChange={setFetchSalary}
+              style={{ width: '100%' }}
+              options={SALARY_OPTIONS.map((s) => ({ value: s, label: s === '不限' ? '薪资：不限' : `薪资：${s}` }))}
+            />
+          </Col>
+          <Col xs={24} sm={6}>
+            <Button type="primary" icon={<SearchOutlined />} loading={fetching} onClick={handleFetch} block>
+              采集职位
+            </Button>
+          </Col>
+        </Row>
+        <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+          说明：工作地/薪资默认「不限」；关键字支持按空格拼接多个关键词（如「Agent 大模型」），空则用默认「Agent」。
+        </Paragraph>
         {fetchedJobs.length > 0 && (
           <Input
             placeholder="按公司筛选（如：字节 / 智谱 / 月之暗面）"
@@ -418,7 +454,7 @@ const Job: React.FC = () => {
 
       <Tabs
         activeKey={analysisMode}
-        onChange={(k) => setAnalysisMode(k as 'batch' | 'single')}
+        onChange={(k) => setAnalysisMode(k as 'batch' | 'single' | 'boss')}
         style={{ maxWidth: 1080, margin: '0 auto' }}
         items={[
           {
@@ -550,14 +586,7 @@ const Job: React.FC = () => {
             <Paragraph strong style={{ marginBottom: 8 }}>全部职位（{marketReport.job_count}）</Paragraph>
             <List
               size="small"
-              dataSource={marketReport.jobs || []}
-              pagination={{
-                pageSize: 20,
-                size: 'small',
-                showSizeChanger: true,
-                pageSizeOptions: [10, 20, 50, 100],
-                showTotal: (total) => `共 ${total} 条`,
-              }}
+              dataSource={(marketReport.jobs || []).slice((jobPage - 1) * jobPageSize, jobPage * jobPageSize)}
               renderItem={(job) => (
                 <List.Item
                   key={job.job_id || `${job.title}-${job.company}`}
@@ -579,6 +608,21 @@ const Job: React.FC = () => {
                 </List.Item>
               )}
             />
+            <div style={{ textAlign: 'right', marginTop: 12 }}>
+              <Pagination
+                current={jobPage}
+                pageSize={jobPageSize}
+                total={marketReport.jobs?.length || 0}
+                size="small"
+                showSizeChanger
+                pageSizeOptions={[10, 20, 50, 100]}
+                showTotal={(total) => `共 ${total} 条`}
+                onChange={(page, size) => {
+                  setJobPage(page);
+                  setJobPageSize(size);
+                }}
+              />
+            </div>
           </div>
         ) : (
           <Empty description="点击「一键分析」生成市场分析报告" />
@@ -687,6 +731,35 @@ const Job: React.FC = () => {
             />
           </>
         )}
+                </Card>
+              </>
+            ),
+          },
+          {
+            key: 'boss',
+            label: <span><QrcodeOutlined /> BOSS 登录</span>,
+            children: (
+              <>
+                <Card
+                  title={
+                    <Space>
+                      <QrcodeOutlined />
+                      <Text strong>BOSS 直聘扫码登录</Text>
+                    </Space>
+                  }
+                  style={{ maxWidth: 1080, margin: '0 auto' }}
+                >
+                  <Paragraph type="secondary">
+                    登录 BOSS 直聘以获取登录 Cookie，用于后续采集 BOSS 上的职位（当前 BOSS 职位采集仍受反爬签名限制，登录作为备用）。
+                  </Paragraph>
+                  <Space>
+                    <Button type="primary" icon={<QrcodeOutlined />} onClick={handleBossQrLogin}>
+                      扫码登录
+                    </Button>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      用手机 BOSS App「扫一扫」，走两步扫码（扫第一张 → 换第二张 → App 确认）。
+                    </Text>
+                  </Space>
                 </Card>
               </>
             ),

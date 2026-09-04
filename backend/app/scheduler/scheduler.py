@@ -33,21 +33,21 @@ class NewsScheduler:
 
         self._scheduler.add_job(
             self._agent.refresh,
-            CronTrigger.from_crontab(self._config.daily_cron),
+            CronTrigger.from_crontab(self._config.daily_cron, timezone=self._config.timezone),
             id="news_daily",
             name="科技资讯（每日）",
             replace_existing=True,
         )
         self._scheduler.add_job(
             lambda: self._agent.generate_periodic("weekly"),
-            CronTrigger.from_crontab(self._config.weekly_cron),
+            CronTrigger.from_crontab(self._config.weekly_cron, timezone=self._config.timezone),
             id="news_weekly",
             name="科技周报（每周一）",
             replace_existing=True,
         )
         self._scheduler.add_job(
             lambda: self._agent.generate_periodic("monthly"),
-            CronTrigger.from_crontab(self._config.monthly_cron),
+            CronTrigger.from_crontab(self._config.monthly_cron, timezone=self._config.timezone),
             id="news_monthly",
             name="科技月报（每月 1 日）",
             replace_existing=True,
@@ -57,6 +57,7 @@ class NewsScheduler:
             "科技资讯调度已启动",
             daily_cron=self._config.daily_cron,
             weekly_cron=self._config.weekly_cron,
+            timezone=self._config.timezone,
         )
 
     def shutdown(self) -> None:

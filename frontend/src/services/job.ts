@@ -80,10 +80,11 @@ export interface JobFetchResult {
   jobs: FetchedJob[];
 }
 
-/** 从猎聘采集真实职位列表。 */
+/** 从多源采集真实职位列表。 */
 export async function fetchJobs(payload: {
   keyword: string;
   city?: string;
+  min_salary_k?: number;
   page?: number;
   limit?: number;
 }): Promise<JobFetchResult> {
