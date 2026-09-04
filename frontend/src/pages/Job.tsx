@@ -146,6 +146,8 @@ const Job: React.FC = () => {
   // 批量市场分析
   const [batchAnalyzing, setBatchAnalyzing] = useState(false);
   const [marketReport, setMarketReport] = useState<MarketReport | null>(null);
+  // 分析模式：批量分析 / 单职位分析
+  const [analysisMode, setAnalysisMode] = useState<'batch' | 'single'>('batch');
 
   const handleBatchAnalyze = async (force = false) => {
     setBatchAnalyzing(true);
@@ -299,7 +301,7 @@ const Job: React.FC = () => {
       const data = await analyzeJob({ jd_text: text, job_meta: jobMeta });
       setResult(data);
       setActiveTab('job_analysis');
-      message.success('分析完成');
+      message.success(data.cached ? '已加载缓存的分析结果（14 天内）' : '分析完成');
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '分析失败，请稍后重试');
     } finally {
@@ -414,9 +416,19 @@ const Job: React.FC = () => {
         )}
       </Card>
 
-      {/* 批量市场分析 */}
-      <Card
-        title={
+      <Tabs
+        activeKey={analysisMode}
+        onChange={(k) => setAnalysisMode(k as 'batch' | 'single')}
+        style={{ maxWidth: 1080, margin: '0 auto' }}
+        items={[
+          {
+            key: 'batch',
+            label: <span><BarChartOutlined /> 批量分析</span>,
+            children: (
+              <>
+                {/* 批量市场分析 */}
+                <Card
+                  title={
           <Space>
             <BarChartOutlined />
             <Text strong>批量市场分析</Text>
@@ -539,7 +551,13 @@ const Job: React.FC = () => {
             <List
               size="small"
               dataSource={marketReport.jobs || []}
-              pagination={{ pageSize: 20, size: 'small' }}
+              pagination={{
+                pageSize: 20,
+                size: 'small',
+                showSizeChanger: true,
+                pageSizeOptions: [10, 20, 50, 100],
+                showTotal: (total) => `共 ${total} 条`,
+              }}
               renderItem={(job) => (
                 <List.Item
                   key={job.job_id || `${job.title}-${job.company}`}
@@ -565,13 +583,20 @@ const Job: React.FC = () => {
         ) : (
           <Empty description="点击「一键分析」生成市场分析报告" />
         )}
-      </Card>
-
-      <Card
-        title={
-          <Space>
-            <FileSearchOutlined />
-            <Text strong>招聘分析</Text>
+                </Card>
+              </>
+            ),
+          },
+          {
+            key: 'single',
+            label: <span><FileSearchOutlined /> 单职位分析</span>,
+            children: (
+              <>
+                <Card
+                  title={
+                    <Space>
+                      <FileSearchOutlined />
+                      <Text strong>招聘分析</Text>
             <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
               粘贴职位 JD，自动产出岗位定位 / 知识点 / 面试题 / 差距 / 简历建议 / 求职策略
             </Text>
@@ -647,9 +672,14 @@ const Job: React.FC = () => {
           </Spin>
         ) : (
           <>
-            <Paragraph type="secondary" style={{ fontSize: 13 }}>
-              岗位定位：{result.job_analysis?.positioning || result.job_analysis?.position || '（未产出）'}
-            </Paragraph>
+            <Space style={{ marginBottom: 8 }}>
+              <Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 0 }}>
+                岗位定位：{result.job_analysis?.positioning || result.job_analysis?.position || '（未产出）'}
+              </Paragraph>
+              {(result as { cached?: boolean }).cached && (
+                <Tag color="green" style={{ fontSize: 11 }}>14 天缓存</Tag>
+              )}
+            </Space>
             <Tabs
               activeKey={activeTab}
               onChange={(k) => setActiveTab(k as SectionKey)}
@@ -657,7 +687,12 @@ const Job: React.FC = () => {
             />
           </>
         )}
-      </Card>
+                </Card>
+              </>
+            ),
+          },
+        ]}
+      />
 
       {/* BOSS 扫码登录弹窗 */}
       <Modal

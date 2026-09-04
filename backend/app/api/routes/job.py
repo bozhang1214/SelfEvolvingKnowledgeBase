@@ -48,10 +48,23 @@ def _require_job_agent() -> Any:
 
 @router.post("/analyze")
 async def analyze_job(body: JobAnalyzeRequest, user_id: str = Depends(get_current_user)):
-    """分析单个职位 JD，返回聚合的结构化结果。"""
+    """分析单个职位 JD，返回聚合的结构化结果（14 天缓存）。"""
     agent = _require_job_agent()
+    from app.agents.job.analysis_cache import get_cached_analysis, save_analysis
+
+    jd = (body.jd_text or "").strip()
+    if not jd:
+        raise HTTPException(400, "jd_text 不能为空")
+
+    # 命中缓存直接返回
+    cached = get_cached_analysis(user_id, jd)
+    if cached is not None:
+        return {**cached, "cached": True}
+
     try:
-        return await agent.analyze_job(body.jd_text, body.job_meta)
+        result = await agent.analyze_job(jd, body.job_meta)
+        save_analysis(user_id, jd, result)
+        return {**result, "cached": False}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:

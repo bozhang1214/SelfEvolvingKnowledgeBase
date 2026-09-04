@@ -46,11 +46,14 @@ export interface JobAnalyzeRequest {
   job_meta?: JobMeta;
 }
 
-/** 分析单个职位 JD，返回聚合的结构化结果。 */
-export async function analyzeJob(payload: JobAnalyzeRequest): Promise<JobAnalyzeResult> {
-  const res = await apiClient.post<JobAnalyzeResult>('/job/analyze', payload);
+/** 分析单个职位 JD，返回聚合的结构化结果（14 天缓存）。 */
+export async function analyzeJob(payload: JobAnalyzeRequest): Promise<JobAnalyzeResult & { cached?: boolean }> {
+  const res = await apiClient.post<JobAnalyzeResult & { cached?: boolean }>('/job/analyze', payload, {
+    timeout: 180000, // 单职位分析要串行 8 步 LLM，超过默认 30s
+  });
   logger.info('job_analyze_done', {
     has_job_analysis: !!(res.data as JobAnalyzeResult)?.job_analysis,
+    cached: !!(res.data as { cached?: boolean })?.cached,
   });
   return res.data;
 }
