@@ -403,6 +403,18 @@ const Job: React.FC = () => {
     message.success('已删除该职位');
   };
 
+  // 是否已全选全部职位（跨页全选：不受分页「每页最多 100 条」限制）
+  const allSelected = fetchedJobs.length > 0 && selectedRowKeys.length >= fetchedJobs.length;
+
+  /** 全选全部职位 / 取消全选（一键跨页全选，避免表头全选只能选当前页）。 */
+  const handleToggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedRowKeys([]);
+    } else {
+      setSelectedRowKeys(fetchedJobs.map(jobKey));
+    }
+  };
+
   const handleAnalyze = async () => {
     const text = jdText.trim();
     if (!text) {
@@ -546,7 +558,12 @@ const Job: React.FC = () => {
         {fetchedJobs.length > 0 && (
           <>
             <Space style={{ marginTop: 12, width: '100%', justifyContent: 'space-between' }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>共 {fetchedJobs.length} 条职位</Text>
+              <Space size={12}>
+                <Text type="secondary" style={{ fontSize: 12 }}>共 {fetchedJobs.length} 条职位</Text>
+                <Button size="small" type="link" onClick={handleToggleSelectAll}>
+                  {allSelected ? `取消全选（已选 ${fetchedJobs.length} 条）` : `全选全部 ${fetchedJobs.length} 条`}
+                </Button>
+              </Space>
               <Button
                 type="primary"
                 size="small"
@@ -571,6 +588,9 @@ const Job: React.FC = () => {
               rowSelection={{
                 selectedRowKeys,
                 onChange: setSelectedRowKeys,
+                // 跨页保留选中：否则翻页时 antd 会清掉不在当前页的选中项，
+                // 导致「全选全部」或逐页勾选在翻页后丢失
+                preserveSelectedRowKeys: true,
               }}
               pagination={false}
               columns={[
