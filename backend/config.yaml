@@ -272,7 +272,7 @@ api:
     requests_per_minute: 60             # 每IP每分钟请求数上限
   # 鉴权配置（Phase 3）
   auth:
-    token_expire_hours: 72
+    token_expire_hours: 2160           # 90 天（配合前端滑动续租，实际接近免登录）
     jwt_secret: "${JWT_SECRET:-sekb-dev-secret-change-in-production}"
     password_min_length: 8
     rate_limit_login_per_minute: 5

@@ -8,7 +8,7 @@ interface UserState {
   token: string | null;
   isLoggedIn: boolean;
 
-  init: () => void;
+  init: () => Promise<void>;
   login: (data: LoginRequest) => Promise<void>;
   register: (data: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
@@ -19,16 +19,26 @@ export const useUserStore = create<UserState>((set) => ({
   token: null,
   isLoggedIn: false,
 
-  init: () => {
+  init: async () => {
     const token = localStorage.getItem('sekb_token');
     const raw = localStorage.getItem('sekb_user');
     if (token && raw) {
+      // 自动续租：临近过期时静默换新 token；已过期则登出
+      const fresh = await authService.ensureFreshToken();
+      if (!fresh) {
+        logger.warn('session_expired', { reason: 'token 过期且续租失败' });
+        localStorage.removeItem('sekb_token');
+        localStorage.removeItem('sekb_user');
+        set({ user: null, token: null, isLoggedIn: false });
+        return;
+      }
       try {
         const user = JSON.parse(raw) as User;
-        set({ user, token, isLoggedIn: true });
+        const freshToken = localStorage.getItem('sekb_token');
+        set({ user, token: freshToken, isLoggedIn: true });
         logger.info('session_restore', {
           user_id: user.user_id,
-          token: maskToken(token),
+          token: maskToken(freshToken || ''),
         });
       } catch {
         logger.warn('session_restore_failed', { reason: 'invalid_json' });

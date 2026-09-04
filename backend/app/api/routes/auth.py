@@ -157,6 +157,24 @@ async def logout(request: Request, user_id: str = Depends(get_current_user)):
     return {"status": "ok"}
 
 
+@router.post("/refresh", response_model=LoginResponse)
+async def refresh(request: Request, user_id: str = Depends(get_current_user)):
+    """
+    滑动续租：用当前仍有效的 token 换取一个新的 90 天 token。
+
+    前端在 token 临近过期时自动调用，实现「90 天有效期 + 到期自动续租」，
+    用户只要在 90 天内使用过系统，就无需重新登录。
+    """
+    storage = _get_user_storage()
+    user = storage.find_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "用户不存在")
+    token = create_jwt(user.user_id)
+    client_ip = get_client_ip(request)
+    logger.info("token 滑动续租", extra={"user_id": user_id})
+    return LoginResponse(user=storage.to_public(user), token=token)
+
+
 @router.get("/me", response_model=UserPublic)
 async def get_me(user_id: str = Depends(get_current_user)):
     """获取当前用户信息"""

@@ -298,7 +298,7 @@ class RateLimitConfig(BaseModel):
 
 class AuthConfig(BaseModel):
     """鉴权配置"""
-    token_expire_hours: int = 72
+    token_expire_hours: int = 2160  # 90 天（配合前端滑动续租，实际接近免登录）
     jwt_secret: str = ""
     password_min_length: int = 8
     rate_limit_login_per_minute: int = 5
