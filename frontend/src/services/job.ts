@@ -174,8 +174,8 @@ export async function listJobReports(): Promise<{ reports: ArchivedReportMeta[] 
   return res.data;
 }
 
-/** 读取一份历史存档报告（含正文）。 */
-export async function getJobReport(reportId: string): Promise<{ id: string; type: string; title: string; created_at: string; report: unknown }> {
+/** 读取一份历史存档报告（Markdown）。 */
+export async function getJobReport(reportId: string): Promise<{ id: string; type: string; title: string; created_at: string; markdown: string }> {
   const res = await apiClient.get(`/job/reports/${reportId}`);
   return res.data;
 }

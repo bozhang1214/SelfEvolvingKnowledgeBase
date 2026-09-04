@@ -227,19 +227,42 @@ async def import_jobs(
     """
     批量导入职位文件（每个文件对应一个职位），返回解析后的职位列表。
 
-    支持 .txt/.md 等纯文本文件；文件名（去扩展名）作为职位标题，正文作为 JD。
+    支持 .txt/.md/.markdown/.pdf/.docx（复用 FileProcessor 解析），
+    文件名（去扩展名）作为职位标题，正文作为 JD。
     """
     _require_job_agent()
+    from app.tools.file_processor import FileProcessor
+
+    processor = FileProcessor()
     jobs: list[dict[str, Any]] = []
     for f in files:
         name = f.filename or "未命名"
         raw = await f.read()
-        # 优先按 UTF-8 解码，失败退回 GBK（Windows 常见）
+        content = ""
+        # 优先用 FileProcessor 按扩展名解析（.pdf/.docx/.md/.txt 等）
+        suffix = os.path.splitext(name)[1].lower() or ".txt"
+        tmp_path = ""
         try:
-            content = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            content = raw.decode("gbk", errors="ignore")
-        content = (content or "").strip()
+            import tempfile
+
+            fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="sekb_job_")
+            with os.fdopen(fd, "wb") as tmp:
+                tmp.write(raw)
+            content = (await processor.parse_file(tmp_path)).strip()
+        except Exception as e:  # noqa: BLE001  解析失败退回原始字节解码
+            logger.warning("职位文件解析失败，退回纯文本解码", file=name, error=str(e)[:120])
+            try:
+                content = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                content = raw.decode("gbk", errors="ignore")
+            content = (content or "").strip()
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
         title = os.path.splitext(name)[0].strip() or "未命名职位"
         jobs.append({
             "job_id": "",

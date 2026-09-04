@@ -4,8 +4,9 @@ import {
 } from 'antd';
 import {
   ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined, QrcodeOutlined,
-  BarChartOutlined, DeleteOutlined, ReloadOutlined, UploadOutlined, HistoryOutlined,
+  BarChartOutlined, DeleteOutlined, ReloadOutlined, UploadOutlined, HistoryOutlined, DownloadOutlined,
 } from '@ant-design/icons';
+import ReactMarkdown from 'react-markdown';
 import {
   analyzeJob,
   fetchJobs,
@@ -159,53 +160,6 @@ const JsonBlock: React.FC<{ data: unknown }> = ({ data }) => {
   </Popover>
 );
 
-/** 批量报告精简展示（历史报告弹窗用，不含全量职位列表）。 */
-const BatchReportContent: React.FC<{ report: MarketReport }> = ({ report }) => (
-  <div>
-    {report.overview && (
-      <>
-        <Paragraph strong style={{ marginBottom: 4 }}>市场概况</Paragraph>
-        <Paragraph>{report.overview}</Paragraph>
-      </>
-    )}
-    <Paragraph strong style={{ marginBottom: 4 }}>公司分布</Paragraph>
-    <Space wrap size={[4, 4]}>
-      {report.stats?.company_distribution?.map((c) => <Tag key={c.name} color="blue">{c.name} × {c.count}</Tag>)}
-    </Space>
-    <Paragraph strong style={{ marginTop: 12, marginBottom: 4 }}>职位方向</Paragraph>
-    <Space wrap size={[4, 4]}>
-      {report.stats?.role_distribution?.map((c) => <Tag key={c.name} color="geekblue">{c.name} × {c.count}</Tag>)}
-    </Space>
-    {report.trends && report.trends.length > 0 && (
-      <>
-        <Paragraph strong style={{ marginTop: 12, marginBottom: 4 }}>市场趋势</Paragraph>
-        <List size="small" dataSource={report.trends} renderItem={(t) => <List.Item>· {t}</List.Item>} />
-      </>
-    )}
-    {report.opportunities && report.opportunities.length > 0 && (
-      <>
-        <Paragraph strong style={{ marginTop: 12, marginBottom: 4 }}>重点机会</Paragraph>
-        <List
-          size="small"
-          dataSource={report.opportunities}
-          renderItem={(o) => (
-            <List.Item>
-              <List.Item.Meta title={<Text strong>{o.title}</Text>} description={<Text type="secondary">{o.company}</Text>} />
-              <Text type="secondary" style={{ fontSize: 12 }}>{o.reason}</Text>
-            </List.Item>
-          )}
-        />
-      </>
-    )}
-    {report.recommendations && report.recommendations.length > 0 && (
-      <>
-        <Paragraph strong style={{ marginTop: 12, marginBottom: 4 }}>行动建议</Paragraph>
-        <List size="small" dataSource={report.recommendations} renderItem={(r) => <List.Item>· {r}</List.Item>} />
-      </>
-    )}
-  </div>
-);
-
 /** 从分析结果里提取匹配度评分（0~100），无则返回 null。 */function getMatchScore(result: JobAnalyzeResult | null): number | null {
   const ranking = (result as { job_strategy?: { match_ranking?: Array<{ match_score?: number }> } })?.job_strategy?.match_ranking;
   if (Array.isArray(ranking) && ranking.length > 0 && typeof ranking[0]?.match_score === 'number') {
@@ -257,7 +211,7 @@ const Job: React.FC = () => {
   // 历史报告
   const [reports, setReports] = useState<ArchivedReportMeta[]>([]);
   const [reportsLoading, setReportsLoading] = useState(false);
-  const [reportDetail, setReportDetail] = useState<{ id: string; type: string; title: string; created_at: string; report: unknown } | null>(null);
+  const [reportDetail, setReportDetail] = useState<{ id: string; type: string; title: string; created_at: string; markdown: string } | null>(null);
 
   const handleImportClick = () => fileInputRef.current?.click();
 
@@ -1001,16 +955,29 @@ const Job: React.FC = () => {
         title={reportDetail?.title || '报告详情'}
         open={!!reportDetail}
         onCancel={() => setReportDetail(null)}
-        footer={null}
+        footer={
+          reportDetail ? (
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={() => {
+                const blob = new Blob([reportDetail.markdown], { type: 'text/markdown;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${reportDetail.title || '报告'}.md`;
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+            >
+              下载 Markdown
+            </Button>
+          ) : null
+        }
         width={860}
       >
         {reportDetail ? (
           <div style={{ maxHeight: '70vh', overflow: 'auto' }}>
-            {reportDetail.type === 'batch' ? (
-              <BatchReportContent report={reportDetail.report as MarketReport} />
-            ) : (
-              <JsonBlock data={reportDetail.report} />
-            )}
+            <ReactMarkdown>{reportDetail.markdown}</ReactMarkdown>
           </div>
         ) : null}
       </Modal>
