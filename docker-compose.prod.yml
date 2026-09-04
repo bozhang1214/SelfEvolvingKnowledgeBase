@@ -122,9 +122,10 @@ services:
       backend:
         condition: service_healthy
     healthcheck:
-      # 使用 127.0.0.1 避免 busybox wget 优先解析 localhost 为 IPv6 ::1 导致连接拒绝
-      # 部署在 /sekb/ 子路径，检查 /sekb/ 而非根路径（根路径会 301 到 /sekb/）
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/sekb/"]
+      # 直接检查 HTTPS 服务端点（HTTP 80 会 301 到 HTTPS，busybox wget 跟随跳转后
+      # 因证书域名不匹配 127.0.0.1 而报证书校验失败，导致健康检查误报 unhealthy）
+      # --no-check-certificate 跳过本机自签/域名不匹配校验；127.0.0.1 避免解析为 IPv6
+      test: ["CMD", "wget", "-q", "--spider", "--no-check-certificate", "https://127.0.0.1/sekb/"]
       interval: 30s
       timeout: 5s
       retries: 3
