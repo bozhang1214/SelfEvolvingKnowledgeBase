@@ -181,6 +181,19 @@ const JsonBlock: React.FC<{ data: unknown }> = ({ data }) => {
   </Popover>
 );
 
+/** 职位名（超链接 + 悬浮详情）：点击打开原文，悬停看 JD。 */
+const JobTitle: React.FC<{ job: FetchedJob }> = ({ job }) => (
+  <JobDetailPopover job={job}>
+    {job.job_url ? (
+      <a href={job.job_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+        <Text strong>{job.title}</Text>
+      </a>
+    ) : (
+      <Text strong>{job.title}</Text>
+    )}
+  </JobDetailPopover>
+);
+
 /** 从分析结果里提取匹配度评分（0~100），无则返回 null。 */function getMatchScore(result: JobAnalyzeResult | null): number | null {
   const ranking = (result as { job_strategy?: { match_ranking?: Array<{ match_score?: number }> } })?.job_strategy?.match_ranking;
   if (Array.isArray(ranking) && ranking.length > 0 && typeof ranking[0]?.match_score === 'number') {
@@ -631,7 +644,7 @@ const Job: React.FC = () => {
                   key: 'title',
                   render: (_, job) => (
                     <Space size={6}>
-                      <JobDetailPopover job={job}><Text strong>{job.title}</Text></JobDetailPopover>
+                      <JobTitle job={job} />
                       {job.salary && <Tag color="blue" style={{ fontSize: 11 }}>{job.salary}</Tag>}
                     </Space>
                   ),
@@ -839,7 +852,7 @@ const Job: React.FC = () => {
                   <List.Item.Meta
                     title={
                       <Space size={8}>
-                        <JobDetailPopover job={job}><Text strong>{job.title}</Text></JobDetailPopover>
+                        <JobTitle job={job} />
                         {job.source && <Tag style={{ fontSize: 11 }}>{job.source}</Tag>}
                       </Space>
                     }

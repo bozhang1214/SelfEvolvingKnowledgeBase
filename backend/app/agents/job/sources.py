@@ -349,6 +349,10 @@ class AlibabaSource(_BaseSource):
         iid = str(it.get("id") or "")
         locs = it.get("workLocations") or []
         city = " / ".join(str(x) for x in locs if x)
+        # 详情页必须带 API 返回的 positionUrl（含 track_id），否则会 302 到首页
+        detail_path = it.get("positionUrl") or (
+            f"/off-campus/position-detail?positionId={iid}" if iid else ""
+        )
         return {
             "job_id": iid,
             "title": it.get("name") or "",
@@ -356,9 +360,7 @@ class AlibabaSource(_BaseSource):
             "salary": "",
             "city": city,
             "job_url": (
-                f"https://talent.alibaba.com/off-campus/position-detail?positionId={iid}"
-                if iid
-                else ""
+                f"https://talent.alibaba.com{detail_path}" if detail_path else ""
             ),
             "jd_text": _join(it.get("description"), it.get("requirement")),
         }
