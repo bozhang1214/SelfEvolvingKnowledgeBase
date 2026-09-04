@@ -110,9 +110,14 @@ services:
       sekb-logs: frontend
     ports:
       - "${FRONTEND_PORT:-80}:80"
+      - "443:443"
     volumes:
       # 挂载 nginx 配置：托管 SPA + 反向代理 /api 到 backend 容器
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Let's Encrypt 证书（certbot 签发在宿主机，只读挂载给 nginx）
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # ACME challenge webroot（certbot 续签时写入，nginx 提供访问）
+      - /opt/self-evolving-kb/certbot-webroot:/var/www/certbot:ro
     depends_on:
       backend:
         condition: service_healthy
