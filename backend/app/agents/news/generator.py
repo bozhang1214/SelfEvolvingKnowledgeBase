@@ -185,6 +185,8 @@ class DailyReportGenerator:
 
     # 单类输入条目上限：降低 token 成本，并减少内容风控误判概率
     _MAX_ITEMS_PER_CATEGORY = 30
+    # 单类输出条目硬上限（每类最多 20 条，防止某类过载）
+    _MAX_OUTPUT_ITEMS = 20
     # 单类生成最大尝试次数（内容风控多为偶发，重试常可绕过）
     _MAX_ATTEMPTS = 3
 
@@ -215,7 +217,7 @@ class DailyReportGenerator:
                         if t:
                             seen.add(t)
                         deduped.append(it)
-                    parsed["items"] = deduped
+                    parsed["items"] = deduped[:_MAX_OUTPUT_ITEMS]  # 单类最多 20 条（硬上限）
                     parsed["keywords"] = keywords  # 供渲染时高亮命中关键词
                     return parsed
                 last_error = "非 JSON 输出或无条目"
