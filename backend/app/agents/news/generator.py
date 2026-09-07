@@ -133,7 +133,7 @@ class DailyReportGenerator:
             cat_items = classified.get(cat.name, [])
             if not cat_items:
                 continue
-            section = await self._generate_category(cat.name, cat_items, role)
+            section = await self._generate_category(cat.name, cat_items, role, list(cat.keywords or []))
             if section and section.get("items"):
                 sections.append(section)
             elif section:
@@ -159,13 +159,14 @@ class DailyReportGenerator:
     # ---------- 分类 ----------
 
     def _classify(self, items: list[dict], categories: list[Any]) -> dict[str, list[dict]]:
-        """按关键词把条目归入各大类（多归属：命中多个大类则同时归入，避免后序大类被饿死）。"""
+        """按关键词把条目归入各大类（单归属：命中第一个大类即归入，不再进其他类，避免同一条出现在多个分类）。"""
         classified: dict[str, list[dict]] = {c.name: [] for c in categories}
         for it in items:
             text = f"{it.get('title', '')} {it.get('summary', '')}".lower()
             for c in categories:
                 if any(k.lower() in text for k in c.keywords):
                     classified[c.name].append(it)
+                    break  # 单归属：一条只归一个大类
         return classified
 
     def _apply_period(self, prompt: str) -> str:
@@ -182,11 +183,12 @@ class DailyReportGenerator:
     _MAX_ATTEMPTS = 3
 
     async def _generate_category(
-        self, category_name: str, items: list[dict], role: str
+        self, category_name: str, items: list[dict], role: str, keywords: list[str] | None = None
     ) -> dict:
         """调用 LLM 生成单类的总结预测 + 打分条目（带重试与降噪回退）。"""
         prompt = self._apply_period(self._system_prompt).replace("{{category}}", category_name)
         items = items[: self._MAX_ITEMS_PER_CATEGORY]
+        keywords = keywords or []
 
         llm = self._llm_factory.get(role)
         last_error = ""
@@ -197,6 +199,7 @@ class DailyReportGenerator:
                 raw = resp.content if hasattr(resp, "content") else str(resp)
                 parsed = self._parse_json(raw)
                 if parsed and parsed.get("items"):
+                    parsed["keywords"] = keywords  # 供渲染时高亮命中关键词
                     return parsed
                 last_error = "非 JSON 输出或无条目"
             except Exception as e:

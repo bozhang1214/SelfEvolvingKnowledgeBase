@@ -50,3 +50,43 @@ def save_cached_jobs(key: str, jobs: list[dict[str, Any]]) -> None:
     data = _load()
     data[key] = {"ts": time.time(), "jobs": jobs[:_MAX_JOBS]}
     _save(data)
+
+
+def get_latest_cached(user_id: str) -> dict[str, Any] | None:
+    """返回某用户最后一次（ts 最新）的缓存职位 + 对应筛选条件；无或全部过期返回 None。
+
+    返回：{"keyword", "city", "min_salary_k", "jobs"}，供前端「职位收集」页默认回填展示。
+    """
+    data = _load()
+    prefix = f"{user_id}|"
+    best_ts = 0.0
+    best_key = ""
+    best_entry: dict[str, Any] | None = None
+    now = time.time()
+    for key, entry in data.items():
+        if not key.startswith(prefix):
+            continue
+        ts = entry.get("ts", 0) or 0
+        if now - ts > _TTL_SECONDS:
+            continue
+        if ts > best_ts:
+            best_ts = ts
+            best_key = key
+            best_entry = entry
+    if best_entry is None:
+        return None
+
+    # key 形如 user_id|keyword|city|min_salary_k（keyword/city 均不含 "|"）
+    seg = best_key[len(prefix):].split("|")
+    keyword = seg[0] if len(seg) > 0 else ""
+    city = seg[1] if len(seg) > 1 else ""
+    try:
+        min_salary_k = int(seg[2]) if len(seg) > 2 and seg[2].isdigit() else 0
+    except (ValueError, IndexError):
+        min_salary_k = 0
+    return {
+        "keyword": keyword,
+        "city": city,
+        "min_salary_k": min_salary_k,
+        "jobs": best_entry.get("jobs") or [],
+    }

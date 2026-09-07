@@ -239,6 +239,16 @@ async def delete_batch_analysis(user_id: str = Depends(get_current_user)):
     return {"deleted": deleted}
 
 
+@router.get("/batch-analyze/cached")
+async def get_cached_batch_analysis(user_id: str = Depends(get_current_user)):
+    """返回最后一次缓存的批量分析报告（14 天内），无则 report=None。"""
+    _require_job_agent()
+    from app.agents.job.market import get_cached_report
+
+    report = get_cached_report(user_id)
+    return {"cached": report is not None, "report": report}
+
+
 @router.post("/import")
 async def import_jobs(
     files: list[UploadFile] = File(...),
@@ -336,6 +346,18 @@ async def save_job_cache(body: SaveCacheReq, user_id: str = Depends(get_current_
     key = cache_key(user_id, keyword, city, body.min_salary_k)
     save_cached_jobs(key, body.jobs)
     return {"saved": len(body.jobs)}
+
+
+@router.get("/cache/latest")
+async def get_latest_job_cache(user_id: str = Depends(get_current_user)):
+    """返回某用户最后一次缓存的职位 + 筛选条件，供「职位收集」页默认回填展示。"""
+    _require_job_agent()
+    from app.agents.job.job_cache import get_latest_cached
+
+    cached = get_latest_cached(user_id)
+    if cached is None:
+        return {"cached": False, "keyword": "", "city": "", "min_salary_k": 0, "jobs": [], "count": 0}
+    return {**cached, "cached": True, "count": len(cached["jobs"])}
 
 
 @router.get("/reports")

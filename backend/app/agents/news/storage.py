@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -144,6 +145,25 @@ class NewsStorage:
                 continue
 
     @staticmethod
+    def _highlight_keywords(text: str, keywords: list[str]) -> str:
+        """把 text 里命中 keywords 的词用 markdown 加粗标出（英文关键词大小写不敏感）。"""
+        if not text or not keywords:
+            return text
+        for kw in keywords:
+            if not kw:
+                continue
+            try:
+                text = re.sub(
+                    re.escape(kw),
+                    lambda m: f"**{m.group(0)}**",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+            except re.error:
+                text = text.replace(kw, f"**{kw}**")
+        return text
+
+    @staticmethod
     def _to_markdown(title: str, report: dict, subtitle: str = "") -> str:
         """把日报/周报/月报 JSON 渲染为结构清晰的 Markdown（含头条 + 总结预测 + 打分）。"""
         lines = [f"# {title}", ""]
@@ -177,15 +197,18 @@ class NewsStorage:
                 continue
             category = section.get("category", "其他")
             summary = section.get("summary", "")
+            keywords = section.get("keywords") or []
             lines.append(f"## {category}（{len(items)} 条）")
             lines.append("")
             if summary:
                 lines.append(f"> **📊 总结与预测**：{summary}")
                 lines.append("")
             for i, item in enumerate(items, 1):
-                title = item.get("title", "")
+                title = NewsStorage._highlight_keywords(item.get("title", ""), keywords)
                 source = item.get("source", "")
-                abstract = item.get("abstract", "") or item.get("one_liner", "")
+                abstract = NewsStorage._highlight_keywords(
+                    item.get("abstract", "") or item.get("one_liner", ""), keywords
+                )
                 attention = item.get("attention", "") or item.get("why_matters", "")
                 link = item.get("link", "")
                 score = item.get("importance")

@@ -197,3 +197,25 @@ export async function deleteJobReport(reportId: string): Promise<{ deleted: bool
   const res = await apiClient.delete(`/job/reports/${reportId}`);
   return res.data;
 }
+
+/** 最近一次缓存的职位 + 筛选条件（用于「职位收集」页默认回填）。 */
+export interface LatestJobCache {
+  cached: boolean;
+  keyword: string;
+  city: string;
+  min_salary_k: number;
+  jobs: FetchedJob[];
+  count: number;
+}
+
+/** 获取某用户最后一次缓存的职位列表 + 对应筛选条件。 */
+export async function getLatestJobCache(): Promise<LatestJobCache> {
+  const res = await apiClient.get<LatestJobCache>('/job/cache/latest');
+  return res.data;
+}
+
+/** 获取最后一次缓存的批量分析报告（14 天内，无则 report=null）。 */
+export async function getCachedBatchAnalysis(): Promise<{ cached: boolean; report: MarketReport | null }> {
+  const res = await apiClient.get<{ cached: boolean; report: MarketReport | null }>('/job/batch-analyze/cached');
+  return res.data;
+}

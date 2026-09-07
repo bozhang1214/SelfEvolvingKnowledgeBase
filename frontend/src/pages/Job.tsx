@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Card, Input, Button, Tabs, Typography, Space, Spin, Empty, message, Row, Col, Tag, List, Modal, Divider, Alert, Select, Pagination, Popover, Table,
 } from 'antd';
@@ -18,6 +18,8 @@ import {
   deleteJobReport,
   refreshJob,
   saveJobCache,
+  getLatestJobCache,
+  getCachedBatchAnalysis,
   type JobAnalyzeResult,
   type JobMeta,
   type FetchedJob,
@@ -790,6 +792,56 @@ const Job: React.FC = () => {
   const [reports, setReports] = useState<ArchivedReportMeta[]>([]);
   const [reportsLoading, setReportsLoading] = useState(false);
   const [reportDetail, setReportDetail] = useState<{ id: string; type: string; title: string; created_at: string; markdown: string } | null>(null);
+  // 历史报告子 tab：批量分析 / 单职位分析
+  const [historyTab, setHistoryTab] = useState<'batch' | 'single'>('batch');
+  // 最近一次缓存的批量分析报告（用于「批量分析」tab 默认展示）
+  const [cachedMarketReport, setCachedMarketReport] = useState<MarketReport | null>(null);
+
+  // 挂载时：回填最近一次缓存的职位 + 筛选选项，并预取缓存的批量报告
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const cache = await getLatestJobCache();
+        if (!alive || !cache.cached || !cache.jobs?.length) return;
+        setFetchKeyword(cache.keyword || '');
+        setFetchCity(cache.city || '不限');
+        const salaryLabel = cache.min_salary_k > 0 && SALARY_OPTIONS.includes(`${cache.min_salary_k}K+`)
+          ? `${cache.min_salary_k}K+`
+          : '不限';
+        setFetchSalary(salaryLabel);
+        setFetchedJobs(cache.jobs);
+      } catch {
+        // 静默失败
+      }
+      try {
+        const { report } = await getCachedBatchAnalysis();
+        if (alive && report) setCachedMarketReport(report);
+      } catch {
+        // 静默失败
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // 进入「批量分析」tab：若缓存报告的职位列表与当前采集列表一致，默认展示该报告；否则不展示
+  useEffect(() => {
+    if (analysisMode !== 'batch' || marketReport || !cachedMarketReport) return;
+    const rk = (j: FetchedJob) => j.job_id || `${j.title}-${j.company}`;
+    const reportKeys = new Set((cachedMarketReport.jobs || []).map(rk));
+    const fetchKeys = new Set(fetchedJobs.map(rk));
+    if (reportKeys.size === 0) return;
+    const same = reportKeys.size === fetchKeys.size && [...reportKeys].every((k) => fetchKeys.has(k));
+    if (same) setMarketReport(cachedMarketReport);
+  }, [analysisMode, cachedMarketReport, fetchedJobs, marketReport]);
+
+  // 进入「历史报告」tab 时加载存档报告
+  useEffect(() => {
+    if (analysisMode === 'history') {
+      loadReports();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysisMode]);
 
   const handleImportClick = () => fileInputRef.current?.click();
 
@@ -862,6 +914,7 @@ const Job: React.FC = () => {
     try {
       await deleteBatchAnalysis();
       setMarketReport(null);
+      setCachedMarketReport(null);
       message.success('分析报告已删除，可重新分析');
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '删除失败');
@@ -992,6 +1045,10 @@ const Job: React.FC = () => {
     setMeta({});
     setResult(null);
   };
+
+  const batchReports = useMemo(() => reports.filter((r) => r.type === 'batch'), [reports]);
+  const singleReports = useMemo(() => reports.filter((r) => r.type === 'single'), [reports]);
+  const historyReports = historyTab === 'batch' ? batchReports : singleReports;
 
   const tabItems = useMemo(
     () =>
@@ -1438,13 +1495,23 @@ const Job: React.FC = () => {
                   extra={<Button size="small" icon={<ReloadOutlined />} onClick={loadReports}>刷新</Button>}
                   style={{ marginBottom: 16 }}
                 >
+                  <Tabs
+                    size="small"
+                    activeKey={historyTab}
+                    onChange={(k) => setHistoryTab(k as 'batch' | 'single')}
+                    items={[
+                      { key: 'batch', label: `批量分析（${batchReports.length}）` },
+                      { key: 'single', label: `单职位分析（${singleReports.length}）` },
+                    ]}
+                    style={{ marginBottom: 8 }}
+                  />
                   <Spin spinning={reportsLoading}>
-                    {reports.length === 0 ? (
+                    {historyReports.length === 0 ? (
                       <Empty description="暂无存档报告，做一次批量/单职位分析后会自动存档" />
                     ) : (
                       <List
                         size="small"
-                        dataSource={reports}
+                        dataSource={historyReports}
                         renderItem={(r) => (
                           <List.Item
                             key={r.id}
@@ -1454,14 +1521,7 @@ const Job: React.FC = () => {
                             ]}
                           >
                             <List.Item.Meta
-                              title={
-                                <Space size={8}>
-                                  <Tag color={r.type === 'batch' ? 'geekblue' : 'purple'} style={{ fontSize: 11 }}>
-                                    {r.type === 'batch' ? '批量' : '单职位'}
-                                  </Tag>
-                                  <Text strong>{r.title}</Text>
-                                </Space>
-                              }
+                              title={<Text strong>{r.title}</Text>}
                               description={<Text type="secondary" style={{ fontSize: 12 }}>{r.created_at?.replace('T', ' ').slice(0, 19)}</Text>}
                             />
                           </List.Item>
