@@ -177,12 +177,14 @@ class DailyReportGenerator:
 
         # 2. 主归属：归第一个命中的类
         classified: dict[str, list[dict]] = {c.name: [] for c in categories}
+        assigned_count: dict[int, int] = {}
         for it in items:
             hits = hits_map.get(id(it), [])
             if hits:
                 classified[hits[0]].append(it)
+                assigned_count[id(it)] = 1  # 主归属占 1 个类
 
-        # 3. 补足：不足 min_items 的类，从「次命中」条目借（一条最多 2 类）
+        # 3. 补足：不足 min_items 的类，从「次命中」条目借（一条最多出现在 2 个类）
         for c in categories:
             name = c.name
             if len(classified[name]) >= min_items:
@@ -191,9 +193,15 @@ class DailyReportGenerator:
                 if len(classified[name]) >= min_items:
                     break
                 hits = hits_map.get(id(it), [])
-                # 该条命中该类、但主类不是它、且尚未加入该类 → 借入（次归属）
-                if name in hits and hits[0] != name and it not in classified[name]:
+                # 该条命中该类、主类不是它、尚未加入该类、且还没到 2 个类 → 借入（次归属）
+                if (
+                    name in hits
+                    and hits[0] != name
+                    and it not in classified[name]
+                    and assigned_count.get(id(it), 0) < 2
+                ):
                     classified[name].append(it)
+                    assigned_count[id(it)] = assigned_count.get(id(it), 0) + 1
 
         return classified
 
