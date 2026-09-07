@@ -838,6 +838,52 @@ async def reclassify_files(user_id: str = Depends(get_current_user)) -> dict[str
     return {"files_reclassified": reclassified, "entries_updated": len(entries)}
 
 
+@router.post("/re-series")
+async def re_series(user_id: str = Depends(get_current_user)) -> dict[str, Any]:
+    """
+    重新识别所有文档的系列名（不重新分类，轻量）。
+
+    用最新的 detect_series 规则（含「同一文件夹下多为同一系列」）重新计算 series，
+    并更新到该文件的所有分块元数据。适用于系列识别规则升级后，对存量文件做一次性纠偏。
+    """
+    from app.services.series import detect_series
+
+    ctx: AppContext = get_app_context()
+    _require_vector_store(ctx)
+
+    try:
+        entries = await ctx.knowledge_base.list_entries(
+            user_id=user_id, source=_DOCUMENT_SOURCE, limit=5000
+        )
+    except Exception as e:
+        logger.error("重新识别系列失败：查询条目异常", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"查询条目失败: {e}",
+        ) from e
+
+    by_file: dict[str, list[Any]] = {}
+    for e in entries:
+        by_file.setdefault(e.source_id or "(未命名)", []).append(e)
+
+    updated_files = 0
+    updated_entries = 0
+    for fname, chunk_entries in by_file.items():
+        series_info = detect_series(fname)
+        series_name = str(series_info["series"]) if series_info["is_series"] else ""
+        for e in chunk_entries:
+            if (e.series or "") != series_name:
+                try:
+                    await ctx.knowledge_base.update_metadata(e.entry_id, {"series": series_name})
+                    updated_entries += 1
+                except Exception as ex:
+                    logger.warning("更新条目系列失败", entry_id=e.entry_id, error=str(ex))
+        updated_files += 1
+
+    logger.info("系列重新识别完成", files=updated_files, entries_updated=updated_entries)
+    return {"files_re_series": updated_files, "entries_updated": updated_entries}
+
+
 @router.post("/analyze")
 async def analyze_knowledge_base(user_id: str = Depends(get_current_user)) -> dict[str, Any]:
     """

@@ -22,8 +22,8 @@ import re
 # 中文序号 → 数字
 _CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
-# 「第N篇/章/节/部」模式
-_RE_CN_PART = re.compile(r"第\s*([0-9一二三四五六七八九十]+)\s*[篇章节部回]")
+# 「第N篇/章/节/部/回/天/课/讲/期」模式
+_RE_CN_PART = re.compile(r"第\s*([0-9一二三四五六七八九十]+)\s*[篇章节部回天课讲期]")
 # 「Part N / PART N」
 _RE_EN_PART = re.compile(r"[Pp]art\s*([0-9]+)")
 # 「（上）/（中）/（下）」
@@ -61,7 +61,8 @@ def detect_series(file_name: str) -> dict[str, object]:
     从文件名识别系列名与序号。
 
     Args:
-        file_name: 原始文件名（可含扩展名）
+        file_name: 原始文件名（可含扩展名；文件夹上传时可能含相对路径，
+                   如「3-Agent开发框架学习/第15天：...md」）
 
     Returns:
         {"series": str, "part": int, "is_series": bool}；
@@ -69,21 +70,34 @@ def detect_series(file_name: str) -> dict[str, object]:
     """
     if not file_name:
         return {"series": "", "part": 0, "is_series": False}
-    stem = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
+
+    # 分离文件夹路径与文件名（利用「同一文件夹下多为同一系列」的规则）
+    folder = ""
+    name = file_name
+    if "/" in file_name:
+        folder, name = file_name.rsplit("/", 1)
+
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+
+    # 文件夹最后一段作为「文件夹名」，文件名本身无系列名时用它兜底
+    folder_base = folder.rstrip("/").rsplit("/", 1)[-1].strip() if folder else ""
+
+    def _base_or_folder(base: str) -> str:
+        return base if base else folder_base
 
     # 1. （上）/（中）/（下）
-    m = _RE_CN_STAGE.search(file_name)
+    m = _RE_CN_STAGE.search(name)
     if m:
-        base = _clean_base(_RE_CN_STAGE.sub("", stem))
+        base = _base_or_folder(_clean_base(_RE_CN_STAGE.sub("", stem)))
         part = {"上": 1, "中": 2, "下": 3}[m.group(1)]
         if base:
             return {"series": base, "part": part, "is_series": True}
 
-    # 2. 第N篇/章/节/部
+    # 2. 第N篇/章/节/部/回/天/课/讲/期
     m = _RE_CN_PART.search(stem)
     if m:
         part = _to_int(m.group(1))
-        base = _clean_base(stem[: m.start()])
+        base = _base_or_folder(_clean_base(stem[: m.start()]))
         if base and part > 0:
             return {"series": base, "part": part, "is_series": True}
 
@@ -91,7 +105,7 @@ def detect_series(file_name: str) -> dict[str, object]:
     m = _RE_EN_PART.search(stem)
     if m:
         part = _to_int(m.group(1))
-        base = _clean_base(stem[: m.start()])
+        base = _base_or_folder(_clean_base(stem[: m.start()]))
         if base and part > 0:
             return {"series": base, "part": part, "is_series": True}
 
@@ -99,7 +113,7 @@ def detect_series(file_name: str) -> dict[str, object]:
     m = _RE_NUM_SUFFIX.search(stem)
     if m:
         part = _to_int(m.group(1))
-        base = _clean_base(stem[: m.start()])
+        base = _base_or_folder(_clean_base(stem[: m.start()]))
         if base and part > 0:
             return {"series": base, "part": part, "is_series": True}
 

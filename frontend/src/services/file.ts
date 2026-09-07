@@ -280,6 +280,15 @@ export async function reclassifyFiles(): Promise<{ files_reclassified: number; e
 }
 
 /**
+ * 重新识别所有文档的系列名（不重新分类，轻量）。
+ * 后端接口：POST /api/v1/upload/re-series
+ */
+export async function reSeriesFiles(): Promise<{ files_re_series: number; entries_updated: number }> {
+  const res = await apiClient.post('/upload/re-series');
+  return res.data;
+}
+
+/**
  * 计算文件的 SHA-256 十六进制摘要（与后端 _compute_md5 对齐，用于「同名同内容」对比）。
  * crypto.subtle 不支持 MD5，故统一用 SHA-256。
  */

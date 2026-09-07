@@ -10,6 +10,7 @@ import {
   listFiles,
   analyzeKnowledgeBase,
   computeFileHash,
+  reSeriesFiles,
   type UploadResult,
   type KnowledgeStatus,
   type SeriesGroup,
@@ -168,6 +169,20 @@ const Files: React.FC = () => {
       message.error(err?.response?.data?.detail || '知识库分析失败');
     } finally {
       setAnalyzing(false);
+    }
+  };
+
+  /** 重新识别所有文档的系列名（不重新分类，轻量）。 */
+  const handleReSeries = async () => {
+    setSeriesLoading(true);
+    try {
+      const data = await reSeriesFiles();
+      message.success(`系列重新识别完成：${data.files_re_series} 个文件`);
+      loadSeries();
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '系列重新识别失败');
+    } finally {
+      setSeriesLoading(false);
     }
   };
 
@@ -735,6 +750,11 @@ const Files: React.FC = () => {
       <Card
         size="small"
         title={`系列文章 (${seriesGroups.length})`}
+        extra={
+          <Button size="small" icon={<ReloadOutlined />} onClick={handleReSeries} loading={seriesLoading}>
+            重新识别系列
+          </Button>
+        }
         loading={seriesLoading}
         style={{ marginTop: 16 }}
       >
