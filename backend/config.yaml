@@ -375,21 +375,21 @@ news:
     - name: "Agent / 多智能体框架"
       # 注意：不要用裸「框架」——它会误匹配 React/前端/测试框架等非 Agent 内容
       keywords: [Agent, 智能体, 多智能体, LangGraph, LangChain, Multi-Agent]
+    - name: "RAG / 知识库 / 向量检索"
+      keywords: [RAG, 检索增强, 向量数据库, 知识库, Embedding, 向量]
     - name: "鸿蒙"
       keywords: [鸿蒙, HarmonyOS, OpenHarmony, 华为]
     - name: "大前端跨端"
       keywords: [跨端, Flutter, React Native, Taro, uni-app]
+    - name: "大模型发布 / 更新"
+      # 注意：不要用裸「模型」——它会误匹配「数据模型/电池模型/车型/商业模式」等非大模型内容
+      keywords: [大模型, GPT, Claude, DeepSeek, Qwen, LLM, 基础模型, 语言模型, 视觉模型, 多模态模型, 推理模型, 开源模型]
     - name: "Android"
       keywords: [Android, 安卓, Kotlin, Jetpack]
     - name: "iOS"
       keywords: [iOS, iPhone, iPad, Swift, 苹果, Apple, Mac]
     - name: "前端"
       keywords: [前端, React, Vue, JavaScript, TypeScript, Web, 小程序]
-    - name: "大模型发布 / 更新"
-      # 注意：不要用裸「模型」——它会误匹配「数据模型/电池模型/车型/商业模式」等非大模型内容
-      keywords: [大模型, GPT, Claude, DeepSeek, Qwen, LLM, 基础模型, 语言模型, 视觉模型, 多模态模型, 推理模型, 开源模型]
-    - name: "RAG / 知识库 / 向量检索"
-      keywords: [RAG, 检索增强, 向量数据库, 知识库, Embedding, 向量]
     - name: "开源与工具链"
       keywords: [开源, 工具链, 开发者工具, GitHub]
     - name: "融资 / 商业 / 政策"
