@@ -160,49 +160,17 @@ class DailyReportGenerator:
     # ---------- 分类 ----------
 
     def _classify(self, items: list[dict], categories: list[Any], min_items: int = 10) -> dict[str, list[dict]]:
-        """有限多归属分类。
+        """严格单归属：每条只归入第一个命中的大类，绝不重复出现在多个分类。
 
-        策略：
-        1. 单归属为主：每条归入第一个命中的大类（避免一条出现在 4 个类那种过度重复）。
-        2. 补足：对不足 ``min_items`` 的大类，从「次命中」条目里借（一条最多出现在 2 个类），
-           保证每个大类（尤其热门类）都有足够条目可展示。
+        ``min_items`` 参数保留仅为接口兼容；不足条目的分类通过「扩大信息源」解决，而非在分类层凑数。
         """
-        # 1. 记录每条命中的类（按 categories 顺序）
-        hits_map: dict[int, list[str]] = {}
+        classified: dict[str, list[dict]] = {c.name: [] for c in categories}
         for it in items:
             text = f"{it.get('title', '')} {it.get('summary', '')}".lower()
-            hits_map[id(it)] = [
-                c.name for c in categories if any(k.lower() in text for k in c.keywords)
-            ]
-
-        # 2. 主归属：归第一个命中的类
-        classified: dict[str, list[dict]] = {c.name: [] for c in categories}
-        assigned_count: dict[int, int] = {}
-        for it in items:
-            hits = hits_map.get(id(it), [])
-            if hits:
-                classified[hits[0]].append(it)
-                assigned_count[id(it)] = 1  # 主归属占 1 个类
-
-        # 3. 补足：不足 min_items 的类，从「次命中」条目借（一条最多出现在 2 个类）
-        for c in categories:
-            name = c.name
-            if len(classified[name]) >= min_items:
-                continue
-            for it in items:
-                if len(classified[name]) >= min_items:
-                    break
-                hits = hits_map.get(id(it), [])
-                # 该条命中该类、主类不是它、尚未加入该类、且还没到 2 个类 → 借入（次归属）
-                if (
-                    name in hits
-                    and hits[0] != name
-                    and it not in classified[name]
-                    and assigned_count.get(id(it), 0) < 2
-                ):
-                    classified[name].append(it)
-                    assigned_count[id(it)] = assigned_count.get(id(it), 0) + 1
-
+            for c in categories:
+                if any(k.lower() in text for k in c.keywords):
+                    classified[c.name].append(it)
+                    break  # 单归属：一条只归一个大类
         return classified
 
     def _apply_period(self, prompt: str) -> str:

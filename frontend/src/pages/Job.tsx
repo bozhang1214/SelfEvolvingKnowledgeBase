@@ -824,11 +824,16 @@ const Job: React.FC = () => {
     return () => { alive = false; };
   }, []);
 
-  // 进入「批量分析」tab：默认展示最后一次缓存的报告（报告头部 Alert 会标注分析时间/职位数/关键词）
+  // 进入「批量分析」tab：仅当缓存报告的职位列表与当前采集列表严格一致时才默认展示（避免展示过时报告引起误解）
   useEffect(() => {
     if (analysisMode !== 'batch' || marketReport || !cachedMarketReport) return;
-    setMarketReport(cachedMarketReport);
-  }, [analysisMode, cachedMarketReport, marketReport]);
+    const rk = (j: FetchedJob) => j.job_id || `${j.title}-${j.company}`;
+    const reportKeys = new Set((cachedMarketReport.jobs || []).map(rk));
+    const fetchKeys = new Set(fetchedJobs.map(rk));
+    if (reportKeys.size === 0) return;
+    const same = reportKeys.size === fetchKeys.size && [...reportKeys].every((k) => fetchKeys.has(k));
+    if (same) setMarketReport(cachedMarketReport);
+  }, [analysisMode, cachedMarketReport, fetchedJobs, marketReport]);
 
   // 进入「历史报告」tab 时加载存档报告
   useEffect(() => {
@@ -1311,16 +1316,7 @@ const Job: React.FC = () => {
               type="info"
               showIcon
               style={{ marginBottom: 12 }}
-              message={
-                <span>
-                  分析于 {marketReport.analyzed_at?.replace('T', ' ').slice(0, 19) || ''} · 共 {marketReport.job_count} 个职位 · 关键词「{marketReport.keyword}」· {marketReport.city}
-                  {fetchedJobs.length > 0 && fetchedJobs.length !== marketReport.job_count && (
-                    <span style={{ color: '#d46b08', marginLeft: 8 }}>
-                      ⚠ 当前职位列表 {fetchedJobs.length} 条，与本次分析的 {marketReport.job_count} 条不同
-                    </span>
-                  )}
-                </span>
-              }
+              message={`分析于 ${marketReport.analyzed_at?.replace('T', ' ').slice(0, 19) || ''} · 共 ${marketReport.job_count} 个职位 · 关键词「${marketReport.keyword}」· ${marketReport.city}`}
             />
             <Row gutter={16}>
               <Col xs={24} sm={8}>
