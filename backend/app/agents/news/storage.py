@@ -204,7 +204,8 @@ class NewsStorage:
                 lines.append(f"> **📊 总结与预测**：{summary}")
                 lines.append("")
             for i, item in enumerate(items, 1):
-                title = NewsStorage._highlight_keywords(item.get("title", ""), keywords)
+                # 标题保持整体加粗（醒目），关键词高亮只作用于摘要（避免与标题整行加粗的 markdown 嵌套冲突）
+                title = item.get("title", "")
                 source = item.get("source", "")
                 abstract = NewsStorage._highlight_keywords(
                     item.get("abstract", "") or item.get("one_liner", ""), keywords
