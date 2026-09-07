@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Upload, Button, Typography, message, Progress, Space, Tag, Alert, Card, Statistic, Row, Col, Modal, List } from 'antd';
+import { Button, Typography, message, Progress, Space, Tag, Alert, Card, Statistic, Row, Col, Modal, List } from 'antd';
 import {
-  InboxOutlined, FileOutlined, FileImageOutlined, ReloadOutlined, StopOutlined, RadarChartOutlined,
+  InboxOutlined, FileOutlined, FileImageOutlined, ReloadOutlined, StopOutlined, RadarChartOutlined, FolderOpenOutlined,
 } from '@ant-design/icons';
 import {
   uploadFilePromise,
@@ -25,7 +25,6 @@ const SUPPORTED_EXTENSIONS = [
 const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'];
 
 const { Title, Text } = Typography;
-const { Dragger } = Upload;
 
 interface UploadHistoryItem {
   uid: string;
@@ -116,6 +115,9 @@ const Files: React.FC = () => {
   const [analysis, setAnalysis] = useState<KnowledgeAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const abortRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
 
   const loadStatus = async () => {
     setStatusLoading(true);
@@ -173,6 +175,30 @@ const Files: React.FC = () => {
     loadSeries();
     loadFiles();
   }, []);
+
+  /** 处理一批选中的文件（文件/文件夹展开后的统一入口）。 */
+  const handleFilesSelected = (files: File[]) => {
+    if (files.length > 0) {
+      void handleBatchUpload(files);
+    } else {
+      message.warning('未选择任何文件');
+    }
+  };
+
+  /** 拖拽放下：递归展开文件和文件夹（文件夹递归到最深一层）。 */
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (uploading) return;
+    const items = e.dataTransfer?.items;
+    if (items && items.length > 0) {
+      // 优先用 DataTransferItemList（webkitGetAsEntry）递归展开文件夹
+      const files = await flattenItems(items);
+      handleFilesSelected(files);
+    } else {
+      handleFilesSelected(Array.from(e.dataTransfer?.files || []));
+    }
+  };
 
   /** 批量上传入口：处理 antd Upload 选择的文件列表 */
   const handleBatchUpload = async (fileList: File[]) => {
@@ -421,32 +447,75 @@ const Files: React.FC = () => {
 
       {/* 上传区域 */}
       <div style={{ marginBottom: 24 }}>
-        <Dragger
-          accept={SUPPORTED_EXTENSIONS.join(',')}
-          multiple
-          beforeUpload={(file, fileList) => {
-            // antd 会对每个文件调用一次 beforeUpload；
-            // 仅在最后一个文件时触发一次批量上传（此时 fileList 已完整）
-            if (file.uid === fileList[fileList.length - 1].uid) {
-              void handleBatchUpload(fileList);
-            }
-            return false; // 阻止 antd 默认上传（改由 handleBatchUpload 手动控制）
+        {/* 拖拽区：点击选文件；拖入文件/文件夹则递归展开上传 */}
+        <div
+          onClick={() => {
+            if (!uploading && knowledgeStatus?.l3_enabled !== false) fileInputRef.current?.click();
           }}
-          showUploadList={false}
-          disabled={uploading || (knowledgeStatus?.l3_enabled === false)}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          style={{
+            border: `1px dashed ${dragOver ? '#1677ff' : '#d9d9d9'}`,
+            borderRadius: 8,
+            background: dragOver ? '#f0f5ff' : '#fafafa',
+            padding: '32px 16px',
+            textAlign: 'center',
+            cursor: uploading || knowledgeStatus?.l3_enabled === false ? 'not-allowed' : 'pointer',
+            transition: 'all 0.2s',
+            opacity: uploading || knowledgeStatus?.l3_enabled === false ? 0.6 : 1,
+          }}
         >
           <p className="ant-upload-drag-icon">
             <InboxOutlined />
           </p>
-          <p className="ant-upload-text">点击选择文件，或拖拽到此区域上传</p>
+          <p className="ant-upload-text">点击选择文件，或拖拽文件/文件夹到此上传</p>
           <p className="ant-upload-hint">
-            支持多选文件（按住 Cmd/Ctrl 可多选）：PDF、Word、TXT、Markdown、图片(JPG/PNG/WebP 等)
+            支持文件与文件夹混合拖入，文件夹会递归上传到最深层
+            <br />
+            支持格式：PDF、Word、TXT、Markdown、图片(JPG/PNG/WebP 等)
             <br />
             <span style={{ color: '#999', fontSize: 12 }}>
               单文件不超过 50MB，选择后会自动逐个上传并显示进度
             </span>
           </p>
-        </Dragger>
+        </div>
+
+        <div style={{ marginTop: 12, textAlign: 'center' }}>
+          <Button
+            icon={<FolderOpenOutlined />}
+            onClick={() => folderInputRef.current?.click()}
+            disabled={uploading || knowledgeStatus?.l3_enabled === false}
+          >
+            选择文件夹
+          </Button>
+        </div>
+
+        {/* 原生 input：多选文件 */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept={SUPPORTED_EXTENSIONS.join(',')}
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            handleFilesSelected(Array.from(e.target.files || []));
+            e.target.value = '';
+          }}
+        />
+        {/* 原生 input：选择文件夹（webkitdirectory 由浏览器递归展开所有层级） */}
+        <input
+          ref={folderInputRef}
+          type="file"
+          // @ts-expect-error webkitdirectory 为非标准属性
+          webkitdirectory=""
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            handleFilesSelected(Array.from(e.target.files || []));
+            e.target.value = '';
+          }}
+        />
 
         {/* 总体进度条 */}
         {tasks.length > 0 && (
