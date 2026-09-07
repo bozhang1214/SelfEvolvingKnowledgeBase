@@ -127,6 +127,7 @@ class NewsAgent:
             self._config.llm_role,
             self._config.categories,
             period_type=report_type,
+            min_items_per_category=getattr(self._config, "min_items_per_category", 10),
         )
 
         # 5. 存储

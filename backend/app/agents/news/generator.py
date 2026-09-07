@@ -113,13 +113,14 @@ class DailyReportGenerator:
         role: str = "news_report",
         categories: list[Any] | None = None,
         period_type: str = "daily",
+        min_items_per_category: int = 10,
     ) -> dict:
         """按给定周期生成结构化报告（头条 + 逐类 + 综合分析），日报/周报/月报共用。"""
         self._ctx = _PERIOD_CONTEXTS.get(period_type, _PERIOD_CONTEXTS["daily"])
         cats = categories or []
 
-        # 1. 关键词分类（多归属：一条资讯可同时归入多个大类）
-        classified = self._classify(items, cats)
+        # 1. 关键词分类（有限多归属：单归属为主 + 不足 min_items 的大类补足）
+        classified = self._classify(items, cats, min_items=min_items_per_category)
         for cat in cats:
             n = len(classified.get(cat.name, []))
             if n == 0:
@@ -158,15 +159,42 @@ class DailyReportGenerator:
 
     # ---------- 分类 ----------
 
-    def _classify(self, items: list[dict], categories: list[Any]) -> dict[str, list[dict]]:
-        """按关键词把条目归入各大类（单归属：命中第一个大类即归入，不再进其他类，避免同一条出现在多个分类）。"""
-        classified: dict[str, list[dict]] = {c.name: [] for c in categories}
+    def _classify(self, items: list[dict], categories: list[Any], min_items: int = 10) -> dict[str, list[dict]]:
+        """有限多归属分类。
+
+        策略：
+        1. 单归属为主：每条归入第一个命中的大类（避免一条出现在 4 个类那种过度重复）。
+        2. 补足：对不足 ``min_items`` 的大类，从「次命中」条目里借（一条最多出现在 2 个类），
+           保证每个大类（尤其热门类）都有足够条目可展示。
+        """
+        # 1. 记录每条命中的类（按 categories 顺序）
+        hits_map: dict[int, list[str]] = {}
         for it in items:
             text = f"{it.get('title', '')} {it.get('summary', '')}".lower()
-            for c in categories:
-                if any(k.lower() in text for k in c.keywords):
-                    classified[c.name].append(it)
-                    break  # 单归属：一条只归一个大类
+            hits_map[id(it)] = [
+                c.name for c in categories if any(k.lower() in text for k in c.keywords)
+            ]
+
+        # 2. 主归属：归第一个命中的类
+        classified: dict[str, list[dict]] = {c.name: [] for c in categories}
+        for it in items:
+            hits = hits_map.get(id(it), [])
+            if hits:
+                classified[hits[0]].append(it)
+
+        # 3. 补足：不足 min_items 的类，从「次命中」条目借（一条最多 2 类）
+        for c in categories:
+            name = c.name
+            if len(classified[name]) >= min_items:
+                continue
+            for it in items:
+                if len(classified[name]) >= min_items:
+                    break
+                hits = hits_map.get(id(it), [])
+                # 该条命中该类、但主类不是它、且尚未加入该类 → 借入（次归属）
+                if name in hits and hits[0] != name and it not in classified[name]:
+                    classified[name].append(it)
+
         return classified
 
     def _apply_period(self, prompt: str) -> str:
