@@ -364,15 +364,18 @@ news:
     - 移动端
     - Web
   # 排除关键词（命中即丢弃）
-  exclude_keywords: []
+  # 「早报」：排除 IT早报 这类「每日要闻汇总」栏目（汇总条目不适合归入具体大类，且内容与其他单条新闻重复）
+  exclude_keywords: [早报]
   # 每个大类最少收录条目数
   min_items_per_category: 10
   # 大类定义（名称 + 分类关键词，用于归类；命中即归入该大类）
   categories:
     - name: "大模型发布 / 更新"
-      keywords: [大模型, GPT, Claude, DeepSeek, Qwen, LLM, 模型]
+      # 注意：不要用裸「模型」——它会误匹配「数据模型/电池模型/车型/商业模式」等非大模型内容
+      keywords: [大模型, GPT, Claude, DeepSeek, Qwen, LLM, 基础模型, 语言模型, 视觉模型, 多模态模型, 推理模型, 开源模型]
     - name: "Agent / 多智能体框架"
-      keywords: [Agent, 智能体, 多智能体, LangGraph, LangChain, 框架]
+      # 注意：不要用裸「框架」——它会误匹配 React/前端/测试框架等非 Agent 内容
+      keywords: [Agent, 智能体, 多智能体, LangGraph, LangChain, Multi-Agent]
     - name: "RAG / 知识库 / 向量检索"
       keywords: [RAG, 检索增强, 向量数据库, 知识库, Embedding, 向量]
     - name: "Android"
