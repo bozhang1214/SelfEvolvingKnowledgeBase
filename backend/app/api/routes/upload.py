@@ -19,6 +19,8 @@ L3 长期知识库（ChromaDB），实现 RAG 检索增强：
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -59,6 +61,37 @@ _MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
 
 # 图片原图保存目录
 _IMAGE_UPLOAD_DIR = Path("data/uploads/images")
+
+# 已上传文件内容 MD5 索引（file_name -> md5），用于「同名同内容」跳过
+_MD5_FILE = Path("data/uploaded_md5.json")
+
+
+def _load_md5_index() -> dict[str, str]:
+    """读取已上传文件的 MD5 索引；文件不存在或损坏返回空字典。"""
+    if not _MD5_FILE.exists():
+        return {}
+    try:
+        return json.loads(_MD5_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_md5_index(data: dict[str, str]) -> None:
+    """保存已上传文件的 MD5 索引。"""
+    _MD5_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _MD5_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _record_md5(file_name: str, md5: str) -> None:
+    """记录某文件的 MD5（覆盖同名旧值）。"""
+    data = _load_md5_index()
+    data[file_name] = md5
+    _save_md5_index(data)
+
+
+def _compute_md5(content: bytes) -> str:
+    """计算字节内容的 SHA-256 十六进制摘要（前端 crypto.subtle 可用，比 MD5 更安全）。"""
+    return hashlib.sha256(content).hexdigest()
 
 
 def _get_image_config() -> dict[str, Any]:
@@ -465,6 +498,7 @@ async def upload_file(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"文件过大：{len(content)} bytes，上限 {_MAX_FILE_SIZE_BYTES} bytes",
         )
+    md5 = _compute_md5(content)
 
     # 落盘到临时文件（保留原扩展名，便于 FileProcessor 按扩展名选择解析器）
     suffix = os.path.splitext(file_name)[1]
@@ -515,13 +549,17 @@ async def upload_file(
 
     # 同步处理
     try:
-        return await _process_and_ingest(
+        result = await _process_and_ingest(
             ctx=ctx,
             file_path=tmp_path,
             file_name=file_name,
             user_id=user_id,
             overwrite=overwrite,
         )
+        # 入库成功（含部分成功）后记录 MD5，供后续「同名同内容」跳过判断
+        if result.status in ("success", "partial"):
+            _record_md5(file_name, md5)
+        return result
     except HTTPException:
         raise
     except SEKBError as e:
@@ -738,6 +776,12 @@ async def list_files(user_id: str = Depends(get_current_user)) -> dict[str, Any]
             }
 
     result = sorted(files.values(), key=lambda x: x.get("uploaded_at", ""), reverse=True)
+
+    # 合并 MD5（用于前端「同名同内容」跳过判断）
+    md5_index = _load_md5_index()
+    for f in result:
+        f["md5"] = md5_index.get(f.get("file_name", ""), "")
+
     return {"files": result, "count": len(result)}
 
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Button, Typography, message, Progress, Space, Tag, Alert, Card, Statistic, Row, Col, Modal, List } from 'antd';
+import { Button, Typography, message, Progress, Space, Tag, Alert, Card, Statistic, Row, Col, Modal, List, Checkbox } from 'antd';
 import {
   InboxOutlined, FileOutlined, FileImageOutlined, ReloadOutlined, StopOutlined, RadarChartOutlined, FolderOpenOutlined,
 } from '@ant-design/icons';
@@ -9,6 +9,7 @@ import {
   listSeries,
   listFiles,
   analyzeKnowledgeBase,
+  computeFileHash,
   type UploadResult,
   type KnowledgeStatus,
   type SeriesGroup,
@@ -208,23 +209,89 @@ const Files: React.FC = () => {
       return false;
     }
 
-    // 去重检查：识别已上传过的同名文件，询问用户取消还是覆盖
-    let existingNames = new Set<string>();
+    // 去重检查：对比已上传文件的名称与内容哈希（SHA-256）
+    let existingFiles: UploadedFile[] = [];
     try {
-      const existing = await listFiles();
-      existingNames = new Set(existing.map((f) => f.file_name));
+      existingFiles = await listFiles();
     } catch {
       // listFiles 失败不阻断上传，按非重复处理
     }
-    const duplicates = supported.filter((f) => existingNames.has(f.name));
+    const existingByName = new Map(existingFiles.map((f) => [f.file_name, f]));
+    const existingNames = new Set(existingFiles.map((f) => f.file_name));
+
+    // 计算每个文件的哈希（用于同名内容对比）
+    const withHash = await Promise.all(
+      supported.map(async (f) => ({ file: f, hash: await computeFileHash(f) }))
+    );
+
+    // 分类：同名同内容（可跳过）/ 同名不同内容（需覆盖）
+    const sameContent: File[] = [];
+    const sameNameDiff: File[] = [];
+    for (const { file, hash } of withHash) {
+      const existing = existingByName.get(file.name);
+      if (!existing) continue;
+      if (hash && existing.md5 && hash === existing.md5) {
+        sameContent.push(file);
+      } else {
+        sameNameDiff.push(file);
+      }
+    }
+
+    // 实际要上传的文件列表（默认全部，跳过同名同内容时移除）
+    let filesToUpload = supported;
+
+    // 1. 处理「同名同内容」：提供跳过 + 复选框
+    if (sameContent.length > 0) {
+      const result = await new Promise<'skip' | 'upload' | 'cancel'>((resolve) => {
+        let skipAll = true; // 默认勾选跳过
+        Modal.confirm({
+          title: `发现 ${sameContent.length} 个内容相同的文件`,
+          icon: null,
+          content: (
+            <div>
+              <p style={{ marginBottom: 6 }}>以下文件与知识库已有文件「同名且内容一致」：</p>
+              <div style={{ maxHeight: 140, overflow: 'auto', marginBottom: 8, background: '#fafafa', padding: '6px 10px', borderRadius: 6 }}>
+                {sameContent.map((f) => <div key={f.name} style={{ fontSize: 12 }}>· {f.name}</div>)}
+              </div>
+              <Checkbox defaultChecked onChange={(e) => { skipAll = e.target.checked; }}>
+                跳过这些内容相同的文件
+              </Checkbox>
+              <p style={{ color: '#999', fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                勾选后，同名且内容一致的文件会被跳过、不重复上传；取消勾选则仍会重新上传
+              </p>
+            </div>
+          ),
+          okText: '确定',
+          cancelText: '取消上传',
+          onOk: () => resolve(skipAll ? 'skip' : 'upload'),
+          onCancel: () => resolve('cancel'),
+        });
+      });
+      if (result === 'cancel') {
+        message.info('已取消上传');
+        return false;
+      }
+      if (result === 'skip') {
+        const skipSet = new Set(sameContent);
+        filesToUpload = supported.filter((f) => !skipSet.has(f));
+        if (filesToUpload.length === 0) {
+          message.info(`已跳过 ${sameContent.length} 个内容相同的文件，没有需要上传的文件`);
+          return false;
+        }
+        message.info(`已跳过 ${sameContent.length} 个内容相同的文件`);
+      }
+    }
+
+    // 2. 处理「同名不同内容」：询问覆盖还是取消（只针对 filesToUpload 里的文件）
     let overwrite = false;
-    if (duplicates.length > 0) {
-      const names = duplicates.map((d) => d.name).slice(0, 6).join('、');
-      const more = duplicates.length > 6 ? ` 等 ${duplicates.length} 个` : '';
+    const stillDup = filesToUpload.filter((f) => sameNameDiff.includes(f));
+    if (stillDup.length > 0) {
+      const names = stillDup.map((d) => d.name).slice(0, 6).join('、');
+      const more = stillDup.length > 6 ? ` 等 ${stillDup.length} 个` : '';
       const choice = await new Promise<'overwrite' | 'cancel'>((resolve) => {
         Modal.confirm({
-          title: '发现已上传过的文件',
-          content: `以下 ${duplicates.length} 个文件已存在于知识库：${names}${more}。是否覆盖旧文件？（覆盖会删除旧版本再重新入库）`,
+          title: '发现同名但内容不同的文件',
+          content: `以下 ${stillDup.length} 个文件已存在于知识库，但内容不同：${names}${more}。是否覆盖旧文件？（覆盖会删除旧版本再重新入库）`,
           okText: '覆盖旧文件',
           cancelText: '取消上传',
           onOk: () => resolve('overwrite'),
@@ -239,7 +306,7 @@ const Files: React.FC = () => {
     }
 
     // 初始化任务列表
-    const newTasks: FileTask[] = supported.map((file, idx) => ({
+    const newTasks: FileTask[] = filesToUpload.map((file, idx) => ({
       uid: `${Date.now()}_${idx}`,
       file,
       progress: 0,
@@ -251,8 +318,8 @@ const Files: React.FC = () => {
     abortRef.current = false;
 
     logger.info('batch_upload_start', {
-      total_files: supported.length,
-      total_size: supported.reduce((s, f) => s + f.size, 0),
+      total_files: filesToUpload.length,
+      total_size: filesToUpload.reduce((s, f) => s + f.size, 0),
     });
 
     let successCount = 0;
@@ -317,7 +384,7 @@ const Files: React.FC = () => {
     setUploading(false);
     abortRef.current = false;
 
-    const total = supported.length;
+    const total = filesToUpload.length;
     const finalSuccess = successCount;
     const finalError = errorCount + newTasks.filter(t => t.status === 'error').length;
 
@@ -344,6 +411,13 @@ const Files: React.FC = () => {
   const handleCancel = () => {
     abortRef.current = true;
     message.info('正在取消上传...');
+  };
+
+  /** 一键重试所有失败的文件（后端重启导致的 502/503 等临时错误）。 */
+  const retryFailed = () => {
+    const failedFiles = tasks.filter((t) => t.status === 'error').map((t) => t.file);
+    if (failedFiles.length === 0) return;
+    void handleBatchUpload(failedFiles);
   };
 
   const formatSize = (size: number): string => {
@@ -535,6 +609,16 @@ const Files: React.FC = () => {
                   onClick={handleCancel}
                 >
                   取消
+                </Button>
+              )}
+              {!uploading && tasks.some((t) => t.status === 'error') && (
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<ReloadOutlined />}
+                  onClick={retryFailed}
+                >
+                  重试失败的文件（{tasks.filter((t) => t.status === 'error').length}）
                 </Button>
               )}
             </div>

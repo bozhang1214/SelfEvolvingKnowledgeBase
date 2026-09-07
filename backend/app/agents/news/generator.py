@@ -166,7 +166,9 @@ class DailyReportGenerator:
         """
         classified: dict[str, list[dict]] = {c.name: [] for c in categories}
         for it in items:
-            text = f"{it.get('title', '')} {it.get('summary', '')}".lower()
+            # 用标题 + 摘要 + 正文前 500 字符做关键词匹配，提高与大类的相关性（正文更能反映真实主题）
+            content = (it.get("content") or "")[:500]
+            text = f"{it.get('title', '')} {it.get('summary', '')} {content}".lower()
             for c in categories:
                 if any(k.lower() in text for k in c.keywords):
                     classified[c.name].append(it)

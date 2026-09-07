@@ -154,8 +154,10 @@ function _uploadFileXHR(
           serverMsg = '文件过大（被 Nginx 拦截），上限 50MB';
         } else if (httpStatus === 0) {
           serverMsg = '网络错误或跨域被拦截';
+        } else if (httpStatus === 502) {
+          serverMsg = '后端服务暂时不可用（可能正在重启），请稍后重试 (HTTP 502)';
         } else if (httpStatus === 503) {
-          serverMsg = 'L3 知识库未启用，无法上传 (HTTP 503)';
+          serverMsg = '后端正在初始化知识库，请稍后重试 (HTTP 503)';
         }
       }
       logger.warn('upload_failed', {
@@ -237,6 +239,8 @@ export interface UploadedFile {
   category: { l1: string; l2: string; l3: string; confidence: number } | null;
   series: string;
   uploaded_at: string;
+  /** 内容 MD5（用于「同名同内容」跳过判断），旧数据可能为空 */
+  md5?: string;
 }
 
 /**
@@ -273,4 +277,19 @@ export async function analyzeKnowledgeBase(): Promise<KnowledgeAnalysis> {
 export async function reclassifyFiles(): Promise<{ files_reclassified: number; entries_updated: number }> {
   const res = await apiClient.post('/upload/reclassify');
   return res.data;
+}
+
+/**
+ * 计算文件的 SHA-256 十六进制摘要（与后端 _compute_md5 对齐，用于「同名同内容」对比）。
+ * crypto.subtle 不支持 MD5，故统一用 SHA-256。
+ */
+export async function computeFileHash(file: File): Promise<string> {
+  try {
+    const buffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    const bytes = Array.from(new Uint8Array(hashBuffer));
+    return bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return ''; // 计算失败返回空串，跳过对比（走旧的覆盖逻辑）
+  }
 }
