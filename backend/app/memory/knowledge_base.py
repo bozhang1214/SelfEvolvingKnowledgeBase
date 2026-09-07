@@ -429,9 +429,10 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
         self._ensure_initialized()
         if user_id is None:
             return await asyncio.to_thread(self._collection.count)
-        # ChromaDB count 不支持 where 过滤，需要 get 后计数
+        # ChromaDB count 不支持 where 过滤，需要 get 后计数；
+        # include=[] 只取 ids，不加载 documents/embeddings，避免大库慢查询导致接口超时
         result = await asyncio.to_thread(
-            self._collection.get, where={"user_id": user_id}
+            self._collection.get, where={"user_id": user_id}, include=[]
         )
         return len(result["ids"]) if result["ids"] else 0
 
@@ -509,6 +510,7 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
             self._collection.get,
             where=where_filter,
             limit=limit + offset,
+            include=["documents", "metadatas"],  # 不加载 embeddings，避免大库慢查询超时
         )
 
         entries = []
