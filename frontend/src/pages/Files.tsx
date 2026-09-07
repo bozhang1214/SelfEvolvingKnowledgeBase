@@ -4,7 +4,6 @@ import {
   InboxOutlined, FileOutlined, FileImageOutlined, ReloadOutlined, StopOutlined, RadarChartOutlined, FolderOpenOutlined,
 } from '@ant-design/icons';
 import {
-  uploadFilePromise,
   getKnowledgeStatus,
   listSeries,
   listFiles,
@@ -18,6 +17,7 @@ import {
   type KnowledgeAnalysis,
 } from '@/services/file';
 import { logger } from '@/utils/logger';
+import { useUploadStore } from '@/stores/upload';
 
 // 支持的文件扩展名（与后端 FileProcessor 对齐）
 const SUPPORTED_EXTENSIONS = [
@@ -32,16 +32,6 @@ interface UploadHistoryItem {
   uid: string;
   result: UploadResult;
   uploaded_at: string;
-}
-
-/** 单个文件的上传状态 */
-interface FileTask {
-  uid: string;
-  file: File;
-  progress: number;       // 0-100
-  status: 'pending' | 'uploading' | 'done' | 'error';
-  result?: UploadResult;
-  error?: string;
 }
 
 /** 从 antd Upload 的 file 对象或原生 File 中提取支持的文件 */
@@ -149,9 +139,8 @@ function buildSeriesTree(groups: SeriesGroup[]): any[] {
 }
 
 const Files: React.FC = () => {
+  const { tasks, uploading, startUpload, cancel: cancelUpload } = useUploadStore();
   const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeStatus | null>(null);
-  const [tasks, setTasks] = useState<FileTask[]>([]);
-  const [uploading, setUploading] = useState(false);
   const [history, setHistory] = useState<UploadHistoryItem[]>([]);
   const [statusLoading, setStatusLoading] = useState(false);
   const [seriesGroups, setSeriesGroups] = useState<SeriesGroup[]>([]);
@@ -160,7 +149,6 @@ const Files: React.FC = () => {
   const [filesLoading, setFilesLoading] = useState(false);
   const [analysis, setAnalysis] = useState<KnowledgeAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
-  const abortRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -364,97 +352,22 @@ const Files: React.FC = () => {
       overwrite = true;
     }
 
-    // 初始化任务列表
-    const newTasks: FileTask[] = filesToUpload.map((file, idx) => ({
-      uid: `${Date.now()}_${idx}`,
-      file,
-      progress: 0,
-      status: 'pending',
-    }));
+    // 调 store 上传（上传循环跑在 store 里，切换导航/组件卸载不中断）
+    const { success, error, total } = await startUpload(filesToUpload, { overwrite, existingNames });
 
-    setTasks(newTasks);
-    setUploading(true);
-    abortRef.current = false;
-
-    logger.info('batch_upload_start', {
-      total_files: filesToUpload.length,
-      total_size: filesToUpload.reduce((s, f) => s + f.size, 0),
-    });
-
-    let successCount = 0;
-    let errorCount = 0;
-
-    // 串行上传（避免并发太多打满后端连接 + embedding 模型）
-    for (const task of newTasks) {
-      if (abortRef.current) {
-        // 标记剩余为取消
-        setTasks((prev) => prev.map((t) =>
-          t.status === 'pending' || t.status === 'uploading'
-            ? { ...t, status: 'error', error: '已取消' }
-            : t
-        ));
-        break;
-      }
-
-      // 标记当前文件 uploading
-      setTasks((prev) => prev.map((t) =>
-        t.uid === task.uid ? { ...t, status: 'uploading' } : t
-      ));
-
-      try {
-        const isDup = existingNames.has(task.file.name);
-        const { promise } = uploadFilePromise(task.file, (pct) => {
-          setTasks((prev) => prev.map((t) =>
-            t.uid === task.uid ? { ...t, progress: pct } : t
-          ));
-        }, overwrite && isDup);
-
-        const result = await promise;
-
-        setTasks((prev) => prev.map((t) =>
-          t.uid === task.uid ? { ...t, status: 'done', progress: 100, result } : t
-        ));
-
-        // 入历史
-        setHistory((prev) => [
-          { uid: task.uid, result, uploaded_at: new Date().toISOString() },
-          ...prev,
-        ]);
-
-        if (result.status === 'success') {
-          successCount++;
-        } else if (result.status === 'partial') {
-          message.warning(`${task.file.name} 部分入库：${result.ingested_count}/${result.chunks_count}`);
-        }
-      } catch (err: any) {
-        errorCount++;
-        const errMsg = err?.message || '上传失败';
-        setTasks((prev) => prev.map((t) =>
-          t.uid === task.uid ? { ...t, status: 'error', error: errMsg } : t
-        ));
-        logger.warn('batch_upload_file_failed', {
-          file_name: task.file.name,
-          error: errMsg,
-          http_status: err?.httpStatus,
-        });
-      }
+    // 把成功上传的文件补入「上传历史」（当前会话展示）
+    const doneTasks = useUploadStore.getState().tasks.filter((t) => t.status === 'done' && t.result);
+    if (doneTasks.length > 0) {
+      setHistory((prev) => [
+        ...doneTasks.map((t) => ({ uid: t.uid, result: t.result!, uploaded_at: new Date().toISOString() })),
+        ...prev,
+      ]);
     }
 
-    setUploading(false);
-    abortRef.current = false;
-
-    const total = filesToUpload.length;
-    const finalSuccess = successCount;
-    const finalError = errorCount + newTasks.filter(t => t.status === 'error').length;
-
-    logger.info('batch_upload_done', {
-      total, success: finalSuccess, error: finalError,
-    });
-
-    if (finalError === 0) {
+    if (error === 0) {
       message.success(`全部 ${total} 个文件上传成功`);
-    } else if (finalSuccess > 0) {
-      message.warning(`上传完成：${finalSuccess} 成功，${finalError} 失败`);
+    } else if (success > 0) {
+      message.warning(`上传完成：${success} 成功，${error} 失败`);
     } else {
       message.error(`全部 ${total} 个文件上传失败`);
     }
@@ -463,12 +376,12 @@ const Files: React.FC = () => {
     loadStatus();
     loadSeries();
     loadFiles();
-    return false;  // 阻止 antd 默认上传
+    return false; // 阻止 antd 默认上传
   };
 
   /** 取消上传（标记 abort，当前文件完成后停止后续） */
   const handleCancel = () => {
-    abortRef.current = true;
+    cancelUpload();
     message.info('正在取消上传...');
   };
 
@@ -476,7 +389,12 @@ const Files: React.FC = () => {
   const retryFailed = () => {
     const failedFiles = tasks.filter((t) => t.status === 'error').map((t) => t.file);
     if (failedFiles.length === 0) return;
-    void handleBatchUpload(failedFiles);
+    void (async () => {
+      await startUpload(failedFiles, { overwrite: false, existingNames: new Set() });
+      loadStatus();
+      loadSeries();
+      loadFiles();
+    })();
   };
 
   const formatSize = (size: number): string => {
