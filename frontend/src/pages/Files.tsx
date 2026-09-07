@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Button, Typography, message, Progress, Space, Tag, Alert, Card, Statistic, Row, Col, Modal, List, Checkbox } from 'antd';
+import { Button, Typography, message, Progress, Space, Tag, Alert, Card, Statistic, Row, Col, Modal, List, Checkbox, Tree } from 'antd';
 import {
   InboxOutlined, FileOutlined, FileImageOutlined, ReloadOutlined, StopOutlined, RadarChartOutlined, FolderOpenOutlined,
 } from '@ant-design/icons';
@@ -101,6 +101,50 @@ function readEntry(entry: FileSystemEntry, path: string): Promise<File[]> {
     } else {
       resolve([]);
     }
+  });
+}
+
+/** 把系列分组转成 antd Tree 的 treeData（系列 → 子目录 → 文件，多级折叠）。 */
+function buildSeriesTree(groups: SeriesGroup[]): any[] {
+  return groups.map((g) => {
+    const rootChildren: any[] = [];
+    const dirMap = new Map<string, any>();
+
+    for (const f of g.files) {
+      // 去掉系列名前缀，得到相对路径（可能含子目录）
+      let rel = f.file_name;
+      if (rel.startsWith(g.series + '/')) rel = rel.slice(g.series.length + 1);
+      const parts = rel.split('/');
+      const fileName = parts[parts.length - 1];
+      const dirParts = parts.slice(0, -1);
+      const label = (f.part > 0 ? `${f.part}. ` : '') + fileName;
+
+      if (dirParts.length === 0) {
+        // 无子目录，直接挂在系列下
+        rootChildren.push({ key: f.file_name, title: label, isLeaf: true });
+      } else {
+        // 有子目录，逐级构建
+        let currentLevel = rootChildren;
+        let currentPath = '';
+        for (const dir of dirParts) {
+          currentPath = currentPath ? `${currentPath}/${dir}` : dir;
+          let node = dirMap.get(currentPath);
+          if (!node) {
+            node = { key: currentPath, title: `📁 ${dir}`, children: [] };
+            dirMap.set(currentPath, node);
+            currentLevel.push(node);
+          }
+          currentLevel = node.children;
+        }
+        currentLevel.push({ key: f.file_name, title: label, isLeaf: true });
+      }
+    }
+
+    return {
+      key: g.series,
+      title: `📚 ${g.series}（${g.count} 篇）`,
+      children: rootChildren,
+    };
   });
 }
 
@@ -760,32 +804,16 @@ const Files: React.FC = () => {
       >
         {seriesGroups.length === 0 ? (
           <Text type="secondary">
-            暂无识别到的系列文章。文件名为「XX 第1篇/第2篇」「XX Part 1」「XX（上/中/下）」「XX 01/02」等会被自动归组。
+            暂无识别到的系列文章。文件名为「XX 第1篇/第2篇」「XX Part 1」「XX（上/中/下）」「XX 01/02」「第N天」等会被自动归组。
           </Text>
         ) : (
-          <div>
-            {seriesGroups.map((g) => (
-              <div
-                key={g.series}
-                style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}
-              >
-                <Space size={8}>
-                  <Text strong>📚 {g.series}</Text>
-                  <Tag color="blue">{g.count} 篇</Tag>
-                  {g.category && g.category.length === 3 && (
-                    <Tag color="purple" style={{ fontSize: 11 }}>{g.category.join(' / ')}</Tag>
-                  )}
-                </Space>
-                <div style={{ marginTop: 4, paddingLeft: 8 }}>
-                  {g.files.map((f) => (
-                    <div key={f.file_name} style={{ fontSize: 12, color: '#666' }}>
-                      {f.part > 0 ? `${f.part}. ` : ''}{f.file_name}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+          <Tree
+            treeData={buildSeriesTree(seriesGroups)}
+            defaultExpandedKeys={seriesGroups.map((g) => g.series)}
+            showLine
+            blockNode
+            style={{ background: 'transparent' }}
+          />
         )}
       </Card>
 

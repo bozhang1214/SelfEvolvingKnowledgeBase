@@ -119,8 +119,8 @@ class DailyReportGenerator:
         self._ctx = _PERIOD_CONTEXTS.get(period_type, _PERIOD_CONTEXTS["daily"])
         cats = categories or []
 
-        # 1. 关键词分类（有限多归属：单归属为主 + 不足 min_items 的大类补足）
-        classified = self._classify(items, cats, min_items=min_items_per_category)
+        # 1. 分类（批量 LLM 语义分类，单归属；失败时回退关键词）
+        classified = await self._classify_llm(items, cats, role)
         for cat in cats:
             n = len(classified.get(cat.name, []))
             if n == 0:
@@ -159,20 +159,72 @@ class DailyReportGenerator:
 
     # ---------- 分类 ----------
 
-    def _classify(self, items: list[dict], categories: list[Any], min_items: int = 10) -> dict[str, list[dict]]:
-        """严格单归属：每条只归入第一个命中的大类，绝不重复出现在多个分类。
+    async def _classify_llm(
+        self, items: list[dict], categories: list[Any], role: str
+    ) -> dict[str, list[dict]]:
+        """批量 LLM 语义分类（单归属）。
 
-        ``min_items`` 参数保留仅为接口兼容；不足条目的分类通过「扩大信息源」解决，而非在分类层凑数。
+        一次性把所有条目交给 LLM 按「内容语义」归类，能区分「Agent(应用层) vs 大模型(算法层)」
+        等关键词难以区分的情况；LLM 失败或漏分类的条目回退到关键词匹配兜底。
         """
         classified: dict[str, list[dict]] = {c.name: [] for c in categories}
-        for it in items:
-            # 用标题 + 摘要 + 正文前 500 字符做关键词匹配，提高与大类的相关性（正文更能反映真实主题）
-            content = (it.get("content") or "")[:500]
-            text = f"{it.get('title', '')} {it.get('summary', '')} {content}".lower()
+        if not items:
+            return classified
+
+        def _keyword_fallback(it: dict) -> str:
+            text = f"{it.get('title', '')} {it.get('summary', '')} {(it.get('content') or '')[:500]}".lower()
             for c in categories:
                 if any(k.lower() in text for k in c.keywords):
-                    classified[c.name].append(it)
-                    break  # 单归属：一条只归一个大类
+                    return c.name
+            return ""
+
+        cat_list = "\n".join(f"{i + 1}. {c.name}" for i, c in enumerate(categories))
+        item_list = [
+            {
+                "id": i,
+                "title": (it.get("title") or "")[:120],
+                "summary": (it.get("summary") or "")[:250],
+            }
+            for i, it in enumerate(items)
+        ]
+        prompt = (
+            "你是科技资讯分类器。请把每条资讯归入「最相关」的一个大类（单归属，每条只归一个类）。\n\n"
+            "大类列表（注意：Agent 偏应用层/框架/多智能体编排；大模型偏算法层/模型本身/训练推理/发布）：\n"
+            f"{cat_list}\n\n"
+            f"资讯列表：\n{json.dumps(item_list, ensure_ascii=False)}\n\n"
+            "输出严格 JSON：{\"classifications\": [{\"id\": 0, \"category\": \"大类名\"}]}\n"
+            "每条 id 都要给出分类，category 必须是上面大类名之一。只输出 JSON，不要多余文字。"
+        )
+
+        parsed: dict = {}
+        try:
+            llm = self._llm_factory.get(role)
+            resp = await llm.ainvoke([SystemMessage(content=prompt), HumanMessage(content="请分类。")])
+            raw = resp.content if hasattr(resp, "content") else str(resp)
+            parsed = self._parse_json(raw)
+        except Exception as e:  # noqa: BLE001
+            logger.error("LLM 分类失败，回退关键词", error=str(e)[:200])
+
+        valid = {c.name for c in categories}
+        done_ids: set[int] = set()
+        for cls in parsed.get("classifications", []):
+            try:
+                idx = int(cls.get("id"))
+            except (TypeError, ValueError):
+                continue
+            cat = cls.get("category")
+            if 0 <= idx < len(items) and cat in valid:
+                classified[cat].append(items[idx])
+                done_ids.add(idx)
+
+        # 兜底：LLM 未分类（失败或漏）的条目用关键词
+        for i, it in enumerate(items):
+            if i in done_ids:
+                continue
+            cat = _keyword_fallback(it)
+            if cat:
+                classified[cat].append(it)
+
         return classified
 
     def _apply_period(self, prompt: str) -> str:

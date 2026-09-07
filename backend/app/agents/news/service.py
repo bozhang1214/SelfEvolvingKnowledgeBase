@@ -36,6 +36,9 @@ class NewsAgent:
     def __init__(self, config: Any, llm_factory: Any) -> None:
         self._config = config
         self._fetcher = RSSFetcher(config.rss_sources)
+        from app.agents.news.web_fetcher import WebFetcher
+
+        self._web_fetcher = WebFetcher()
         # 关键词筛选用「顶层 keywords ∪ 所有大类关键词」，确保融资/安全/开源等
         # 大类相关内容不会在分类前被顶层筛选误杀。
         all_keywords = list(config.keywords or [])
@@ -111,6 +114,9 @@ class NewsAgent:
 
         # 2. 采集 + 筛选
         items = await self._fetcher.fetch_all()
+        # 网页采集源（CSDN 热榜 / 魔搭模型库）补充到资讯池
+        web_items = await self._web_fetcher.fetch_all()
+        items.extend(web_items)
         flt = NewsFilter(
             keywords=self._keywords,
             exclude_keywords=self._exclude_keywords,
