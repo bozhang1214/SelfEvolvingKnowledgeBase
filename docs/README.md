@@ -2,8 +2,8 @@
 
 > 项目代号：SelfEvolvingKnowledgeBase
 > 当前阶段：Phase 1~4 均已实现，生产部署就绪
-> 文档版本：v1.1.0
-> 最后更新：2026-08-19
+> 文档版本：v1.1.1
+> 最后更新：2026-09-07
 
 ---
 
@@ -26,6 +26,7 @@
 
 | 文档 | 内容 | 适用读者 |
 |---|---|---|
+| [CHANGELOG.md](./CHANGELOG.md) | **变更日志**：所有功能迭代与问题修复记录，按时间倒序 | 所有成员必读 |
 | [01-architecture.md](./01-architecture.md) | 总体架构、技术栈、目录结构、架构决策记录（ADR） | 所有成员必读 |
 | [02-phase1-design.md](./02-phase1-design.md) | Phase 1 详细设计：LangGraph 工作流、State Schema、五 Agent 节点详设、工具层、L1 记忆 | Phase 1 开发者 |
 | [03-evaluation-and-testing.md](./03-evaluation-and-testing.md) | 评估体系（9 项量化指标）、测试用例集（TC-01~TC-06 + TC-M01~TC-M05）、Eval Mode、回归报告 | 测试与质量负责人 |
