@@ -133,6 +133,8 @@ def save_report(user_id: str, type_: str, title: str, report: dict[str, Any]) ->
     rid = uuid.uuid4().hex[:12]
     md = report_to_markdown(type_, title, report)
     (_DIR / f"{rid}.md").write_text(md, encoding="utf-8")
+    # 额外存结构化 JSON，供前端用与批量/单职位一致的语义化布局渲染
+    (_DIR / f"{rid}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     index = _load_index()
     index.insert(0, {
@@ -161,7 +163,7 @@ def list_reports(user_id: str) -> list[dict[str, Any]]:
 
 
 def get_report(user_id: str, report_id: str) -> dict[str, Any] | None:
-    """读取某用户的一份报告，返回 {id,type,title,created_at,markdown}。"""
+    """读取某用户的一份报告，返回 {id,type,title,created_at,markdown,report}。"""
     meta = None
     for x in _load_index():
         if x.get("id") == report_id and x.get("user_id") == user_id:
@@ -172,12 +174,21 @@ def get_report(user_id: str, report_id: str) -> dict[str, Any] | None:
     md_path = _DIR / f"{report_id}.md"
     if not md_path.exists():
         return None
+    # 结构化 JSON（供前端语义化渲染；旧报告可能没有，返回 None）
+    report = None
+    json_path = _DIR / f"{report_id}.json"
+    if json_path.exists():
+        try:
+            report = json.loads(json_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            report = None
     return {
         "id": meta["id"],
         "type": meta["type"],
         "title": meta["title"],
         "created_at": meta.get("created_at", ""),
         "markdown": md_path.read_text(encoding="utf-8"),
+        "report": report,
     }
 
 
@@ -189,4 +200,5 @@ def delete_report(user_id: str, report_id: str) -> bool:
         return False
     _save_index(new)
     (_DIR / f"{report_id}.md").unlink(missing_ok=True)
+    (_DIR / f"{report_id}.json").unlink(missing_ok=True)
     return True

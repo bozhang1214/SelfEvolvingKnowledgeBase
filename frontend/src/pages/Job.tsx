@@ -791,7 +791,7 @@ const Job: React.FC = () => {
   // 历史报告
   const [reports, setReports] = useState<ArchivedReportMeta[]>([]);
   const [reportsLoading, setReportsLoading] = useState(false);
-  const [reportDetail, setReportDetail] = useState<{ id: string; type: string; title: string; created_at: string; markdown: string } | null>(null);
+  const [reportDetail, setReportDetail] = useState<{ id: string; type: string; title: string; created_at: string; markdown: string; report: Record<string, any> | null } | null>(null);
   // 历史报告子 tab：批量分析 / 单职位分析
   const [historyTab, setHistoryTab] = useState<'batch' | 'single'>('batch');
   // 最近一次缓存的批量分析报告（用于「批量分析」tab 默认展示）
@@ -824,16 +824,11 @@ const Job: React.FC = () => {
     return () => { alive = false; };
   }, []);
 
-  // 进入「批量分析」tab：若缓存报告的职位列表与当前采集列表一致，默认展示该报告；否则不展示
+  // 进入「批量分析」tab：默认展示最后一次缓存的报告（报告头部 Alert 会标注分析时间/职位数/关键词）
   useEffect(() => {
     if (analysisMode !== 'batch' || marketReport || !cachedMarketReport) return;
-    const rk = (j: FetchedJob) => j.job_id || `${j.title}-${j.company}`;
-    const reportKeys = new Set((cachedMarketReport.jobs || []).map(rk));
-    const fetchKeys = new Set(fetchedJobs.map(rk));
-    if (reportKeys.size === 0) return;
-    const same = reportKeys.size === fetchKeys.size && [...reportKeys].every((k) => fetchKeys.has(k));
-    if (same) setMarketReport(cachedMarketReport);
-  }, [analysisMode, cachedMarketReport, fetchedJobs, marketReport]);
+    setMarketReport(cachedMarketReport);
+  }, [analysisMode, cachedMarketReport, marketReport]);
 
   // 进入「历史报告」tab 时加载存档报告
   useEffect(() => {
@@ -1316,7 +1311,16 @@ const Job: React.FC = () => {
               type="info"
               showIcon
               style={{ marginBottom: 12 }}
-              message={`分析于 ${marketReport.analyzed_at?.replace('T', ' ').slice(0, 19) || ''} · 共 ${marketReport.job_count} 个职位 · 关键词「${marketReport.keyword}」· ${marketReport.city}`}
+              message={
+                <span>
+                  分析于 {marketReport.analyzed_at?.replace('T', ' ').slice(0, 19) || ''} · 共 {marketReport.job_count} 个职位 · 关键词「{marketReport.keyword}」· {marketReport.city}
+                  {fetchedJobs.length > 0 && fetchedJobs.length !== marketReport.job_count && (
+                    <span style={{ color: '#d46b08', marginLeft: 8 }}>
+                      ⚠ 当前职位列表 {fetchedJobs.length} 条，与本次分析的 {marketReport.job_count} 条不同
+                    </span>
+                  )}
+                </span>
+              }
             />
             <Row gutter={16}>
               <Col xs={24} sm={8}>
@@ -1563,7 +1567,68 @@ const Job: React.FC = () => {
       >
         {reportDetail ? (
           <div style={{ maxHeight: '70vh', overflow: 'auto' }}>
-            <ReactMarkdown>{reportDetail.markdown}</ReactMarkdown>
+            {reportDetail.report ? (
+              reportDetail.type === 'batch' ? (
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  <Row gutter={16}>
+                    <Col xs={24} sm={8}>
+                      <Paragraph strong style={{ marginBottom: 4 }}>公司分布</Paragraph>
+                      <Space wrap size={[4, 4]}>
+                        {(reportDetail.report.stats?.company_distribution || []).map((c: any) => (
+                          <Tag key={c.name} color="blue">{c.name} × {c.count}</Tag>
+                        ))}
+                      </Space>
+                    </Col>
+                    <Col xs={24} sm={8}>
+                      <Paragraph strong style={{ marginBottom: 4 }}>职位方向</Paragraph>
+                      <Space wrap size={[4, 4]}>
+                        {(reportDetail.report.stats?.role_distribution || []).map((c: any) => (
+                          <Tag key={c.name} color="geekblue">{c.name} × {c.count}</Tag>
+                        ))}
+                      </Space>
+                    </Col>
+                    <Col xs={24} sm={8}>
+                      <Paragraph strong style={{ marginBottom: 4 }}>热点关键词</Paragraph>
+                      <Space wrap size={[4, 4]}>
+                        {(reportDetail.report.stats?.hot_keywords || []).map((c: any) => (
+                          <Tag key={c.keyword} color="purple">{c.keyword} × {c.count}</Tag>
+                        ))}
+                      </Space>
+                    </Col>
+                  </Row>
+                  {reportDetail.report.market && !isEmptyValue(reportDetail.report.market) && (
+                    <>
+                      <Divider style={{ margin: 0 }} />
+                      <Paragraph strong style={{ marginBottom: 0 }}>市场行情</Paragraph>
+                      <MarketSection data={reportDetail.report.market as Record<string, any>} />
+                    </>
+                  )}
+                  {reportDetail.report.knowledge_iteration && !isEmptyValue(reportDetail.report.knowledge_iteration) && (
+                    <>
+                      <Divider style={{ margin: 0 }} />
+                      <Paragraph strong style={{ marginBottom: 0 }}>知识迭代</Paragraph>
+                      <KnowledgeSection data={reportDetail.report.knowledge_iteration as Record<string, any>} />
+                    </>
+                  )}
+                </Space>
+              ) : (
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  {SECTION_ORDER.map((key) => {
+                    const data = reportDetail.report?.[key];
+                    if (isEmptyValue(data)) return null;
+                    return (
+                      <div key={key}>
+                        <Divider style={{ margin: '4px 0' }} />
+                        <Paragraph strong style={{ marginBottom: 8 }}>{SECTION_LABELS[key]}</Paragraph>
+                        <SectionRenderer section={key} data={data as Record<string, any>} />
+                      </div>
+                    );
+                  })}
+                </Space>
+              )
+            ) : (
+              <ReactMarkdown>{reportDetail.markdown}</ReactMarkdown>
+            )}
           </div>
         ) : null}
       </Modal>

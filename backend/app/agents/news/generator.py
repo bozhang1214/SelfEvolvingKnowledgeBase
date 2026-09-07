@@ -199,6 +199,17 @@ class DailyReportGenerator:
                 raw = resp.content if hasattr(resp, "content") else str(resp)
                 parsed = self._parse_json(raw)
                 if parsed and parsed.get("items"):
+                    # 按 title 去重：LLM 可能把同一条输入重复输出两次（分数不同）
+                    seen: set[str] = set()
+                    deduped: list[dict] = []
+                    for it in parsed["items"]:
+                        t = (it.get("title") or "").strip()
+                        if t and t in seen:
+                            continue
+                        if t:
+                            seen.add(t)
+                        deduped.append(it)
+                    parsed["items"] = deduped
                     parsed["keywords"] = keywords  # 供渲染时高亮命中关键词
                     return parsed
                 last_error = "非 JSON 输出或无条目"
