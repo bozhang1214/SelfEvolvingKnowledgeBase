@@ -17,7 +17,7 @@ import {
   type KnowledgeAnalysis,
 } from '@/services/file';
 import { logger } from '@/utils/logger';
-import { useUploadStore } from '@/stores/upload';
+import { useUploadStore, readPendingFiles, clearPendingFiles } from '@/stores/upload';
 
 // 支持的文件扩展名（与后端 FileProcessor 对齐）
 const SUPPORTED_EXTENSIONS = [
@@ -222,6 +222,29 @@ const Files: React.FC = () => {
     loadStatus();
     loadSeries();
     loadFiles();
+
+    // 检测上次刷新/中断遗留的未完成上传，弹窗让用户确认是否继续
+    const pending = readPendingFiles();
+    if (pending.length === 0) return;
+    Modal.confirm({
+      title: `检测到 ${pending.length} 个未完成的上传`,
+      icon: null,
+      content: (
+        <div>
+          <p style={{ marginBottom: 6 }}>以下文件上次未上传完成：</p>
+          <div style={{ maxHeight: 140, overflow: 'auto', marginBottom: 8, background: '#fafafa', padding: '6px 10px', borderRadius: 6 }}>
+            {pending.map((n) => <div key={n} style={{ fontSize: 12 }}>· {n}</div>)}
+          </div>
+          <p style={{ color: '#999', fontSize: 12, marginBottom: 0 }}>
+            文件内容无法跨刷新保存，需你重新选择这些文件后继续上传
+          </p>
+        </div>
+      ),
+      okText: '重新选择并上传',
+      cancelText: '忽略',
+      onOk: () => { fileInputRef.current?.click(); },
+      onCancel: () => { clearPendingFiles(); },
+    });
   }, []);
 
   /** 处理一批选中的文件（文件/文件夹展开后的统一入口）。 */

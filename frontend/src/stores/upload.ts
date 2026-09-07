@@ -12,6 +12,32 @@ export interface FileTask {
   error?: string;
 }
 
+// 未完成上传的「文件名列表」持久化（轻量：只记文件名，不存文件内容；
+// File 对象刷新即失，恢复时让用户重新选择这些文件再上传）
+const PENDING_KEY = 'sekb_upload_pending';
+
+export function readPendingFiles(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PENDING_KEY) || '[]');
+    return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export function clearPendingFiles(): void {
+  localStorage.removeItem(PENDING_KEY);
+}
+
+function writePendingFiles(names: string[]): void {
+  const uniq = Array.from(new Set(names.filter(Boolean)));
+  if (uniq.length === 0) {
+    localStorage.removeItem(PENDING_KEY);
+  } else {
+    localStorage.setItem(PENDING_KEY, JSON.stringify(uniq));
+  }
+}
+
 interface UploadState {
   tasks: FileTask[];
   uploading: boolean;
@@ -46,6 +72,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       progress: 0,
       status: 'pending',
     }));
+
+    // 记录未完成文件（刷新恢复用）：成功上传后才从列表移除
+    const pendingNames = new Set(files.map((f) => f.name));
+    writePendingFiles([...pendingNames]);
 
     set({ tasks: newTasks, uploading: true, _abort: false });
     logger.info('batch_upload_start', {
@@ -93,6 +123,9 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
         if (result.status === 'success' || result.status === 'partial') {
           successCount++;
+          // 成功上传后从「未完成」列表移除
+          pendingNames.delete(task.file.name);
+          writePendingFiles([...pendingNames]);
         }
       } catch (err: any) {
         errorCount++;
