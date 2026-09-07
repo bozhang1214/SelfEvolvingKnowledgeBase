@@ -217,7 +217,7 @@ class DailyReportGenerator:
                         if t:
                             seen.add(t)
                         deduped.append(it)
-                    parsed["items"] = deduped[:_MAX_OUTPUT_ITEMS]  # 单类最多 20 条（硬上限）
+                    parsed["items"] = deduped[: self._MAX_OUTPUT_ITEMS]  # 单类最多 20 条（硬上限）
                     parsed["keywords"] = keywords  # 供渲染时高亮命中关键词
                     return parsed
                 last_error = "非 JSON 输出或无条目"
