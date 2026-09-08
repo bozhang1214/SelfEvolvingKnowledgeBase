@@ -67,6 +67,9 @@ services:
       HF_ENDPOINT: https://hf-mirror.com
       # 模型缓存目录指向数据卷，重建容器后无需重新下载 embedding 模型
       HF_HOME: /app/data/hf_cache
+      # 用户白名单（逗号分隔邮箱）：为空=所有人完整功能；配置后仅白名单内邮箱为完整功能，
+      # 其余登录用户为「预览」：仅功能说明 + 科技资讯只读（不能重新生成日报）
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
     volumes:
       # 数据持久化：会话/索引/向量库/日志/trace 全部写入挂载卷
       - sekb_data:/app/data

@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import get_app_context
 from app.core.logging import get_logger
@@ -33,7 +34,7 @@ def _require_news_agent() -> Any:
 @router.post("/refresh")
 async def refresh_news(
     body: dict | None = Body(None),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(require_full_access),
 ):
     """手动触发一次日报生成。force=true（默认）表示「重新生成」；false 表示今日已生成则跳过。"""
     agent = _require_news_agent()
@@ -74,7 +75,7 @@ async def get_report(
 async def generate_periodic(
     report_type: str,
     body: dict | None = Body(None),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(require_full_access),
 ):
     """生成周报（weekly）或月报（monthly），可传 period/supplement。"""
     if report_type not in ("weekly", "monthly"):

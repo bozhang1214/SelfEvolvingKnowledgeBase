@@ -177,12 +177,15 @@ async def refresh(request: Request, user_id: str = Depends(get_current_user)):
 
 @router.get("/me", response_model=UserPublic)
 async def get_me(user_id: str = Depends(get_current_user)):
-    """获取当前用户信息"""
+    """获取当前用户信息（含访问级别 access_level）"""
+    from app.core.access import access_level
+
     storage = _get_user_storage()
     user = storage.find_by_id(user_id)
     if not user:
         raise HTTPException(404, "用户不存在")
-    return storage.to_public(user)
+    public = storage.to_public(user)
+    return {**public.model_dump(), "access_level": access_level(user_id)}
 
 
 @router.patch("/me", response_model=UserPublic)

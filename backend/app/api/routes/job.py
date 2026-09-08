@@ -12,13 +12,16 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import get_app_context
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/v1/job", tags=["job"])
+router = APIRouter(prefix="/api/v1/job", tags=["job"],
+    dependencies=[Depends(require_full_access)],
+)
 
 
 class JobAnalyzeRequest(BaseModel):

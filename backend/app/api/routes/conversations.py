@@ -20,13 +20,16 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import get_app_context
 from app.core.exceptions import SEKBError, StorageError
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
+router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"],
+    dependencies=[Depends(require_full_access)],
+)
 
 
 # ============================================================

@@ -6,6 +6,8 @@ export interface User {
   created_at: string;
   is_active: boolean;
   settings: UserSettings;
+  /** 访问级别：full（完整功能）| preview（预览：仅功能说明+资讯只读） */
+  access_level?: string;
 }
 
 export interface UserSettings {

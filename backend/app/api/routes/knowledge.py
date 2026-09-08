@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import get_app_context
 from app.core.categories import DEFAULT_CATEGORY_TREE, to_tree_response
@@ -23,7 +24,9 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
+router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"],
+    dependencies=[Depends(require_full_access)],
+)
 
 
 def _fmt_dt(v: Any) -> str:

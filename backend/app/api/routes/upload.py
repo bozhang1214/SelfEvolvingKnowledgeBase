@@ -40,6 +40,7 @@ from fastapi import (
 from pydantic import BaseModel, Field
 
 from app.api.server import get_app_context
+from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
 from app.core.exceptions import SEKBError
@@ -49,7 +50,9 @@ from app.tools.image_processor import SUPPORTED_IMAGE_EXTENSIONS
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/v1/upload", tags=["upload"])
+router = APIRouter(prefix="/api/v1/upload", tags=["upload"],
+    dependencies=[Depends(require_full_access)],
+)
 
 # 文档来源标记与默认重要性评分
 _DOCUMENT_SOURCE = "document"

@@ -13,6 +13,7 @@ import {
   type NewsReportMeta, type NewsReport,
   type PeriodicType, type PeriodicReportMeta, type PeriodicReport,
 } from '@/services/news';
+import { useUserStore } from '@/stores/user';
 
 const { Text } = Typography;
 const { Sider, Content } = Layout;
@@ -20,6 +21,8 @@ const { Sider, Content } = Layout;
 type TabKey = 'daily' | 'weekly' | 'monthly';
 
 const News: React.FC = () => {
+  const { user } = useUserStore();
+  const isPreview = user?.access_level === 'preview';
   const [tab, setTab] = useState<TabKey>('daily');
 
   // 日报
@@ -179,15 +182,17 @@ const News: React.FC = () => {
                 { key: 'monthly', label: '月报' },
               ]}
             />
-            <Button
-              type="primary"
-              block
-              icon={<ThunderboltOutlined />}
-              loading={generating}
-              onClick={() => (isDaily ? handleRefresh() : handleGeneratePeriodic(tab as PeriodicType))}
-            >
-              {isDaily ? '重新生成日报' : tab === 'weekly' ? '生成周报' : '生成月报'}
-            </Button>
+            {!isPreview && (
+              <Button
+                type="primary"
+                block
+                icon={<ThunderboltOutlined />}
+                loading={generating}
+                onClick={() => (isDaily ? handleRefresh() : handleGeneratePeriodic(tab as PeriodicType))}
+              >
+                {isDaily ? '重新生成日报' : tab === 'weekly' ? '生成周报' : '生成月报'}
+              </Button>
+            )}
             <Button
               block
               icon={<ReloadOutlined />}

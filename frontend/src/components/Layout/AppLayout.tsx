@@ -11,7 +11,7 @@ import {
   SolutionOutlined,
   HomeOutlined,
 } from '@ant-design/icons';
-import { useNavigate, useLocation, Routes, Route } from 'react-router-dom';
+import { useNavigate, useLocation, Routes, Route, Navigate } from 'react-router-dom';
 import { useUserStore } from '@/stores/user';
 import Home from '@/pages/Home';
 import Chat from '@/pages/Chat';
@@ -34,10 +34,15 @@ const menuItems = [
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },
 ];
 
+// 预览账号可访问的菜单项（仅功能说明 + 科技资讯）
+const PREVIEW_MENU_KEYS = new Set(['/', '/news']);
+
 const AppLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useUserStore();
+  const isPreview = user?.access_level === 'preview';
+  const visibleMenu = isPreview ? menuItems.filter((m) => PREVIEW_MENU_KEYS.has(m.key)) : menuItems;
 
   const handleMenuClick = (info: { key: string }) => {
     navigate(info.key);
@@ -68,7 +73,7 @@ const AppLayout: React.FC = () => {
         <Menu
           mode="inline"
           selectedKeys={[location.pathname === '/' ? '/' : location.pathname]}
-          items={menuItems}
+          items={visibleMenu}
           onClick={handleMenuClick}
           style={{ borderRight: 0, marginTop: 8 }}
         />
@@ -85,12 +90,12 @@ const AppLayout: React.FC = () => {
         <Content style={{ padding: 0, overflow: 'auto' }}>
           <Routes>
             <Route index element={<Home />} />
-            <Route path="chat" element={<Chat />} />
-            <Route path="files" element={<Files />} />
-            <Route path="knowledge" element={<Knowledge />} />
+            <Route path="chat" element={isPreview ? <Navigate to="/" replace /> : <Chat />} />
+            <Route path="files" element={isPreview ? <Navigate to="/" replace /> : <Files />} />
+            <Route path="knowledge" element={isPreview ? <Navigate to="/" replace /> : <Knowledge />} />
             <Route path="news" element={<News />} />
-            <Route path="job" element={<Job />} />
-            <Route path="settings" element={<Settings />} />
+            <Route path="job" element={isPreview ? <Navigate to="/" replace /> : <Job />} />
+            <Route path="settings" element={isPreview ? <Navigate to="/" replace /> : <Settings />} />
           </Routes>
         </Content>
       </Layout>

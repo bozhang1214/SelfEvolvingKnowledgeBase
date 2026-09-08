@@ -30,6 +30,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from app.api.server import get_app_context
+from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
 from app.core.exceptions import SEKBError
@@ -39,7 +40,11 @@ from app.graph.state import create_initial_state
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
+router = APIRouter(
+    prefix="/api/v1/chat",
+    tags=["chat"],
+    dependencies=[Depends(require_full_access)],
+)
 
 # Phase 1 用户 ID 固定为 "default"
 _DEFAULT_USER_ID = "default"

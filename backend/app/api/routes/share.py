@@ -31,13 +31,16 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from app.api.server import get_app_context
+from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/v1/share", tags=["share"])
+router = APIRouter(prefix="/api/v1/share", tags=["share"],
+    dependencies=[Depends(require_full_access)],
+)
 
 
 def _fmt_dt(v: Any) -> str:
