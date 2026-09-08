@@ -2,7 +2,24 @@
 
 > 记录所有功能迭代与问题修复。按时间倒序，最新在前。
 > 维护约定：**每次功能开发或问题修复完成后，必须同步在本文件追加一条记录**，并更新文档头部「最后更新」日期。
-> 最后更新：2026-09-07
+> 最后更新：2026-09-08
+
+---
+
+## 2026-09-08
+
+### 知识库（关键故障修复）
+- **修复（严重）**：ChromaDB HNSW 段损坏导致 `/upload/status` 超时、`/upload/files` 500、上传 502（`chromadb.errors.InternalError: Failed to apply logs to the hnsw segment writer`）。按 Chroma cookbook 删除损坏的 VECTOR 段目录，让 Chroma 从 WAL 无损重建（备份保留在 `data/chroma_db_backup_20260907`）。
+- **性能修复**：`count`/`list_entries` 不再加载 embedding（`include=[]` / `include=["documents","metadatas"]`），避免大库慢查询导致接口超时。
+
+### 系列识别
+- **新增**：`detect_series` 支持「dN 第N天」编号（如 `2-Agent全栈开发学习实践/2-s1-w1/d1-xxx.md`），系列名取**顶级目录名**；`N-` 数字前缀的根目录文件（总纲/学习计划/补充资料）保持独立、不误入系列。
+- **性能修复**：`/upload/re-series` 由逐条 `update_metadata` 改为**批量元数据更新**（1 次 get + 1 次 update），并把单次 `limit=5000` 改为分页拉全量，避免大库下超时/漏文件。耗时从 >280s 降到约 15s。
+- **修复**：系列树**默认折叠**（移除 `defaultExpandedKeys`），刷新页面即自动加载系列列表（此前因 ChromaDB 500 导致加载为空）。
+
+### 文件上传
+- **修复（去重不生效）**：同名去重/跳过此前用 `file.name`（basename）对比后端入库的 `file_name`（完整相对路径），导致文件夹重传时永远匹配不上、不弹「同名同内容跳过」框。现统一改用相对路径标识 `fileKey = webkitRelativePath || name`。
+- **改进（续传弹窗）**：检测到未完成上传时，弹窗改为**每个文件前加复选框**，并**只列出尚未入库的文件**（过滤掉已成功入库的残留项）；确认后按勾选的文件续传（文件夹场景自动用文件夹选择器以保留相对路径）。
 
 ---
 
