@@ -69,6 +69,8 @@ class CreateShareRequest(BaseModel):
     category_l1: str = Field(default="", description="分享范围·一级分类")
     category_l2: str = Field(default="", description="分享范围·二级分类")
     category_l3: str = Field(default="", description="分享范围·三级分类")
+    # 有效期天数：默认 30 天；<=0 表示永不过期
+    expires_days: int = Field(default=30, description="分享有效期天数，<=0 永不过期")
 
 
 class SharedChatRequest(BaseModel):
@@ -181,6 +183,12 @@ async def create_share(
     cat_l3 = (request.category_l3 or "").strip()
 
     # 分类范围合法性校验（选择下级必须带上级，且必须存在于默认目录）
+    # 修复 R2-01：层级不完整（如只给 l2/l3 不给 l1）会导致 is_scoped() 误判，分享退化为全库
+    if cat_l3 and not (cat_l1 and cat_l2):
+        raise HTTPException(400, "分享范围分类层级不完整（三级需带上二级与一级）")
+    if cat_l2 and not cat_l1:
+        raise HTTPException(400, "分享范围分类层级不完整（二级需带上一级）")
+
     if cat_l1:
         from app.core.categories import DEFAULT_CATEGORY_TREE, validate_category
 
@@ -213,6 +221,7 @@ async def create_share(
         category_l1=cat_l1,
         category_l2=cat_l2,
         category_l3=cat_l3,
+        expires_days=request.expires_days,
     )
     logger.info("分享已创建", share_id=share.share_id, owner=user_id, entries=total,
                 category=share.category_label())

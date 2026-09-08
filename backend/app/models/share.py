@@ -55,8 +55,8 @@ class SharedKnowledge(BaseModel):
         return True
 
     def is_scoped(self) -> bool:
-        """是否限定了分类范围（非整个知识库）。"""
-        return bool(self.category_l1)
+        """是否限定了分类范围（非整个知识库）。任意一级非空即视为已限定。"""
+        return bool(self.category_l1 or self.category_l2 or self.category_l3)
 
     def category_label(self) -> str:
         """返回人类可读的分享范围（三级分类或「全部」）。"""

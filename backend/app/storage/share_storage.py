@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -67,15 +67,23 @@ class ShareStorage:
         category_l1: str = "",
         category_l2: str = "",
         category_l3: str = "",
+        expires_days: int = 30,
     ) -> SharedKnowledge:
-        """创建一条分享记录（可限定三级分类范围，空表示分享整个知识库）。"""
+        """创建一条分享记录（可限定三级分类范围，空表示分享整个知识库）。
+
+        ``expires_days`` 默认 30 天，之后失效；传 <=0 表示永不过期。
+        """
         self._ensure_initialized()
+        expires_at = None
+        if expires_days and expires_days > 0:
+            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
         share = SharedKnowledge(
             owner_user_id=owner_user_id,
             title=title or "我的知识库",
             category_l1=category_l1 or "",
             category_l2=category_l2 or "",
             category_l3=category_l3 or "",
+            expires_at=expires_at,
         )
         self._shares[share.share_id] = share.model_dump(mode="json")
         await self._save()
