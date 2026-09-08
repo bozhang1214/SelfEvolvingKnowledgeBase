@@ -38,9 +38,11 @@ export const useUserStore = create<UserState>((set) => ({
   token: stored.token,
   isLoggedIn: stored.isLoggedIn,
 
-  // 登录态已由上面的同步读取恢复；这里只做后台静默续租（不阻塞渲染）。
+  // 重新校验并恢复会话（覆盖模块加载后 localStorage 的变化，并清理无效 token），再后台静默续租。
   init: () => {
-    if (!stored.isLoggedIn) return;
+    const session = readStoredSession();
+    set({ user: session.user, token: session.token, isLoggedIn: session.isLoggedIn });
+    if (!session.isLoggedIn) return;
     authService
       .ensureFreshToken()
       .then((fresh) => {

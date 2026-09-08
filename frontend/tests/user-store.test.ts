@@ -12,6 +12,7 @@ vi.mock('@/services/auth', () => ({
   login: vi.fn(),
   register: vi.fn(),
   logout: vi.fn(),
+  ensureFreshToken: vi.fn(),
 }));
 
 import { useUserStore } from '@/stores/user';
@@ -38,6 +39,8 @@ describe('user store', () => {
     vi.mocked(authService.login).mockReset();
     vi.mocked(authService.register).mockReset();
     vi.mocked(authService.logout).mockReset();
+    vi.mocked(authService.ensureFreshToken).mockReset();
+    vi.mocked(authService.ensureFreshToken).mockResolvedValue(true);
   });
 
   describe('init: session 恢复', () => {

@@ -50,6 +50,9 @@ describe('chat store', () => {
       messages: {},
       isStreaming: false,
       streamingContent: '',
+      thinkingContent: '',
+      pendingQueue: [],
+      queueSending: false,
     });
     vi.mocked(chatService.listConversations).mockReset();
     vi.mocked(chatService.getMessages).mockReset();
@@ -233,15 +236,15 @@ describe('chat store', () => {
       // 捕获 onDone 回调
       let onDoneCb: ((meta: any) => void) | null = null;
       vi.mocked(chatService.streamChat).mockImplementation(
-        (_convId, _msg, _onToken, onDone, _onError, _onThinking) => {
+        (_convId, _msg, _onToken, onDone, _onError, _onThinking, _skill) => {
           onDoneCb = onDone;
           return new AbortController();
         }
       );
 
       await useChatStore.getState().sendMessage('hello');
-      // 首次发消息时 convId 为空串
-      expect(chatService.streamChat).toHaveBeenCalledWith('', 'hello', expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function));
+      // 首次发消息时 convId 为空串，skill 默认为空串
+      expect(chatService.streamChat).toHaveBeenCalledWith('', 'hello', expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), '');
 
       // 模拟后端返回真实 conversation_id
       onDoneCb!({ conversation_id: 'real-conv-1' } as any);
@@ -257,7 +260,7 @@ describe('chat store', () => {
     it('onDone 返回空 conversation_id → 不更新 currentConvId，仅结束 streaming', async () => {
       let onDoneCb: ((meta: any) => void) | null = null;
       vi.mocked(chatService.streamChat).mockImplementation(
-        (_convId, _msg, _onToken, onDone, _onError, _onThinking) => {
+        (_convId, _msg, _onToken, onDone, _onError, _onThinking, _skill) => {
           onDoneCb = onDone;
           return new AbortController();
         }
