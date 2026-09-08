@@ -7,9 +7,7 @@
 
 | # | 需求 | 范围 | 状态 |
 |---|------|------|------|
-| 1 | 聊天功能增强 | 复制消息 / 代码块复制(已有) / 多选消息 / 导出对话 / 分享对话 | 开发中 |
-| 2 | 2.2 文件自动归类 + 系列文章识别 | 修复自动归类、新增系列文章识别与分组展示 | 开发中 |
-| 3 | Phase 2 招聘分析 Agent | 职位采集 → 筛选 → 深度分析 → 知识点优先级 → 面试Q&A → 差距分析 → 简历建议 → 学习计划 → 项目迭代 → 求职策略（提示词已就绪于 `prompt/job/`） | 开发中 |
+| — | （当前无进行中项；本轮批次 A0 + 白名单 + B1/B2 + 3×P0 + R2-06 + 文档导航均已交付） | — | — |
 
 ## 二、暂缓 / 待办（Deferred）
 
@@ -41,35 +39,41 @@
 
 ## 四、代码审计跟踪（2026-09 全域评审）
 
-> 来源：`docs/codeReview/2026-09-全域评审/`（01 工程评审、02 文档工程、03 路线图、04 第二轮复核）。
-> 本轮（A 止血 + 白名单 + B1 思考流式 + B2 快捷键）已处理，其余未做项在此登记。
+> 来源：`docs/codeReview/2026-09-全域评审/`（01 工程评审、02 文档工程、03 路线图、04 第二轮复核、**Qoder 全项目深度审查**）。
+> **编号冲突说明**：Qoder 报告用 SEC/CON/QLT/OPS/TST 编号，与 01/04 报告的 SEC/AGENT/RAG/OBS/PERF/DATA/FE/OPS/DOC/R2 **不同义**（如 Qoder 的 SEC-01=JWT 弱密钥，而 01 报告的 SEC-01=会话越权）。以下一律按「**主题**」合并登记，不再引用原始编号。
 
-**本轮已处理**：SEC-01（会话越权）、SEC-04（异常脱敏）、SEC-05（资讯只读鉴权）、R2-01/02（分享分类限定+过期）、R2-03（备份 trap+restore）、R2-05（队列卡死）、R2-18（单测断言）、RAG-09（检索失败标记，部分）、R2-06（思考过程流式，部分）、用户白名单（新增）。
+**已处理（截至 2026-09-08）**：
+- **批次 A0**：chat 会话越权(IDOR)、异常脱敏(error_id)、资讯只读鉴权、分享分类限定+默认过期、备份 trap+restore、队列卡死、前端单测修复、RAG 检索失败标记
+- **白名单**（ALLOWED_EMAILS 完整/预览隔离）+ **B1 思考过程流式** + **B2 发送快捷键**
+- **3×P0**：CON-02 并发丢数据（JSON 存储 `asyncio.Lock` + uvicorn `--workers 1`）、SEC-01 JWT 弱密钥（fail-closed + 移除硬编码回退 + 轮换）、SEC-02 端口收敛（`127.0.0.1:8000`）
+- **R2-06**：答案 token 真流式（完整：llm_factory astream + Executor 流式 + token_sink 回传）
+- **文档工程第一刀（C2）**：`docs/README.md` 导航收敛 + Phase 5 能力速览 + 归档标注
 
-**未做（按优先级登记）**：
+**未做（按优先级登记，含 Qoder 新增项）**：
 
-| 优先级 | 审计编号 | 事项（摘要） |
+| 优先级 | 主题 | 事项（摘要） |
 |---|---|---|
-| P0（安全/可见性，本周） | SEC-02 | JWT 强化（禁默认密钥、jti 黑名单、刷新链限制） |
-| P0 | SEC-03 | 重新启用限流中间件（auth/upload/job/news-refresh） |
-| P0 | AGENT-06 | news/job/classifier/image 统一走 `ainvoke_with_stats`（成本可观测） |
-| P0 | AGENT-09 | 降级可见化（degraded 标记 → 响应/指标/前端） |
-| P0 | RAG-01 | 入库闸门公式修正 + 阈值入 config（低质条目入库） |
-| P0 | OBS-01 | Tracing 打通（collector 持有 + 中间件 trace_id） |
-| P0 | R2-06 收尾 | 答案 token 真流式（当前思考过程已流式，答案仍伪流式） |
-| P0 | R2-03 收尾 | 备份 cron IaC 化 + 恢复演练 |
-| P1（本月） | AGENT-01/02/03/04/05 | 反思回路（needs_rewrite、replan 计数、should_reflect、checkpointer、LLM 重试计数） |
-| P1 | AGENT-07/08 | PromptRegistry + 模板转义 |
-| P1 | AGENT-12/13/14 | 步骤并行调度、预检索回灌 supervisor、suggestions 回灌 planner |
-| P1 | RAG-02/03/04/06 | 知识过期驱逐、混合检索/Rerank/Query Rewrite、分块策略、get/update/delete user_id 前置 |
-| P1 | OBS-02~07 | 指标补埋点、trace 上下文、news/job 指标 |
-| P1 | DATA-01~04 | 存储层锁、news index 原子写、缓存清理、archive 按用户淘汰 |
-| P1 | FE-01/02 | 前端错误可见、SSE 重连/controller 治理 |
-| P1 | PERF-01~06 | news 并发/分批、周月报复用、采集限流、同步 IO |
-| P1 | R2-07~17,19,20,26,27 | 会话锁 key、非流式 inflight、skill 注入面、画像锁/路径/缓存失效、队列上限/绑 conv、MD5 原子写、upload limit 5000、新功能测试 |
-| P2（本季度） | OPS-01~10、ARCH-01~07、SEC-06~11、DOC-01~14 | 灰度链路、编排层合并、SSRF/cookie/采集合规、文档工程（用户已定暂缓） |
+| P0（本周） | JWT 收尾 | 密钥 fail-closed 已做；**未做**：jti 黑名单、刷新链限制、缩短有效期（90 天→短） |
+| P0 | 限流重开 | 恢复 RateLimitMiddleware（auth/upload/job/news-refresh 分组；SSE 用并发数限制） |
+| P0 | 降级可见化 | degraded 标记 → 响应/指标/前端（失败不再被记为 success） |
+| P0 | 统一 LLM 入口 | news/job/classifier/image 走 `ainvoke_with_stats`（成本可观测、有重试） |
+| P0 | RAG 入库闸门 | 评分公式修正 + 阈值入 config（低质对话不再全量入库） |
+| P0 | Tracing 打通 | collector 持有 + 中间件注入 trace_id（当前零 trace） |
+| P0 | 后端质量门禁 | **Qoder 动态实测 7 failed/530 passed**（`_classify→_classify_llm` 等漂移）+ CI mypy/eval 转阻断 |
+| P1（本月） | 注入防护 | SEC-05 声明未实现：输入长度限制 + blocked_patterns + 检索内容隔离 |
+| P1 | 反思回路 | needs_rewrite 分支、replan 计数、should_reflect 接线、checkpointer/recursion_limit |
+| P1 | Prompt 工程 | PromptRegistry（路径配置化+版本+热重载）+ 模板转义校验 |
+| P1 | 步骤执行 | 并行调度（depends_on）、预检索回灌 supervisor、suggestions 回灌 planner |
+| P1 | RAG 增强 | 驱逐/过期、混合检索+Rerank+Query Rewrite、分块策略、get/update/delete user_id 前置 |
+| P1 | 指标补齐 | 埋点、trace 上下文、news/job 指标 |
+| P1 | 存储收尾 | news index 原子写、缓存清理、archive 按用户淘汰（DATA-01 存储锁已做） |
+| P1 | 前端健壮 | 错误可见、SSE 重连/controller 治理 |
+| P1 | news/job 性能 | 并发/分批、周月报复用、采集限流、同步 IO 转 to_thread |
+| P1 | 收尾项 | 会话锁 key、非流式 inflight、skill 注入面、画像锁/路径/缓存失效、队列上限/绑 conv、MD5 原子写、upload limit 5000、新功能测试 |
+| P2（本季度） | 运维/架构/文档 | 灰度链路、编排层合并、SSRF/cookie/采集合规、暴露面收敛（监控栈/browser-service/webhook）、密钥长尾加固（argon2id/备份排除.env/分享过期统一）、**文档工程剩余（C1 主README/C3 子系统成篇/C5 部署手册合并/C9-C10 清单脚本化与守卫）** |
 
-> 详细条目、证据与验收标准见 `docs/codeReview/2026-09-全域评审/01/03/04`；批次顺序以 03 号路线图为准。
+> 注：`--workers 1` 已一并缓解 Qoder 报告的 CON-01（多进程共享 Chroma）、CON-03（scheduler 重复）、OPS-01（Prometheus 多进程指标失真）等「多 worker 架构」类问题；若未来恢复多 worker，需先外置存储/Redis + Chroma client-server。
+> 详细条目、证据与验收标准见 `docs/codeReview/2026-09-全域评审/` 各报告；批次顺序以 03 号路线图为准。
 
 ---
 
