@@ -222,6 +222,22 @@ const Chat: React.FC = () => {
     ? [...currentMessages, { role: 'assistant' as const, content: streamingContent, isStreaming: true }]
     : currentMessages;
 
+  // 当前对话内的历史提问（用户侧输入），供右侧「历史提问」导航定位
+  const userQuestions = currentMessages
+    .map((m, idx) => ({ msg: m, idx }))
+    .filter((it) => it.msg.role === 'user');
+
+  // 滚动定位到消息流中某条提问（并短暂高亮）
+  const scrollToMessage = (idx: number) => {
+    const el = document.querySelector(`[data-msg-idx="${idx}"]`) as HTMLElement | null;
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.style.outline = '2px solid #1677ff';
+      setTimeout(() => { el.style.outline = ''; }, 1500);
+    }
+    setHistoryOpen(false);
+  };
+
   // ============ 复制 / 多选 / 导出 / 分享 ============
 
   const handleCopyMessage = async (msg: { role: string; content: string }, idx: number) => {
@@ -388,7 +404,7 @@ const Chat: React.FC = () => {
         <div
           className="history-nav-trigger"
           onClick={() => setHistoryOpen(true)}
-          title="历史对话"
+          title="历史提问"
         >
           <HistoryOutlined />
         </div>
@@ -450,6 +466,7 @@ const Chat: React.FC = () => {
             return (
               <div
                 key={idx}
+                data-msg-idx={idx}
                 style={{
                   display: 'flex',
                   flexDirection: 'column',
@@ -623,9 +640,9 @@ const Chat: React.FC = () => {
           </div>
         </div>
 
-        {/* 历史对话右侧导航（deepseek 风格）：右侧 Drawer */}
+        {/* 历史提问右侧导航（当前对话内用户提问）：右侧 Drawer */}
         <Drawer
-          title="历史对话"
+          title={`历史提问${currentConvId ? `（${userQuestions.length}）` : ''}`}
           placement="right"
           width={360}
           open={historyOpen}
@@ -633,69 +650,30 @@ const Chat: React.FC = () => {
           bodyStyle={{ padding: 0 }}
         >
           <List
-            dataSource={conversations}
-            renderItem={(conv) => (
+            dataSource={userQuestions}
+            renderItem={(it) => (
               <List.Item
-                onClick={() => { selectConversation(conv.conv_id); setHistoryOpen(false); }}
-                style={{
-                  cursor: 'pointer',
-                  padding: '10px 16px',
-                  background: currentConvId === conv.conv_id ? '#e6f4ff' : (conv.pinned ? '#fffbe6' : undefined),
-                  borderLeft: currentConvId === conv.conv_id ? '3px solid #1677ff' : '3px solid transparent',
-                }}
-                actions={[
-                  <span
-                    key="pin"
-                    onClick={(e) => { e.stopPropagation(); handleTogglePin(conv.conv_id, !!conv.pinned); }}
-                    style={{ cursor: 'pointer' }}
-                    title={conv.pinned ? '取消置顶' : '置顶'}
-                  >
-                    {conv.pinned
-                      ? <PushpinFilled style={{ color: '#faad14' }} />
-                      : <PushpinOutlined style={{ color: '#999' }} />}
-                  </span>,
-                  <Popconfirm title="确定删除？" onConfirm={() => handleDelete(conv.conv_id)} key="delete">
-                    <DeleteOutlined style={{ color: '#999' }} />
-                  </Popconfirm>,
-                ]}
+                onClick={() => scrollToMessage(it.idx)}
+                style={{ cursor: 'pointer', padding: '10px 16px' }}
               >
                 <List.Item.Meta
                   title={
-                    editingId === conv.conv_id ? (
-                      <Input
-                        size="small"
-                        value={editTitle}
-                        onChange={(e) => setEditTitle(e.target.value)}
-                        onBlur={() => handleRenameConfirm(conv.conv_id)}
-                        onPressEnter={() => handleRenameConfirm(conv.conv_id)}
-                        autoFocus
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    ) : (
-                      <Space>
-                        <Text
-                          ellipsis={{ tooltip: conv.title }}
-                          style={{ maxWidth: 220, cursor: 'pointer' }}
-                          onDoubleClick={() => handleRenameStart(conv.conv_id, conv.title)}
-                        >
-                          {conv.pinned ? '📌 ' : ''}{conv.title || '新对话'}
-                        </Text>
-                        <EditOutlined
-                          style={{ color: '#999', fontSize: 12, cursor: 'pointer' }}
-                          onClick={(e) => { e.stopPropagation(); handleRenameStart(conv.conv_id, conv.title); }}
-                        />
-                      </Space>
-                    )
+                    <Text
+                      ellipsis={{ tooltip: it.msg.content }}
+                      style={{ maxWidth: 300, cursor: 'pointer', fontSize: 13 }}
+                    >
+                      {it.msg.content}
+                    </Text>
                   }
                   description={
                     <Text type="secondary" style={{ fontSize: 12 }}>
-                      {conv.updated_at ? new Date(conv.updated_at).toLocaleString('zh-CN') : ''}
+                      第 {it.idx + 1} 条提问 · {it.msg.created_at ? new Date(it.msg.created_at).toLocaleString('zh-CN') : ''}
                     </Text>
                   }
                 />
               </List.Item>
             )}
-            locale={{ emptyText: '暂无对话' }}
+            locale={{ emptyText: '当前对话暂无提问' }}
           />
         </Drawer>
       </Content>
