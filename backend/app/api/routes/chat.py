@@ -33,6 +33,7 @@ from app.api.server import get_app_context
 from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
+from app.core.token_sink import reset_token_sink, set_token_sink
 from app.core.exceptions import SEKBError
 from app.core.logging import bind_context, clear_context, get_logger
 from app.core.metrics import record_chat_error, record_chat_metrics
@@ -713,32 +714,50 @@ async def chat_stream(
             )
             yield f"data: {init_thinking}\n\n".encode("utf-8")
 
-            # 每个图节点完成时，推送真实思考进度（B1）。
-            # 用 asyncio.Queue 在「跑图任务」与「SSE 输出」之间传递进度，实现真正流式。
-            progress_q: asyncio.Queue[str] = asyncio.Queue()
+            # 每个图节点完成时，推送真实思考进度（B1）；答案 token 也通过 token sink 回传（R2-06）。
+            # 用统一队列在「跑图任务」与「SSE 输出」之间传递事件，实现真流式。
+            out_q: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
 
             async def on_progress(node_name: str) -> None:
                 msg = _NODE_PROGRESS.get(node_name)
                 if msg:
-                    await progress_q.put(msg)
+                    await out_q.put(("thinking", msg))
 
-            run_task = asyncio.create_task(
-                _run_chat(ctx, request, user_id, on_progress=on_progress)
-            )
-            # 图运行期间，持续把进度队列里的思考事件推给前端
-            while not run_task.done():
-                try:
-                    msg = await asyncio.wait_for(progress_q.get(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    continue
-                payload = json.dumps({"type": "thinking", "content": msg}, ensure_ascii=False)
-                yield f"data: {payload}\n\n".encode("utf-8")
+            async def on_token(token: str) -> None:
+                if token:
+                    await out_q.put(("token", token))
 
-            # 图运行结束，排空剩余进度（如最后的「正在生成最终回答」）
-            while not progress_q.empty():
-                msg = progress_q.get_nowait()
-                payload = json.dumps({"type": "thinking", "content": msg}, ensure_ascii=False)
-                yield f"data: {payload}\n\n".encode("utf-8")
+            # 设置 token sink（contextvar），使 Executor 流式生成答案时逐 token 回传
+            sink_token = set_token_sink(on_token)
+
+            streamed_answer = False
+
+            def _yield_event(kind: str, content: str) -> bytes:
+                payload = json.dumps({"type": kind, "content": content}, ensure_ascii=False)
+                return f"data: {payload}\n\n".encode("utf-8")
+
+            try:
+                run_task = asyncio.create_task(
+                    _run_chat(ctx, request, user_id, on_progress=on_progress)
+                )
+                # 图运行期间，持续消费队列事件推给前端
+                while not run_task.done():
+                    try:
+                        kind, content = await asyncio.wait_for(out_q.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    if kind == "token":
+                        streamed_answer = True
+                    yield _yield_event(kind, content)
+
+                # 图运行结束，排空剩余事件（如最后的「正在生成最终回答」与尾部 token）
+                while not out_q.empty():
+                    kind, content = out_q.get_nowait()
+                    if kind == "token":
+                        streamed_answer = True
+                    yield _yield_event(kind, content)
+            finally:
+                reset_token_sink(sink_token)
 
             # 取结果（异常转为 error 事件）
             try:
@@ -775,8 +794,10 @@ async def chat_stream(
 
             # 逐 token 推送 + done 事件（包裹 try/except 确保流正确终止）
             try:
-                async for token_data in _stream_tokens(result["answer"]):
-                    yield f"data: {token_data}\n\n".encode("utf-8")
+                if not streamed_answer:
+                    # 答案未走 token sink（chitchat/clarify/降级兜底），按旧逻辑逐字推送
+                    async for token_data in _stream_tokens(result["answer"]):
+                        yield f"data: {token_data}\n\n".encode("utf-8")
 
                 meta = {
                     "conversation_id": result["conversation_id"],

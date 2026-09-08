@@ -361,6 +361,63 @@ class LLMFactory:
             )
             await self._record_call(record)
 
+    async def astream_with_stats(
+        self,
+        role: str,
+        messages: list[Any],
+        **kwargs: Any,
+    ):
+        """
+        带统计的流式调用（R2-06 真流式答案）。
+
+        逐 chunk 产出 token 文本；结束后按累计 token 记录一次统计。
+        不做 tenacity 重试（流式重试需重放整个流，成本高且易错），
+        调用方（Executor）在失败时自行兜底。
+        """
+        llm = self.get(role)
+        actual_model = self.get_actual_model(role)
+        is_degraded = self.is_degraded(role)
+        start_time = time.time()
+        chunks: list[str] = []
+        try:
+            async for chunk in llm.astream(messages, **kwargs):
+                text = chunk.content if hasattr(chunk, "content") else str(chunk)
+                if text:
+                    chunks.append(text)
+                    yield text
+        except Exception as e:
+            # 记录失败并重新抛出，让调用方兜底
+            await self._record_call(LLMCallRecord(
+                role=role,
+                model=actual_model,
+                configured_model=actual_model,
+                input_tokens=0,
+                output_tokens=0,
+                latency_ms=int((time.time() - start_time) * 1000),
+                cost_usd=0.0,
+                success=False,
+                retried=False,
+                retry_count=0,
+                degraded=is_degraded,
+                error=str(e),
+            ))
+            raise
+        # 成功：记录一次统计（token 用量通常无 usage_metadata，记为 0）
+        await self._record_call(LLMCallRecord(
+            role=role,
+            model=actual_model,
+            configured_model=actual_model,
+            input_tokens=0,
+            output_tokens=0,
+            latency_ms=int((time.time() - start_time) * 1000),
+            cost_usd=0.0,
+            success=True,
+            retried=False,
+            retry_count=0,
+            degraded=is_degraded,
+            error=None,
+        ))
+
     # ============================================================
     # Per-request 统计快照（P0-1 修复：避免全局统计污染）
     # ============================================================

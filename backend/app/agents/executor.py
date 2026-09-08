@@ -346,6 +346,26 @@ class ExecutorAgent(BaseAgent):
                 user_input=user_input,
                 task_plan=task_plan,
             )
+
+            # R2-06 真流式：若上层（SSE）设了 token sink，则流式生成并逐 token 回传
+            from app.core.token_sink import get_token_sink
+
+            sink = get_token_sink()
+            if sink is not None:
+                parts: list[str] = []
+                try:
+                    async for token in self.llm_factory.astream_with_stats(
+                        "executor", messages
+                    ):
+                        parts.append(token)
+                        await sink(token)
+                    return "".join(parts)
+                except Exception as e:
+                    self.logger.warning(
+                        "流式草稿生成失败，回退工具结果", error=str(e)
+                    )
+                    return tool_results or user_input
+
             response = await self.llm_factory.ainvoke_with_stats(
                 "executor", messages
             )
