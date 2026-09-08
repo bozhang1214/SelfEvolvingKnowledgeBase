@@ -551,10 +551,13 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
 
         include = include or ["documents", "metadatas"]
 
+        # 用 ChromaDB 原生 offset 分页（limit=limit, offset=offset），
+        # 而非 limit=limit+offset 再手动 skip（后者在大库上是 O(n²)，极慢）
         result = await asyncio.to_thread(
             self._collection.get,
             where=where_filter,
-            limit=limit + offset,
+            limit=limit,
+            offset=offset,
             include=include,  # 不加载 embeddings，避免大库慢查询超时
         )
 
@@ -565,8 +568,6 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
         metas = result.get("metadatas") or []
 
         for i in range(len(ids)):
-            if i < offset:
-                continue
             entries.append(
                 KnowledgeEntry.from_chroma_record(
                     doc_id=ids[i],
