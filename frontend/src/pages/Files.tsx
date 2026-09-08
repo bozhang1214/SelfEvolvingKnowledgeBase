@@ -17,7 +17,7 @@ import {
   type KnowledgeAnalysis,
 } from '@/services/file';
 import { logger } from '@/utils/logger';
-import { useUploadStore, readPendingFiles, clearPendingFiles } from '@/stores/upload';
+import { useUploadStore, readPendingFiles, clearPendingFiles, fileKey } from '@/stores/upload';
 
 // 支持的文件扩展名（与后端 FileProcessor 对齐）
 const SUPPORTED_EXTENSIONS = [
@@ -152,6 +152,8 @@ const Files: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
+  // 续传时勾选的文件路径集合（一次性：选中文件后即清除）
+  const resumeFilterRef = useRef<Set<string> | null>(null);
 
   const loadStatus = async () => {
     setStatusLoading(true);
@@ -223,34 +225,88 @@ const Files: React.FC = () => {
     loadSeries();
     loadFiles();
 
-    // 检测上次刷新/中断遗留的未完成上传，弹窗让用户确认是否继续
-    const pending = readPendingFiles();
-    if (pending.length === 0) return;
-    Modal.confirm({
-      title: `检测到 ${pending.length} 个未完成的上传`,
-      icon: null,
-      content: (
-        <div>
-          <p style={{ marginBottom: 6 }}>以下文件上次未上传完成：</p>
-          <div style={{ maxHeight: 140, overflow: 'auto', marginBottom: 8, background: '#fafafa', padding: '6px 10px', borderRadius: 6 }}>
-            {pending.map((n) => <div key={n} style={{ fontSize: 12 }}>· {n}</div>)}
+    // 检测上次刷新/中断遗留的未完成上传，弹窗让用户勾选需续传的文件
+    void (async () => {
+      const pending = readPendingFiles();
+      if (pending.length === 0) return;
+
+      // 过滤掉已经入库的文件（pending 里可能残留「已成功但未及时移除」的条目）
+      let uploadedNames = new Set<string>();
+      try {
+        const uploaded = await listFiles();
+        uploadedNames = new Set(uploaded.map((f) => f.file_name));
+      } catch {
+        // 拉取失败则不过滤，按全部未完成处理
+      }
+      const todo = pending.filter((p) => !uploadedNames.has(p));
+      if (todo.length === 0) {
+        clearPendingFiles();
+        return;
+      }
+
+      // 复选框状态（受控于 onChange，闭包变量在 onOk 时读取）
+      const checked = new Set(todo);
+      const hasFolderPaths = todo.some((p) => p.includes('/'));
+
+      Modal.confirm({
+        title: `检测到 ${todo.length} 个未完成的上传`,
+        icon: null,
+        width: 560,
+        content: (
+          <div>
+            <p style={{ marginBottom: 6 }}>以下文件上次未上传完成，勾选需要继续上传的文件：</p>
+            <div style={{ maxHeight: 220, overflow: 'auto', marginBottom: 8, background: '#fafafa', padding: '8px 10px', borderRadius: 6 }}>
+              {todo.map((n) => (
+                <div key={n} style={{ margin: '3px 0' }}>
+                  <Checkbox
+                    defaultChecked
+                    onChange={(e) => {
+                      if (e.target.checked) checked.add(n);
+                      else checked.delete(n);
+                    }}
+                  >
+                    <span style={{ fontSize: 13, wordBreak: 'break-all' }}>{n}</span>
+                  </Checkbox>
+                </div>
+              ))}
+            </div>
+            <p style={{ color: '#999', fontSize: 12, marginBottom: 0 }}>
+              文件内容无法跨刷新保存，需重新选择对应文件后继续上传（仅上传勾选的文件）
+            </p>
           </div>
-          <p style={{ color: '#999', fontSize: 12, marginBottom: 0 }}>
-            文件内容无法跨刷新保存，需你重新选择这些文件后继续上传
-          </p>
-        </div>
-      ),
-      okText: '重新选择并上传',
-      cancelText: '忽略',
-      onOk: () => { fileInputRef.current?.click(); },
-      onCancel: () => { clearPendingFiles(); },
-    });
+        ),
+        okText: '选择文件并上传',
+        cancelText: '忽略',
+        onOk: () => {
+          if (checked.size === 0) {
+            message.warning('未勾选任何文件');
+            return;
+          }
+          resumeFilterRef.current = new Set(checked);
+          // 文件夹上传（路径含 /）用文件夹选择器以保留相对路径；单文件用文件选择器
+          if (hasFolderPaths) folderInputRef.current?.click();
+          else fileInputRef.current?.click();
+        },
+        onCancel: () => {
+          resumeFilterRef.current = null;
+          clearPendingFiles();
+        },
+      });
+    })();
   }, []);
 
-  /** 处理一批选中的文件（文件/文件夹展开后的统一入口）。 */
-  const handleFilesSelected = (files: File[]) => {
-    if (files.length > 0) {
-      void handleBatchUpload(files);
+  /** 处理一批选中的文件（文件/文件夹展开后的统一入口）；filter 用于续传时只上传勾选的文件。 */
+  const handleFilesSelected = (files: File[], filter?: Set<string>) => {
+    let toUpload = files;
+    if (filter) {
+      toUpload = files.filter((f) => filter.has(fileKey(f)));
+      if (toUpload.length === 0) {
+        message.warning('所选文件中没有勾选需要续传的文件，请重新选择');
+        return;
+      }
+    }
+    if (toUpload.length > 0) {
+      void handleBatchUpload(toUpload);
     } else {
       message.warning('未选择任何文件');
     }
@@ -261,6 +317,7 @@ const Files: React.FC = () => {
     e.preventDefault();
     setDragOver(false);
     if (uploading) return;
+    resumeFilterRef.current = null; // 拖拽是新的上传意图，清除续传过滤
     const items = e.dataTransfer?.items;
     if (items && items.length > 0) {
       // 优先用 DataTransferItemList（webkitGetAsEntry）递归展开文件夹
@@ -294,11 +351,12 @@ const Files: React.FC = () => {
       supported.map(async (f) => ({ file: f, hash: await computeFileHash(f) }))
     );
 
-    // 分类：同名同内容（可跳过）/ 同名不同内容（需覆盖）
+    // 分类：同名同内容（可跳过）/ 同名不同内容（需覆盖）。
+    // 用相对路径（fileKey）匹配后端入库的 file_name，文件夹上传时才是完整路径而非 basename。
     const sameContent: File[] = [];
     const sameNameDiff: File[] = [];
     for (const { file, hash } of withHash) {
-      const existing = existingByName.get(file.name);
+      const existing = existingByName.get(fileKey(file));
       if (!existing) continue;
       if (hash && existing.md5 && hash === existing.md5) {
         sameContent.push(file);
@@ -573,7 +631,9 @@ const Files: React.FC = () => {
           accept={SUPPORTED_EXTENSIONS.join(',')}
           style={{ display: 'none' }}
           onChange={(e) => {
-            handleFilesSelected(Array.from(e.target.files || []));
+            const filter = resumeFilterRef.current;
+            resumeFilterRef.current = null;
+            handleFilesSelected(Array.from(e.target.files || []), filter ?? undefined);
             e.target.value = '';
           }}
         />
@@ -586,7 +646,9 @@ const Files: React.FC = () => {
           multiple
           style={{ display: 'none' }}
           onChange={(e) => {
-            handleFilesSelected(Array.from(e.target.files || []));
+            const filter = resumeFilterRef.current;
+            resumeFilterRef.current = null;
+            handleFilesSelected(Array.from(e.target.files || []), filter ?? undefined);
             e.target.value = '';
           }}
         />
@@ -750,7 +812,6 @@ const Files: React.FC = () => {
         ) : (
           <Tree
             treeData={buildSeriesTree(seriesGroups)}
-            defaultExpandedKeys={seriesGroups.map((g) => g.series)}
             showLine
             blockNode
             style={{ background: 'transparent' }}

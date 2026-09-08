@@ -16,6 +16,14 @@ export interface FileTask {
 // File 对象刷新即失，恢复时让用户重新选择这些文件再上传）
 const PENDING_KEY = 'sekb_upload_pending';
 
+/**
+ * 文件在知识库中的唯一标识：优先用相对路径（文件夹上传时浏览器提供 webkitRelativePath，
+ * 与后端入库的 file_name 一致），单个文件上传则退回 basename。
+ */
+export function fileKey(file: File): string {
+  return file.webkitRelativePath || file.name;
+}
+
 export function readPendingFiles(): string[] {
   try {
     const raw = JSON.parse(localStorage.getItem(PENDING_KEY) || '[]');
@@ -73,8 +81,8 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       status: 'pending',
     }));
 
-    // 记录未完成文件（刷新恢复用）：成功上传后才从列表移除
-    const pendingNames = new Set(files.map((f) => f.name));
+    // 记录未完成文件（刷新恢复用）：成功上传后才从列表移除；用相对路径标识（与后端 file_name 对齐）
+    const pendingNames = new Set(files.map((f) => fileKey(f)));
     writePendingFiles([...pendingNames]);
 
     set({ tasks: newTasks, uploading: true, _abort: false });
@@ -103,7 +111,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       }));
 
       try {
-        const isDup = existingNames.has(task.file.name);
+        const isDup = existingNames.has(fileKey(task.file));
         const { promise } = uploadFilePromise(
           task.file,
           (pct) => {
@@ -124,7 +132,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         if (result.status === 'success' || result.status === 'partial') {
           successCount++;
           // 成功上传后从「未完成」列表移除
-          pendingNames.delete(task.file.name);
+          pendingNames.delete(fileKey(task.file));
           writePendingFiles([...pendingNames]);
         }
       } catch (err: any) {
