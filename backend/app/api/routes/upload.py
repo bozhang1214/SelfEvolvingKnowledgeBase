@@ -62,6 +62,9 @@ _MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
 # 图片原图保存目录
 _IMAGE_UPLOAD_DIR = Path("data/uploads/images")
 
+# 文档原始文件保存目录（L1 兜底：ChromaDB 全毁时可用原始文件重灌）
+_DOCUMENT_UPLOAD_DIR = Path("data/uploads/documents")
+
 # 已上传文件内容 MD5 索引（file_name -> md5），用于「同名同内容」跳过
 _MD5_FILE = Path("data/uploaded_md5.json")
 
@@ -126,6 +129,25 @@ def _save_image_original(src_path: str, file_name: str) -> str:
     dest_path = _IMAGE_UPLOAD_DIR / dest_name
     shutil.copy2(src_path, dest_path)
     logger.info("图片原图已保存", file_name=file_name, saved_path=str(dest_path))
+    return str(dest_path)
+
+
+def _safe_rel_path(file_name: str) -> Path:
+    """把上传文件名安全地转为相对路径，拒绝绝对路径与 ``..`` 穿越。"""
+    p = Path(file_name)
+    if p.is_absolute():
+        p = Path(p.name)
+    parts = [part for part in p.parts if part not in ("", ".", "..")]
+    return Path(*parts) if parts else Path("unnamed")
+
+
+def _save_document_original(src_path: str, file_name: str) -> str:
+    """保存文档原始文件到持久化目录（按相对路径建子目录），返回保存路径。"""
+    _DOCUMENT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    dest_path = _DOCUMENT_UPLOAD_DIR / _safe_rel_path(file_name)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_path, dest_path)
+    logger.info("文档原文件已保存", file_name=file_name, saved_path=str(dest_path))
     return str(dest_path)
 
 
@@ -284,13 +306,18 @@ async def _process_and_ingest(
     image_config = _get_image_config()
     processor = FileProcessor(image_config=image_config)
 
-    # 图片文件：保存原图到持久化目录
+    # 图片文件：保存原图到持久化目录；文档文件：保存原始文件（L1 兜底）
     is_image = _is_image_file(file_name)
     if is_image:
         try:
             _save_image_original(file_path, file_name)
         except Exception as e:
             logger.warning("图片原图保存失败", file_name=file_name, error=str(e))
+    else:
+        try:
+            _save_document_original(file_path, file_name)
+        except Exception as e:
+            logger.warning("文档原文件保存失败", file_name=file_name, error=str(e))
 
     result = await processor.process_file(
         file_path=file_path,

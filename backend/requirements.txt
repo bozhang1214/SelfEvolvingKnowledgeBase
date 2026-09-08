@@ -70,7 +70,11 @@ jieba>=0.42.0                      # 中文分词
 rank-bm25>=0.2.0                   # BM25 关键词检索（RAG 混合检索）
 
 # ============ 向量库与 Embedding（Phase 2）============
-chromadb>=0.5.0                    # 向量数据库（L3 知识库）
+# 锁死版本：1.5.9 为当前最新版，但存在 HNSW bloat-guard 压缩 bug
+# （大量写入后压缩失败，报 "Failed to apply logs to the hnsw segment writer"）。
+# 官方暂无修复版，故用 L1 原始文件落盘 + L2 每日备份 + 健康自检兜底；
+# 出现官方修复版后再升级并移除本条说明。
+chromadb==1.5.9                    # 向量数据库（L3 知识库）
 sentence-transformers>=3.0.0       # 本地 Embedding 模型
 
 # ============ 数据库（Phase 2）============
