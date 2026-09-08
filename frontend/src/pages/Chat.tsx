@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Layout, List, Input, Button, Typography, Space, Spin, Popconfirm, Checkbox, message as antMsg,
+  Layout, List, Input, Button, Typography, Space, Spin, Popconfirm, Checkbox, Popover, message as antMsg,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, SendOutlined, StopOutlined,
   PushpinOutlined, PushpinFilled, CopyOutlined, CheckOutlined,
-  ShareAltOutlined, DownloadOutlined, CheckSquareOutlined,
+  ShareAltOutlined, DownloadOutlined, CheckSquareOutlined, HistoryOutlined,
 } from '@ant-design/icons';
 import { useChatStore } from '@/stores/chat';
 import { logger } from '@/utils/logger';
@@ -96,8 +96,9 @@ function joinSelectedMessages(msgs: Message[]): string {
 const Chat: React.FC = () => {
   const {
     conversations, currentConvId, messages, isStreaming, streamingContent, thinkingContent,
+    pendingQueue,
     loadConversations, selectConversation, createConversation,
-    deleteConversation, renameConversation, togglePin, sendMessage, cancelStream,
+    deleteConversation, renameConversation, togglePin, sendMessage, cancelStream, clearQueue,
   } = useChatStore();
 
   const [inputValue, setInputValue] = useState('');
@@ -408,6 +409,58 @@ const Chat: React.FC = () => {
                 </>
               ) : (
                 <>
+                  <Popover
+                    trigger="hover"
+                    placement="bottomRight"
+                    overlayStyle={{ width: 300 }}
+                    title="历史会话（点击切换）"
+                    content={
+                      <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                        {conversations.length === 0 ? (
+                          <Text type="secondary" style={{ fontSize: 12 }}>暂无对话</Text>
+                        ) : (
+                          <List
+                            size="small"
+                            dataSource={conversations}
+                            renderItem={(conv) => (
+                              <List.Item
+                                onClick={() => selectConversation(conv.conv_id)}
+                                style={{
+                                  cursor: 'pointer',
+                                  background: currentConvId === conv.conv_id ? '#e6f4ff' : undefined,
+                                  paddingLeft: 8,
+                                }}
+                                actions={[
+                                  <span
+                                    key="pin"
+                                    onClick={(e) => { e.stopPropagation(); handleTogglePin(conv.conv_id, !!conv.pinned); }}
+                                    style={{ cursor: 'pointer' }}
+                                    title={conv.pinned ? '取消置顶' : '置顶'}
+                                  >
+                                    {conv.pinned
+                                      ? <PushpinFilled style={{ color: '#faad14' }} />
+                                      : <PushpinOutlined style={{ color: '#999' }} />}
+                                  </span>,
+                                  <Popconfirm title="确定删除？" onConfirm={() => handleDelete(conv.conv_id)} key="del">
+                                    <DeleteOutlined style={{ color: '#999' }} />
+                                  </Popconfirm>,
+                                ]}
+                              >
+                                <Text
+                                  ellipsis={{ tooltip: conv.title }}
+                                  style={{ maxWidth: 170, cursor: 'pointer', fontSize: 13 }}
+                                >
+                                  {conv.pinned ? '📌 ' : ''}{conv.title || '新对话'}
+                                </Text>
+                              </List.Item>
+                            )}
+                          />
+                        )}
+                      </div>
+                    }
+                  >
+                    <Button size="small" icon={<HistoryOutlined />}>历史会话</Button>
+                  </Popover>
                   <Button size="small" icon={<CheckSquareOutlined />} onClick={enterMultiSelect}>多选</Button>
                   <Button size="small" icon={<DownloadOutlined />} onClick={handleExport}>导出</Button>
                   <Button size="small" icon={<ShareAltOutlined />} loading={sharing} onClick={handleShare}>分享</Button>
@@ -550,30 +603,39 @@ const Chat: React.FC = () => {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+              placeholder={isStreaming ? '回复进行中，输入将进入队列（结束后自动发送）' : '输入消息，Enter 发送，Shift+Enter 换行'}
               autoSize={{ minRows: 2, maxRows: 6 }}
-              disabled={isStreaming}
             />
-            {isStreaming ? (
+            {isStreaming && (
               <Button
                 danger
                 icon={<StopOutlined />}
-                onClick={handleStopStream}
+                onClick={() => {
+                  clearQueue();
+                  handleStopStream();
+                }}
                 style={{ height: 'auto' }}
               >
                 停止
               </Button>
-            ) : (
-              <Button
-                type="primary"
-                icon={<SendOutlined />}
-                onClick={handleSend}
-                style={{ height: 'auto' }}
-              >
-                发送
-              </Button>
             )}
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              onClick={handleSend}
+              disabled={!inputValue.trim()}
+              style={{ height: 'auto' }}
+            >
+              {isStreaming ? '排队' : '发送'}
+            </Button>
           </Space.Compact>
+          {isStreaming && (
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
+              {pendingQueue.length > 0
+                ? `回复进行中 · 已排队 ${pendingQueue.length} 条，回复结束后自动发送`
+                : '回复进行中，输入的消息会自动排队发送（点「停止」取消）'}
+            </Text>
+          )}
         </div>
       </Content>
 

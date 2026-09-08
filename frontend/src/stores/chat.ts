@@ -9,6 +9,10 @@ interface ChatState {
   isStreaming: boolean;
   streamingContent: string;
   thinkingContent: string;
+  /** 排队待发送的消息内容（回复进行中时新输入进入队列，结束后自动发送） */
+  pendingQueue: string[];
+  /** 是否正在从队列里逐条发送（用于显示「已排队 N 条」） */
+  queueSending: boolean;
 
   loadConversations: () => Promise<void>;
   selectConversation: (convId: string) => Promise<void>;
@@ -18,6 +22,8 @@ interface ChatState {
   togglePin: (convId: string, pinned: boolean) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   cancelStream: () => void;
+  flushQueue: () => void;
+  clearQueue: () => void;
   addMessage: (convId: string, message: Message) => void;
 }
 
@@ -28,6 +34,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isStreaming: false,
   streamingContent: '',
   thinkingContent: '',
+  pendingQueue: [],
+  queueSending: false,
 
   loadConversations: async () => {
     try {
@@ -124,8 +132,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sendMessage: async (content: string) => {
     const { currentConvId, conversations, isStreaming } = get();
 
-    // 防止重复发送
-    if (isStreaming) return;
+    // 回复进行中：新输入进入队列，结束后自动发送，避免误打断
+    if (isStreaming) {
+      set((state) => ({
+        pendingQueue: [...state.pendingQueue, content],
+        queueSending: true,
+      }));
+      return;
+    }
 
     let convId = currentConvId || '';
 
@@ -226,6 +240,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // 刷新会话列表，让新对话出现在侧边栏
         // （首次发消息时后端自动创建会话，列表里还没有这条记录）
         void get().loadConversations();
+        // 当前回复结束，自动发送排队的下一条
+        get().flushQueue();
       },
       // onError
       (error) => {
@@ -245,6 +261,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             thinkingContent: '',
           };
         });
+        // 错误后若还有排队消息，继续发送
+        get().flushQueue();
       },
       // onThinking
       (content) => {
@@ -256,11 +274,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
     (window as any).__stream_controller = controller;
   },
 
+  flushQueue: () => {
+    const { isStreaming, pendingQueue } = get();
+    if (isStreaming || pendingQueue.length === 0) {
+      if (!isStreaming && pendingQueue.length === 0) {
+        set({ queueSending: false });
+      }
+      return;
+    }
+    const next = pendingQueue[0];
+    set((state) => ({ pendingQueue: state.pendingQueue.slice(1) }));
+    void get().sendMessage(next);
+  },
+
+  clearQueue: () => {
+    set({ pendingQueue: [], queueSending: false });
+  },
+
   cancelStream: () => {
     const controller = (window as any).__stream_controller;
     if (controller) {
       controller.abort();
-      set({ isStreaming: false, streamingContent: '', thinkingContent: '' });
+      // 停止：取消当前流，同时清空排队队列（一次停止，全部停止）
+      set({ isStreaming: false, streamingContent: '', thinkingContent: '', pendingQueue: [], queueSending: false });
     }
   },
 

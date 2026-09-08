@@ -43,6 +43,9 @@ router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 # Phase 1 用户 ID 固定为 "default"
 _DEFAULT_USER_ID = "default"
 
+# 同一 (user, conversation) 正在流式回复的会话集合：防止多标签页/并发请求误打断
+_conv_inflight: set[str] = set()
+
 
 # ============================================================
 # 请求 / 响应模型
@@ -361,73 +364,84 @@ async def chat_stream(
     避免 sse-starlette 的缓冲行为导致浏览器端无法流式接收。
     """
     async def event_generator() -> AsyncIterator[bytes]:
-        # 先推送 thinking 事件，让前端立即显示"思考中"提示
-        # （_run_chat 期间前端无反馈，避免用户以为卡死）
-        thinking_payload = json.dumps(
-            {"type": "thinking", "content": "正在思考..."},
-            ensure_ascii=False,
-        )
-        yield f"data: {thinking_payload}\n\n".encode("utf-8")
-
-        try:
-            result = await _run_chat(ctx, request, user_id)
-        except HTTPException as e:
-            record_chat_error()
-            payload = json.dumps(
-                {"type": "error", "detail": e.detail}, ensure_ascii=False
-            )
-            yield f"data: {payload}\n\n".encode("utf-8")
-            return
-        except SEKBError as e:
-            logger.warning("流式聊天处理失败", error=str(e), exc_info=True)
-            record_chat_error()
-            payload = json.dumps(
-                {"type": "error", "detail": e.message}, ensure_ascii=False
-            )
-            yield f"data: {payload}\n\n".encode("utf-8")
-            return
-        except Exception as e:
-            logger.error("流式聊天意外异常", error=str(e), exc_info=True)
-            record_chat_error()
-            payload = json.dumps(
-                {"type": "error", "detail": f"内部错误: {e}"}, ensure_ascii=False
-            )
-            yield f"data: {payload}\n\n".encode("utf-8")
-            return
-
-        # 记录 Prometheus 指标（埋点失败不影响主流程）
-        try:
-            record_chat_metrics(result)
-        except Exception as e:
-            logger.warning("流式埋点失败", error=str(e))
-
-        # 逐 token 推送 + done 事件（包裹 try/except 确保流正确终止）
-        try:
-            async for token_data in _stream_tokens(result["answer"]):
-                yield f"data: {token_data}\n\n".encode("utf-8")
-
-            # done 事件携带元信息
-            meta = {
-                "conversation_id": result["conversation_id"],
-                "intent": result["intent"],
-                "intent_confidence": result["intent_confidence"],
-                "metrics": result["metrics"],
-                "trace_id": result["trace_id"],
-                "latency_ms": result["latency_ms"],
-                "ingest_status": result.get("ingest_status", "disabled"),
-                "ingest_reason": result.get("ingest_reason", ""),
-            }
-            done_payload = json.dumps(
-                {"type": "done", "meta": meta}, ensure_ascii=False
-            )
-            yield f"data: {done_payload}\n\n".encode("utf-8")
-        except Exception as e:
-            logger.error("流式推送异常", error=str(e), exc_info=True)
-            payload = json.dumps(
-                {"type": "error", "detail": f"流式推送异常: {e}"},
+        # 同一会话并发流式回复防护：配合前端「对话排队」，避免多标签页/重复请求误打断
+        lock_key = f"{user_id}|{request.conversation_id or ''}"
+        if lock_key in _conv_inflight:
+            err = json.dumps(
+                {"type": "error", "detail": "该会话正在回复中，请稍后再试（前端已自动排队）"},
                 ensure_ascii=False,
             )
-            yield f"data: {payload}\n\n".encode("utf-8")
+            yield f"data: {err}\n\n".encode("utf-8")
+            return
+        _conv_inflight.add(lock_key)
+        try:
+            # 先推送 thinking 事件，让前端立即显示"思考中"提示
+            thinking_payload = json.dumps(
+                {"type": "thinking", "content": "正在思考..."},
+                ensure_ascii=False,
+            )
+            yield f"data: {thinking_payload}\n\n".encode("utf-8")
+
+            try:
+                result = await _run_chat(ctx, request, user_id)
+            except HTTPException as e:
+                record_chat_error()
+                payload = json.dumps(
+                    {"type": "error", "detail": e.detail}, ensure_ascii=False
+                )
+                yield f"data: {payload}\n\n".encode("utf-8")
+                return
+            except SEKBError as e:
+                logger.warning("流式聊天处理失败", error=str(e), exc_info=True)
+                record_chat_error()
+                payload = json.dumps(
+                    {"type": "error", "detail": e.message}, ensure_ascii=False
+                )
+                yield f"data: {payload}\n\n".encode("utf-8")
+                return
+            except Exception as e:
+                logger.error("流式聊天意外异常", error=str(e), exc_info=True)
+                record_chat_error()
+                payload = json.dumps(
+                    {"type": "error", "detail": f"内部错误: {e}"}, ensure_ascii=False
+                )
+                yield f"data: {payload}\n\n".encode("utf-8")
+                return
+
+            # 记录 Prometheus 指标（埋点失败不影响主流程）
+            try:
+                record_chat_metrics(result)
+            except Exception as e:
+                logger.warning("流式埋点失败", error=str(e))
+
+            # 逐 token 推送 + done 事件（包裹 try/except 确保流正确终止）
+            try:
+                async for token_data in _stream_tokens(result["answer"]):
+                    yield f"data: {token_data}\n\n".encode("utf-8")
+
+                meta = {
+                    "conversation_id": result["conversation_id"],
+                    "intent": result["intent"],
+                    "intent_confidence": result["intent_confidence"],
+                    "metrics": result["metrics"],
+                    "trace_id": result["trace_id"],
+                    "latency_ms": result["latency_ms"],
+                    "ingest_status": result.get("ingest_status", "disabled"),
+                    "ingest_reason": result.get("ingest_reason", ""),
+                }
+                done_payload = json.dumps(
+                    {"type": "done", "meta": meta}, ensure_ascii=False
+                )
+                yield f"data: {done_payload}\n\n".encode("utf-8")
+            except Exception as e:
+                logger.error("流式推送异常", error=str(e), exc_info=True)
+                payload = json.dumps(
+                    {"type": "error", "detail": f"流式推送异常: {e}"},
+                    ensure_ascii=False,
+                )
+                yield f"data: {payload}\n\n".encode("utf-8")
+        finally:
+            _conv_inflight.discard(lock_key)
 
     return StreamingResponse(
         event_generator(),
