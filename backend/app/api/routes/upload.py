@@ -85,10 +85,10 @@ def _save_md5_index(data: dict[str, str]) -> None:
     _MD5_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _record_md5(file_name: str, md5: str) -> None:
-    """记录某文件的 MD5（覆盖同名旧值）。"""
+def _record_md5(file_name: str, md5: str, user_id: str) -> None:
+    """记录某文件的 MD5（按用户隔离，覆盖同用户同名旧值）。"""
     data = _load_md5_index()
-    data[file_name] = md5
+    data[f"{user_id}|{file_name}"] = md5
     _save_md5_index(data)
 
 
@@ -119,14 +119,15 @@ def _is_image_file(file_name: str) -> bool:
     return ext in SUPPORTED_IMAGE_EXTENSIONS
 
 
-def _save_image_original(src_path: str, file_name: str) -> str:
-    """保存图片原图到持久化目录，返回保存后的路径。"""
-    _IMAGE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+def _save_image_original(src_path: str, file_name: str, user_id: str) -> str:
+    """保存图片原图到持久化目录（按用户隔离），返回保存后的路径。"""
+    dest_dir = _IMAGE_UPLOAD_DIR / user_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
     # 避免文件名冲突：添加时间戳前缀
     import time
     timestamp = int(time.time())
     dest_name = f"{timestamp}_{file_name}"
-    dest_path = _IMAGE_UPLOAD_DIR / dest_name
+    dest_path = dest_dir / dest_name
     shutil.copy2(src_path, dest_path)
     logger.info("图片原图已保存", file_name=file_name, saved_path=str(dest_path))
     return str(dest_path)
@@ -141,10 +142,9 @@ def _safe_rel_path(file_name: str) -> Path:
     return Path(*parts) if parts else Path("unnamed")
 
 
-def _save_document_original(src_path: str, file_name: str) -> str:
-    """保存文档原始文件到持久化目录（按相对路径建子目录），返回保存路径。"""
-    _DOCUMENT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    dest_path = _DOCUMENT_UPLOAD_DIR / _safe_rel_path(file_name)
+def _save_document_original(src_path: str, file_name: str, user_id: str) -> str:
+    """保存文档原始文件到持久化目录（按用户 + 相对路径建子目录），返回保存路径。"""
+    dest_path = _DOCUMENT_UPLOAD_DIR / user_id / _safe_rel_path(file_name)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src_path, dest_path)
     logger.info("文档原文件已保存", file_name=file_name, saved_path=str(dest_path))
@@ -310,12 +310,12 @@ async def _process_and_ingest(
     is_image = _is_image_file(file_name)
     if is_image:
         try:
-            _save_image_original(file_path, file_name)
+            _save_image_original(file_path, file_name, user_id)
         except Exception as e:
             logger.warning("图片原图保存失败", file_name=file_name, error=str(e))
     else:
         try:
-            _save_document_original(file_path, file_name)
+            _save_document_original(file_path, file_name, user_id)
         except Exception as e:
             logger.warning("文档原文件保存失败", file_name=file_name, error=str(e))
 
@@ -585,7 +585,7 @@ async def upload_file(
         )
         # 入库成功（含部分成功）后记录 MD5，供后续「同名同内容」跳过判断
         if result.status in ("success", "partial"):
-            _record_md5(file_name, md5)
+            _record_md5(file_name, md5, user_id)
         return result
     except HTTPException:
         raise
@@ -804,10 +804,10 @@ async def list_files(user_id: str = Depends(get_current_user)) -> dict[str, Any]
 
     result = sorted(files.values(), key=lambda x: x.get("uploaded_at", ""), reverse=True)
 
-    # 合并 MD5（用于前端「同名同内容」跳过判断）
+    # 合并 MD5（用于前端「同名同内容」跳过判断，按用户隔离）
     md5_index = _load_md5_index()
     for f in result:
-        f["md5"] = md5_index.get(f.get("file_name", ""), "")
+        f["md5"] = md5_index.get(f"{user_id}|{f.get('file_name', '')}", "")
 
     return {"files": result, "count": len(result)}
 
