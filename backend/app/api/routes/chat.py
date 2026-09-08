@@ -105,6 +105,68 @@ def _extract_state_dict(final_state: Any) -> dict[str, Any]:
         return {}
 
 
+async def _build_job_analysis_context(user_id: str) -> str:
+    """
+    读取用户近期的职位分析结果（存档报告 + 市场概况 + 最近采集职位），
+    返回给「应聘助手」的简洁注入上下文，实现与职位分析模块的数据共享。
+
+    任何读取/解析失败均静默跳过，返回可能为空串的摘要。
+    """
+    parts: list[str] = []
+    try:
+        from app.agents.job import archive, market
+
+        # 1. 最近存档分析报告（batch 优先，取最近 2 份）
+        reports = archive.list_reports(user_id)
+        for rep in (reports or [])[:2]:
+            full = archive.get_report(user_id, rep["id"])
+            if not full:
+                continue
+            r = full.get("report") or {}
+            lines = [f"### 职位分析：{full.get('title') or rep.get('title')}"]
+            if r.get("keyword") or r.get("city"):
+                lines.append(
+                    f"- 关键词：{r.get('keyword','')} · 城市：{r.get('city','')} · 职位 {r.get('job_count','')} 个"
+                )
+            # 热门方向 Top3
+            th = (r.get("market") or {}).get("track_heatmap") or []
+            if th:
+                lines.append(
+                    "- 热门方向：" + "；".join(
+                        f"{t.get('track','')}({t.get('job_count','')}岗/{t.get('salary','')})" for t in th[:3]
+                    )
+                )
+            # 需补知识 Top3
+            ki = (r.get("knowledge_iteration") or {}).get("foundation") or []
+            if ki:
+                lines.append(
+                    "- 建议补强：" + "、".join(
+                        f"{t.get('topic','')}" for t in ki[:3]
+                    )
+                )
+            # 代表职位 Top4
+            jobs = r.get("jobs") or []
+            if jobs:
+                lines.append(
+                    "- 代表职位：" + "；".join(
+                        f"{j.get('title','')}@{j.get('company','')} {j.get('salary','')}" for j in jobs[:4]
+                    )
+                )
+            parts.append("\n".join(lines))
+
+        # 2. 缓存的市场报告概况（「一键分析市场」结果）
+        rep = market.get_cached_report(user_id)
+        if rep:
+            overview = rep.get("overview") or rep.get("summary") or rep.get("highlights")
+            if isinstance(overview, str) and overview:
+                parts.append("【近期职位市场概况】\n" + overview[:600])
+
+    except Exception as e:
+        logger.warning("读取职位分析结果失败", error=str(e))
+
+    return "\n\n".join(parts)
+
+
 async def _build_skill_context(ctx: AppContext, user_id: str, skill: str) -> str:
     """
     构建技能内置上下文，注入到本次 LLM 输入（不写入会话历史、不污染用户消息）。
@@ -150,17 +212,10 @@ async def _build_skill_context(ctx: AppContext, user_id: str, skill: str) -> str
             if jp.keywords:
                 lines.append("- 关注技术栈：" + "、".join(jp.keywords))
             parts.append("\n".join(lines))
-        # 近期职位市场概况
-        try:
-            from app.agents.job import market
-
-            rep = market.get_cached_report(user_id)
-            if rep:
-                overview = rep.get("overview") or rep.get("summary") or rep.get("highlights")
-                if isinstance(overview, str) and overview:
-                    parts.append("【近期职位市场概况】\n" + overview[:600])
-        except Exception as e:
-            logger.warning("skill 上下文：读取职位市场概况失败", error=str(e))
+        # 近期职位分析结果（与职位分析模块共享数据：存档报告 + 市场概况 + 最近采集职位）
+        job_ctx = await _build_job_analysis_context(user_id)
+        if job_ctx:
+            parts.append("【近期职位分析结果】\n" + job_ctx)
 
     elif skill == "科技资讯助手":
         if profile and profile.news_interests:
