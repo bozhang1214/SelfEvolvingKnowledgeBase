@@ -713,19 +713,36 @@ async def chat_stream(
             )
             yield f"data: {init_thinking}\n\n".encode("utf-8")
 
-            # 每个图节点完成时，推送真实思考进度（B1）
+            # 每个图节点完成时，推送真实思考进度（B1）。
+            # 用 asyncio.Queue 在「跑图任务」与「SSE 输出」之间传递进度，实现真正流式。
+            progress_q: asyncio.Queue[str] = asyncio.Queue()
+
             async def on_progress(node_name: str) -> None:
                 msg = _NODE_PROGRESS.get(node_name)
-                if not msg:
-                    return
-                payload = json.dumps(
-                    {"type": "thinking", "content": msg},
-                    ensure_ascii=False,
-                )
+                if msg:
+                    await progress_q.put(msg)
+
+            run_task = asyncio.create_task(
+                _run_chat(ctx, request, user_id, on_progress=on_progress)
+            )
+            # 图运行期间，持续把进度队列里的思考事件推给前端
+            while not run_task.done():
+                try:
+                    msg = await asyncio.wait_for(progress_q.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+                payload = json.dumps({"type": "thinking", "content": msg}, ensure_ascii=False)
                 yield f"data: {payload}\n\n".encode("utf-8")
 
+            # 图运行结束，排空剩余进度（如最后的「正在生成最终回答」）
+            while not progress_q.empty():
+                msg = progress_q.get_nowait()
+                payload = json.dumps({"type": "thinking", "content": msg}, ensure_ascii=False)
+                yield f"data: {payload}\n\n".encode("utf-8")
+
+            # 取结果（异常转为 error 事件）
             try:
-                result = await _run_chat(ctx, request, user_id, on_progress=on_progress)
+                result = run_task.result()
             except HTTPException as e:
                 record_chat_error()
                 payload = json.dumps(
