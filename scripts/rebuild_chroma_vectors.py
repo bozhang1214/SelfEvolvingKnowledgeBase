@@ -112,6 +112,12 @@ def main() -> int:
     _log(f"重嵌入完成，耗时 {time.time() - t0:.1f}s，维度={len(embeddings[0]) if embeddings else 0}")
 
     # 4. 重建 collection
+    # 元数据兜底清洗：ChromaDB 只接受 str/int/float/bool，把 None 转成空串
+    metas = [
+        {k: (v if v is not None else "") for k, v in (m or {}).items()}
+        for m in metas
+    ]
+
     _log("删除旧 collection ...")
     client.delete_collection(args.collection)
     col = client.create_collection(
