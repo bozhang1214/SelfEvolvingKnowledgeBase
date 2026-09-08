@@ -22,7 +22,7 @@ import json
 import re
 import time
 import uuid
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -54,6 +54,18 @@ _conv_inflight: set[str] = set()
 
 # 求职偏好结构化标签（应聘助手在回复末尾输出，供系统提取并更新用户画像）
 _PREF_RE = re.compile(r"<PREF>(.*?)</PREF>", re.DOTALL)
+
+# 各图节点的思考进度文案（按节点流式推送给前端，替代固定「正在思考」）
+_NODE_PROGRESS = {
+    "supervisor": "正在理解你的意图…",
+    "rag_retrieval": "正在检索知识库…",
+    "planner": "正在规划执行步骤…",
+    "executor": "正在执行与调用工具…",
+    "critic": "正在反思与校验…",
+    "chat_simple": "正在组织回答…",
+    "clarify": "正在思考如何澄清…",
+    "scribe": "正在生成最终回答…",
+}
 
 
 # 记录员 LLM 提示词（方案 B）：不依赖主 LLM 输出标签，后台独立抽取求职偏好
@@ -391,7 +403,12 @@ def _schedule_preference_extraction(
         logger.warning("调度偏好抽取任务失败", user_id=user_id, error=str(e))
 
 
-async def _run_chat(ctx: AppContext, request: ChatRequest, user_id: str) -> dict[str, Any]:
+async def _run_chat(
+    ctx: AppContext,
+    request: ChatRequest,
+    user_id: str,
+    on_progress: Callable[[str], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
     """
     执行一次完整的聊天流程并返回结构化结果。
 
@@ -469,7 +486,14 @@ async def _run_chat(ctx: AppContext, request: ChatRequest, user_id: str) -> dict
     start_time = time.time()
     try:
         try:
-            final_state = await ctx.graph.ainvoke(state)
+            # 用 astream 流式执行：按节点完成顺序推送思考进度（B1 真·思考过程可见）
+            acc: dict[str, Any] = {}
+            async for chunk in ctx.graph.astream(state, stream_mode="updates"):
+                for node_name, update in chunk.items():
+                    if on_progress:
+                        await on_progress(node_name)
+                    acc.update(_extract_state_dict(update))
+            final_state = {**dict(state), **acc}
         except Exception as e:
             # 工作流整体异常兜底：返回降级回复而非 500 中断
             logger.error(
@@ -682,15 +706,26 @@ async def chat_stream(
             return
         _conv_inflight.add(lock_key)
         try:
-            # 先推送 thinking 事件，让前端立即显示"思考中"提示
-            thinking_payload = json.dumps(
+            # 先推送一个初始 thinking 事件，让前端立即显示「思考中」提示
+            init_thinking = json.dumps(
                 {"type": "thinking", "content": "正在思考..."},
                 ensure_ascii=False,
             )
-            yield f"data: {thinking_payload}\n\n".encode("utf-8")
+            yield f"data: {init_thinking}\n\n".encode("utf-8")
+
+            # 每个图节点完成时，推送真实思考进度（B1）
+            async def on_progress(node_name: str) -> None:
+                msg = _NODE_PROGRESS.get(node_name)
+                if not msg:
+                    return
+                payload = json.dumps(
+                    {"type": "thinking", "content": msg},
+                    ensure_ascii=False,
+                )
+                yield f"data: {payload}\n\n".encode("utf-8")
 
             try:
-                result = await _run_chat(ctx, request, user_id)
+                result = await _run_chat(ctx, request, user_id, on_progress=on_progress)
             except HTTPException as e:
                 record_chat_error()
                 payload = json.dumps(

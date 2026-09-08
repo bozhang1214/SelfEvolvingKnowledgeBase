@@ -37,12 +37,16 @@ const Settings: React.FC = () => {
     }
   };
 
-  const handleSaveModel = async (values: { model: string; temperature: number; max_tokens: number }) => {
+  const handleSaveModel = async (values: { model: string; temperature: number; max_tokens: number; send_key?: string }) => {
     try {
       await apiClient.patch('/auth/me', {
         settings: { ...user?.settings, ...values },
       });
-      message.success('模型偏好已更新');
+      message.success('偏好已更新');
+      // 刷新本地用户态（settings 已变，让聊天输入框即时生效）
+      useUserStore.setState((s) => ({
+        user: s.user ? { ...s.user, settings: { ...s.user.settings, ...values } } : s.user,
+      }));
     } catch {
       message.error('更新失败');
     }
@@ -159,9 +163,10 @@ const Settings: React.FC = () => {
         <Form
           layout="vertical"
           initialValues={{
-            model: 'deepseek-chat',
-            temperature: 0.7,
-            max_tokens: 4096,
+            model: user?.settings?.model || 'deepseek-chat',
+            temperature: user?.settings?.temperature || 0.7,
+            max_tokens: user?.settings?.max_tokens || 4096,
+            send_key: user?.settings?.send_key || 'enter',
           }}
           onFinish={handleSaveModel}
         >
@@ -176,6 +181,12 @@ const Settings: React.FC = () => {
           </Form.Item>
           <Form.Item name="max_tokens" label="最大 Token 数">
             <InputNumber min={256} max={8192} step={256} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="send_key" label="发送快捷键">
+            <Select>
+              <Select.Option value="enter">Enter 发送（Shift+Enter 换行）</Select.Option>
+              <Select.Option value="cmd_enter">Cmd/Ctrl + Enter 发送（Enter 换行）</Select.Option>
+            </Select>
           </Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit">保存设置</Button>

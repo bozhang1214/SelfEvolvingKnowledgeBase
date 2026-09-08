@@ -14,6 +14,8 @@ export interface UserSettings {
   model: string;
   temperature: number;
   max_tokens: number;
+  /** 发送快捷键：enter（Enter 发送）| cmd_enter（Cmd/Ctrl+Enter 发送） */
+  send_key?: string;
 }
 
 export interface LoginRequest {

@@ -9,6 +9,7 @@ import {
   ShareAltOutlined, DownloadOutlined, CheckSquareOutlined, HistoryOutlined,
 } from '@ant-design/icons';
 import { useChatStore } from '@/stores/chat';
+import { useUserStore } from '@/stores/user';
 import { logger } from '@/utils/logger';
 import { copyText, downloadTextFile } from '@/utils/clipboard';
 import { createChatShare } from '@/services/share';
@@ -107,6 +108,8 @@ const Chat: React.FC = () => {
     loadConversations, selectConversation, createConversation,
     deleteConversation, renameConversation, togglePin, sendMessage, cancelStream, clearQueue,
   } = useChatStore();
+  const { user } = useUserStore();
+  const sendKey = user?.settings?.send_key || 'enter';
 
   const [inputValue, setInputValue] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -166,9 +169,18 @@ const Chat: React.FC = () => {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+    if (sendKey === 'cmd_enter') {
+      // Cmd/Ctrl+Enter 发送；Enter 换行
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        handleSend();
+      }
+    } else {
+      // 默认：Enter 发送；Shift+Enter 换行
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
     }
   };
 
@@ -585,7 +597,13 @@ const Chat: React.FC = () => {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isStreaming ? '回复进行中，输入将进入队列（结束后自动发送）' : '输入消息，Enter 发送，Shift+Enter 换行'}
+              placeholder={
+                isStreaming
+                  ? '回复进行中，输入将进入队列（结束后自动发送）'
+                  : (sendKey === 'cmd_enter'
+                    ? '输入消息，Cmd/Ctrl+Enter 发送，Enter 换行'
+                    : '输入消息，Enter 发送，Shift+Enter 换行')
+              }
               autoSize={{ minRows: 2, maxRows: 6 }}
             />
             {isStreaming && (
