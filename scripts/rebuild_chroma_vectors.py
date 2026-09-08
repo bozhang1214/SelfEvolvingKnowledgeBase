@@ -133,7 +133,7 @@ def main() -> int:
             metadatas=metas[start:end],
             embeddings=embeddings[start:end],
         )
-        _log(f"  写入进度 {end}/{len(ids)}")
+        _log(f"  写入进度 {min(end, len(ids))}/{len(ids)}")
 
     # 5. 校验
     new_total = col.count()

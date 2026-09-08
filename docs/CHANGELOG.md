@@ -8,9 +8,16 @@
 
 ## 2026-09-08
 
-### 知识库（关键故障修复）
-- **修复（严重）**：ChromaDB HNSW 段损坏导致 `/upload/status` 超时、`/upload/files` 500、上传 502（`chromadb.errors.InternalError: Failed to apply logs to the hnsw segment writer`）。按 Chroma cookbook 删除损坏的 VECTOR 段目录，让 Chroma 从 WAL 无损重建（备份保留在 `data/chroma_db_backup_20260907`）。
+### 知识库（关键故障修复 + 加固）
+- **故障**：ChromaDB HNSW 段损坏导致 `/upload/status` 超时、`/upload/files` 500、上传 502（`chromadb.errors.InternalError: Failed to apply logs to the hnsw segment writer`，为 1.5.9 已知 HNSW bloat-guard bug，官方暂无修复版）。
+- **纠正**：此前「删除 VECTOR 段从 WAL 重建」的修复**误删了向量**（WAL 早已合并进段，删除后重建出空段，导致检索返回 0）。真正修复为**重嵌入重建**：`scripts/rebuild_chroma_vectors.py` 从 SQLite 取出 10603 条文档 → 用同一 bge-small-zh 模型重嵌入 → 重建 collection，检索恢复（探针命中、RAG 查询分数 0.74）。
 - **性能修复**：`count`/`list_entries` 不再加载 embedding（`include=[]` / `include=["documents","metadatas"]`），避免大库慢查询导致接口超时。
+
+### 知识库加固（L0/L1/L2）
+- **L0 锁版本**：`chromadb>=0.5.0` → `chromadb==1.5.9`（当前最新，含 bug 但无修复版，锁死防漂移；待官方修复版再升级）。
+- **L1 原始文件落盘**：文档（md/pdf/docx/txt）上传时按相对路径保存到 `data/uploads/documents/`（此前只有图片存原图），作为 ChromaDB 全毁时的最终重灌源。
+- **L2 每日备份**：`scripts/backup_kb.sh`（停 backend → 打包整个 `sekb_data` 卷 → 重启 → 保留 14 天），已装 crontab 每天 3:30 执行；已手动跑通首份备份（124M）。
+- **待办（记录）**：embedding 模型缓存未持久化（每次重建容器需从 hf-mirror 重下 ~100MB，启动慢且脆弱），建议后续挂卷或打进镜像。
 
 ### 系列识别
 - **新增**：`detect_series` 支持「dN 第N天」编号（如 `2-Agent全栈开发学习实践/2-s1-w1/d1-xxx.md`），系列名取**顶级目录名**；`N-` 数字前缀的根目录文件（总纲/学习计划/补充资料）保持独立、不误入系列。
