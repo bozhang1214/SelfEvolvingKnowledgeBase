@@ -50,8 +50,8 @@ services:
     labels:
       sekb-logs: backend
     ports:
-      # 仅暴露给 frontend 容器内部网络；若需外部直连调试，取消下行注释
-      - "8000:8000"
+      # 仅绑定回环地址：backend 只经 nginx 反代对外（SEC-02，避免绕过 TLS/限流/安全头）
+      - "127.0.0.1:8000:8000"
     environment:
       # ---- 必需密钥（运行时必须提供，stop/restart 时不强制）----
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}

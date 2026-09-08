@@ -124,6 +124,11 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
     # 1. 加载配置
     config = get_config(config_path)
 
+    # 1.5 安全前置校验：JWT 密钥强度（SEC-01，弱/缺失即 fail-fast 拒绝启动）
+    from app.core.auth import get_jwt_secret
+
+    get_jwt_secret()
+
     # 2. 初始化日志（必须在最前面，便于后续日志输出）
     setup_logging(config)
     logger.info(

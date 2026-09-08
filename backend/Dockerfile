@@ -127,15 +127,16 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 EXPOSE 8000
 
 # 生产环境 uvicorn 启动命令：
-# - --workers 2：2 核服务器推荐 2 worker（每个 worker 加载 embedding 模型 ~1GB，
-#   4G 内存限制下 4 worker 会 OOM；4 核及以上可调到 3~4）
+# - --workers 1：单写进程，避免多进程共享同一 ChromaDB/SQLite 目录并发写损坏
+#   （CON-01）、Prometheus 指标失真（OPS-01）、scheduler 重复执行（CON-03）。
+#   个人知识库单 worker 吞吐足够；若未来需水平扩容，改为 Chroma client/server + 外置存储。
 # - --no-access-log：关闭 access log（由应用 structlog 自行记录）
 # - --proxy-headers：信任 Nginx 转发的 X-Forwarded-* 头
 # - --forwarded-allow-ips：仅信任反代来源
 CMD ["uvicorn", "app.api.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "2", \
+     "--workers", "1", \
      "--no-access-log", \
      "--proxy-headers", \
      "--forwarded-allow-ips", "*"]

@@ -74,6 +74,9 @@ class JSONStorage(StorageBackend):
         self.index_file: Path = Path(index_file)
         self.conversations_dir: Path = Path(conversations_dir)
 
+        # 写操作互斥锁：保护 index.json 的读-改-写（RMW）临界区，避免并发丢更新（CON-02）
+        self._lock = asyncio.Lock()
+
         # 启动时确保目录存在
         self._ensure_dirs()
         logger.info(
@@ -231,12 +234,13 @@ class JSONStorage(StorageBackend):
             updated_at=now,
         )
         try:
-            # 读取索引、追加新会话、写回
-            index = await asyncio.to_thread(self._read_index_sync)
-            index.append(meta.model_dump())
-            await asyncio.to_thread(self._write_index_sync, index)
-            # 初始化空消息文件
-            await asyncio.to_thread(self._write_messages_sync, conv_id, [])
+            # 读-改-写加锁，避免并发丢更新
+            async with self._lock:
+                index = await asyncio.to_thread(self._read_index_sync)
+                index.append(meta.model_dump())
+                await asyncio.to_thread(self._write_index_sync, index)
+                # 初始化空消息文件
+                await asyncio.to_thread(self._write_messages_sync, conv_id, [])
         except StorageError:
             raise
         except Exception as e:
@@ -295,17 +299,18 @@ class JSONStorage(StorageBackend):
         更新会话元信息（合并 updates 字段）。
         """
         try:
-            index = await asyncio.to_thread(self._read_index_sync)
-            found = False
-            for i, item in enumerate(index):
-                if item.get("conv_id") == conv_id:
-                    index[i].update(updates)
-                    index[i]["updated_at"] = now_iso()
-                    found = True
-                    break
-            if not found:
-                raise StorageError(f"会话不存在: {conv_id}")
-            await asyncio.to_thread(self._write_index_sync, index)
+            async with self._lock:
+                index = await asyncio.to_thread(self._read_index_sync)
+                found = False
+                for i, item in enumerate(index):
+                    if item.get("conv_id") == conv_id:
+                        index[i].update(updates)
+                        index[i]["updated_at"] = now_iso()
+                        found = True
+                        break
+                if not found:
+                    raise StorageError(f"会话不存在: {conv_id}")
+                await asyncio.to_thread(self._write_index_sync, index)
         except StorageError:
             raise
         except Exception as e:
@@ -316,20 +321,21 @@ class JSONStorage(StorageBackend):
         删除会话：索引中标记为 deleted，同时删除消息文件。
         """
         try:
-            # 软删除：在索引中标记状态
-            index = await asyncio.to_thread(self._read_index_sync)
-            found = False
-            for i, item in enumerate(index):
-                if item.get("conv_id") == conv_id:
-                    index[i]["status"] = "deleted"
-                    index[i]["updated_at"] = now_iso()
-                    found = True
-                    break
-            if not found:
-                raise StorageError(f"会话不存在: {conv_id}")
-            await asyncio.to_thread(self._write_index_sync, index)
-            # 同时物理删除消息文件
-            await asyncio.to_thread(self._delete_messages_sync, conv_id)
+            async with self._lock:
+                # 软删除：在索引中标记状态
+                index = await asyncio.to_thread(self._read_index_sync)
+                found = False
+                for i, item in enumerate(index):
+                    if item.get("conv_id") == conv_id:
+                        index[i]["status"] = "deleted"
+                        index[i]["updated_at"] = now_iso()
+                        found = True
+                        break
+                if not found:
+                    raise StorageError(f"会话不存在: {conv_id}")
+                await asyncio.to_thread(self._write_index_sync, index)
+                # 同时物理删除消息文件
+                await asyncio.to_thread(self._delete_messages_sync, conv_id)
         except StorageError:
             raise
         except Exception as e:
@@ -348,36 +354,37 @@ class JSONStorage(StorageBackend):
         message.setdefault("created_at", now_iso())
 
         try:
-            # 校验会话存在
-            conv = await self.get_conversation(conv_id)
-            if conv is None:
-                raise StorageError(f"会话不存在: {conv_id}")
+            async with self._lock:
+                # 校验会话存在
+                conv = await self.get_conversation(conv_id)
+                if conv is None:
+                    raise StorageError(f"会话不存在: {conv_id}")
 
-            # 读取现有消息、追加、写回
-            messages = await asyncio.to_thread(self._read_messages_sync, conv_id)
-            messages.append(message)
-            await asyncio.to_thread(self._write_messages_sync, conv_id, messages)
+                # 读取现有消息、追加、写回
+                messages = await asyncio.to_thread(self._read_messages_sync, conv_id)
+                messages.append(message)
+                await asyncio.to_thread(self._write_messages_sync, conv_id, messages)
 
-            # 更新会话元信息中的累计统计
-            index = await asyncio.to_thread(self._read_index_sync)
-            for i, item in enumerate(index):
-                if item.get("conv_id") == conv_id:
-                    index[i]["message_count"] = len(messages)
-                    index[i]["total_input_tokens"] = (
-                        index[i].get("total_input_tokens", 0)
-                        + message.get("tokens_input", 0)
-                    )
-                    index[i]["total_output_tokens"] = (
-                        index[i].get("total_output_tokens", 0)
-                        + message.get("tokens_output", 0)
-                    )
-                    index[i]["total_cost_usd"] = (
-                        index[i].get("total_cost_usd", 0.0)
-                        + message.get("cost_usd", 0.0)
-                    )
-                    index[i]["updated_at"] = now_iso()
-                    break
-            await asyncio.to_thread(self._write_index_sync, index)
+                # 更新会话元信息中的累计统计
+                index = await asyncio.to_thread(self._read_index_sync)
+                for i, item in enumerate(index):
+                    if item.get("conv_id") == conv_id:
+                        index[i]["message_count"] = len(messages)
+                        index[i]["total_input_tokens"] = (
+                            index[i].get("total_input_tokens", 0)
+                            + message.get("tokens_input", 0)
+                        )
+                        index[i]["total_output_tokens"] = (
+                            index[i].get("total_output_tokens", 0)
+                            + message.get("tokens_output", 0)
+                        )
+                        index[i]["total_cost_usd"] = (
+                            index[i].get("total_cost_usd", 0.0)
+                            + message.get("cost_usd", 0.0)
+                        )
+                        index[i]["updated_at"] = now_iso()
+                        break
+                await asyncio.to_thread(self._write_index_sync, index)
         except StorageError:
             raise
         except Exception as e:
@@ -415,17 +422,18 @@ class JSONStorage(StorageBackend):
         如需累加，调用方应先读取当前值再传入新值。
         """
         try:
-            index = await asyncio.to_thread(self._read_index_sync)
-            found = False
-            for i, item in enumerate(index):
-                if item.get("conv_id") == conv_id:
-                    index[i].update(stats)
-                    index[i]["updated_at"] = now_iso()
-                    found = True
-                    break
-            if not found:
-                raise StorageError(f"会话不存在: {conv_id}")
-            await asyncio.to_thread(self._write_index_sync, index)
+            async with self._lock:
+                index = await asyncio.to_thread(self._read_index_sync)
+                found = False
+                for i, item in enumerate(index):
+                    if item.get("conv_id") == conv_id:
+                        index[i].update(stats)
+                        index[i]["updated_at"] = now_iso()
+                        found = True
+                        break
+                if not found:
+                    raise StorageError(f"会话不存在: {conv_id}")
+                await asyncio.to_thread(self._write_index_sync, index)
         except StorageError:
             raise
         except Exception as e:

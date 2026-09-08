@@ -21,9 +21,31 @@ security = HTTPBearer(auto_error=False)
 JWT_ALGORITHM = "HS256"
 
 
+# 弱密钥占位词：命中即判定为不安全（SEC-01）
+_WEAK_SECRET_MARKERS = (
+    "test", "secret", "change", "default", "placeholder", "example",
+    "changeme", "your-", "sekb-dev",
+)
+
+
 def get_jwt_secret() -> str:
-    """获取 JWT 密钥，支持环境变量覆盖。"""
-    return os.environ.get("JWT_SECRET", "sekb-dev-secret-change-in-production")
+    """
+    获取 JWT 密钥，强制校验强度（SEC-01）。
+
+    - 未配置 → 拒绝启动（移除硬编码回退，避免伪造任意 token）
+    - 长度 < 32 → 拒绝
+    - 含弱占位词（test/secret/change 等）→ 拒绝
+    """
+    secret = os.environ.get("JWT_SECRET", "").strip()
+    if not secret:
+        raise RuntimeError("JWT_SECRET 未配置，拒绝启动（SEC-01）")
+    if len(secret) < 32:
+        raise RuntimeError(f"JWT_SECRET 过短（{len(secret)}<32 字符），拒绝启动（SEC-01）")
+    low = secret.lower()
+    for marker in _WEAK_SECRET_MARKERS:
+        if marker in low:
+            raise RuntimeError("JWT_SECRET 疑似弱密钥（含占位词），拒绝启动（SEC-01）")
+    return secret
 
 
 def hash_password(password: str) -> str:
