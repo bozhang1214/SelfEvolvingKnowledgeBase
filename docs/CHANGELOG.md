@@ -8,6 +8,17 @@
 
 ## 2026-09-08
 
+### P0 止血（合并 Qoder 深度审查后）
+- **修复（CON-02 并发丢数据，已动态复现）**：JSON 存储层引入 `asyncio.Lock` 保护 index 读-改-写临界区；uvicorn `--workers 2` → `--workers 1`（消除多进程共享 ChromaDB/SQLite 并发写、Prometheus 指标失真、scheduler 重复执行）。
+- **修复（SEC-01 JWT 弱密钥）**：`get_jwt_secret` 改为 fail-closed（未配置/过短/含占位词即拒绝启动），移除硬编码回退；启动期校验；**已轮换生产密钥**（旧 token 全部失效，需重新登录）。
+- **修复（SEC-02 端口暴露）**：backend `8000:8000` → `127.0.0.1:8000:8000`，仅经 nginx 反代对外。
+
+### R2-06 答案 token 真流式
+- **新增**：`llm_factory.astream_with_stats` 流式接口 + `core/token_sink.py`（contextvar token 回传）+ Executor 流式生成草稿答案逐 token 回传。答案在生成阶段即流式输出（实测 27.5s 开始出 token，618 token），替代「全量生成后逐字推」。
+
+### 文档工程（第一刀）
+- **导航收敛（C2）**：`docs/README.md` 补 8 篇孤儿（ISSUES-FIXES/boss-jd-cookie-manual/job-sources/INCREMENTAL-TEST-CASES/codeReview 等）+ 归档标注 + 新增「Phase 5 能力速览」与阶段路线图 Phase 5。
+
 ### 安全止血 + 访问控制 + 体验增强（批次 A0 + 白名单 + B1/B2）
 - **安全修复（批次 A0）**：chat 路由补会话归属校验（SEC-01 越权 IDOR）；全局异常脱敏返回 `error_id`（SEC-04）；资讯只读接口补登录鉴权（SEC-05）；分享 `is_scoped` 改任意级非空 + 层级完整性校验（R2-01）+ 默认 30 天过期（R2-02）。
 - **可靠性修复**：`backup_kb.sh` 加 `trap` 兜底启动 + 新增 `restore_kb.sh`（R2-03）；前端队列卡死补 `flushQueue` + 非流式清空队列入口（R2-05）；前端单测修复（streamChat 7 参 + user init 会话恢复）（R2-18）；RAG 检索失败打标记（RAG-09）。
