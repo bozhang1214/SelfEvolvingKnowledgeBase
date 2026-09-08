@@ -8,6 +8,13 @@
 
 ## 2026-09-08
 
+### 安全止血 + 访问控制 + 体验增强（批次 A0 + 白名单 + B1/B2）
+- **安全修复（批次 A0）**：chat 路由补会话归属校验（SEC-01 越权 IDOR）；全局异常脱敏返回 `error_id`（SEC-04）；资讯只读接口补登录鉴权（SEC-05）；分享 `is_scoped` 改任意级非空 + 层级完整性校验（R2-01）+ 默认 30 天过期（R2-02）。
+- **可靠性修复**：`backup_kb.sh` 加 `trap` 兜底启动 + 新增 `restore_kb.sh`（R2-03）；前端队列卡死补 `flushQueue` + 非流式清空队列入口（R2-05）；前端单测修复（streamChat 7 参 + user init 会话恢复）（R2-18）；RAG 检索失败打标记（RAG-09）。
+- **新增（用户白名单）**：`ALLOWED_EMAILS` 环境变量（逗号分隔邮箱）——白名单内=完整功能，非白名单=预览（仅功能说明 + 科技资讯只读，不能重新生成日报）。`/me` 返回 `access_level`，前端按级别收窄菜单/路由，后端 router 级 `require_full_access` 依赖拦截。
+- **新增（B1 思考过程流式）**：聊天由固定「正在思考…」改为按图节点流式推送真实进度（理解意图→检索知识库→规划→执行→反思→生成回答），用 `astream` + `asyncio.Queue` 并发消费。
+- **新增（B2 发送快捷键）**：设置页增加「发送快捷键」选项（Enter 发送 / Cmd+Ctrl+Enter 发送），聊天输入框按设置生效。
+
 ### 知识库（关键故障修复 + 加固）
 - **故障**：ChromaDB HNSW 段损坏导致 `/upload/status` 超时、`/upload/files` 500、上传 502（`chromadb.errors.InternalError: Failed to apply logs to the hnsw segment writer`，为 1.5.9 已知 HNSW bloat-guard bug，官方暂无修复版）。
 - **纠正**：此前「删除 VECTOR 段从 WAL 重建」的修复**误删了向量**（WAL 早已合并进段，删除后重建出空段，导致检索返回 0）。真正修复为**重嵌入重建**：`scripts/rebuild_chroma_vectors.py` 从 SQLite 取出 10603 条文档 → 用同一 bge-small-zh 模型重嵌入 → 重建 collection，检索恢复（探针命中、RAG 查询分数 0.74）。
