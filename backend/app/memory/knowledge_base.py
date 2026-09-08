@@ -394,6 +394,39 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
             self._collection.update, ids=[entry_id], metadatas=[new_meta]
         )
 
+    async def update_metadata_batch(
+        self, updates: list[tuple[str, dict[str, Any]]]
+    ) -> int:
+        """
+        批量更新元数据（不重新嵌入向量），用于系列归组/重分类等大规模元数据变更。
+
+        相比逐条 update_metadata，把 N 次 get+update 合并为 1 次 get + 1 次 update，
+        避免大库逐条写导致的超时。返回成功更新的条目数。
+        """
+        if not updates:
+            return 0
+        self._ensure_initialized()
+
+        entry_ids = [eid for eid, _ in updates]
+        existing = await asyncio.to_thread(
+            self._collection.get, ids=entry_ids, include=["metadatas"]
+        )
+        old_by_id: dict[str, dict[str, Any]] = {
+            eid: (meta or {})
+            for eid, meta in zip(existing.get("ids", []), existing.get("metadatas", []))
+        }
+
+        now = datetime.now(timezone.utc).isoformat()
+        new_ids: list[str] = []
+        new_metas: list[dict[str, Any]] = []
+        for eid, upd in updates:
+            merged = {**old_by_id.get(eid, {}), **upd, "updated_at": now}
+            new_ids.append(eid)
+            new_metas.append(merged)
+
+        await asyncio.to_thread(self._collection.update, ids=new_ids, metadatas=new_metas)
+        return len(new_ids)
+
     async def delete(self, entry_id: str) -> None:
         """删除知识条目。"""
         oid = _op_id()

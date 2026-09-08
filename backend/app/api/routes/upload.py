@@ -878,18 +878,25 @@ async def re_series(user_id: str = Depends(get_current_user)) -> dict[str, Any]:
         by_file.setdefault(e.source_id or "(未命名)", []).append(e)
 
     updated_files = 0
-    updated_entries = 0
+    updates: list[tuple[str, dict[str, Any]]] = []
     for fname, chunk_entries in by_file.items():
         series_info = detect_series(fname)
         series_name = str(series_info["series"]) if series_info["is_series"] else ""
         for e in chunk_entries:
             if (e.series or "") != series_name:
-                try:
-                    await ctx.knowledge_base.update_metadata(e.entry_id, {"series": series_name})
-                    updated_entries += 1
-                except Exception as ex:
-                    logger.warning("更新条目系列失败", entry_id=e.entry_id, error=str(ex))
+                updates.append((e.entry_id, {"series": series_name}))
         updated_files += 1
+
+    updated_entries = 0
+    if updates:
+        try:
+            updated_entries = await ctx.knowledge_base.update_metadata_batch(updates)
+        except Exception as ex:
+            logger.error("批量更新系列失败", error=str(ex), exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"批量更新系列失败: {ex}",
+            ) from ex
 
     logger.info("系列重新识别完成", files=updated_files, entries_updated=updated_entries)
     return {"files_re_series": updated_files, "entries_updated": updated_entries}
