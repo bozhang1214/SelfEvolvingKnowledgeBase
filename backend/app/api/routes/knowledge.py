@@ -79,7 +79,10 @@ async def category_stats(
         entries: list[Any] = []
         offset = 0
         while True:
-            chunk = await kb.list_entries(user_id=user_id, limit=batch, offset=offset)
+            # 仅加载元数据（不加载全文），避免大库统计分类时把每篇文档文本都读出来，导致超时
+            chunk = await kb.list_entries(
+                user_id=user_id, limit=batch, offset=offset, include=["metadatas"]
+            )
             entries.extend(chunk)
             if len(chunk) < batch:
                 break

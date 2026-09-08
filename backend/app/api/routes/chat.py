@@ -59,6 +59,10 @@ class ChatRequest(BaseModel):
         None, description="会话 ID；为 None 表示新建会话"
     )
     user_id: str = Field(_DEFAULT_USER_ID, description="用户 ID")
+    skill: str = Field(
+        default="",
+        description="技能模式：通用助手 / 应聘助手 / 科技资讯助手；空/通用=普通聊天",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -97,6 +101,60 @@ def _extract_state_dict(final_state: Any) -> dict[str, Any]:
         return {}
 
 
+async def _build_skill_context(ctx: AppContext, user_id: str, skill: str) -> str:
+    """
+    构建技能内置上下文，注入到本次 LLM 输入（不写入会话历史、不污染用户消息）。
+
+    - 应聘助手：注入「求职者画像」（目标岗位/城市/薪资/技术栈）+ 近期职位市场概况。
+    - 科技资讯助手：注入「用户关注的资讯大类」。
+
+    任何环节失败均静默跳过，返回可能为空串的上下文。
+    """
+    parts: list[str] = []
+
+    # 用户画像（按 user_id 隔离）
+    profile = None
+    try:
+        from app.storage.profile_storage import ProfileStorage
+
+        profile = await ProfileStorage("data/profile").get(user_id)
+    except Exception as e:
+        logger.warning("skill 上下文：读取画像失败", error=str(e))
+
+    if skill == "应聘助手":
+        if profile and profile.job_preferences:
+            jp = profile.job_preferences
+            lines = ["【求职者画像】"]
+            if jp.target_roles:
+                lines.append("- 目标岗位：" + "、".join(jp.target_roles))
+            if jp.target_cities:
+                lines.append("- 意向城市：" + "、".join(jp.target_cities))
+            if jp.min_salary_k:
+                lines.append(f"- 最低月薪：{jp.min_salary_k}k")
+            if jp.keywords:
+                lines.append("- 关注技术栈：" + "、".join(jp.keywords))
+            parts.append("\n".join(lines))
+        # 近期职位市场概况
+        try:
+            from app.agents.job import market
+
+            rep = market.get_cached_report(user_id)
+            if rep:
+                overview = rep.get("overview") or rep.get("summary") or rep.get("highlights")
+                if isinstance(overview, str) and overview:
+                    parts.append("【近期职位市场概况】\n" + overview[:600])
+        except Exception as e:
+            logger.warning("skill 上下文：读取职位市场概况失败", error=str(e))
+
+    elif skill == "科技资讯助手":
+        if profile and profile.news_interests:
+            parts.append(
+                "【用户关注的资讯大类】" + "、".join(profile.news_interests)
+            )
+
+    return "\n\n".join(parts)
+
+
 async def _run_chat(ctx: AppContext, request: ChatRequest, user_id: str) -> dict[str, Any]:
     """
     执行一次完整的聊天流程并返回结构化结果。
@@ -117,6 +175,14 @@ async def _run_chat(ctx: AppContext, request: ChatRequest, user_id: str) -> dict
         ``intent_confidence`` / ``metrics`` / ``trace_id`` / ``latency_ms`` 的字典
     """
     user_input = request.message
+
+    # 技能模式：为本次 LLM 输入注入内置上下文（不写入会话历史、不污染用户消息）
+    graph_input = user_input
+    skill = (request.skill or "").strip()
+    if skill and skill != "通用助手":
+        skill_ctx = await _build_skill_context(ctx, user_id, skill)
+        if skill_ctx:
+            graph_input = f"{skill_ctx}\n\n===== 用户问题 =====\n{user_input}"
 
     # 1. 确保会话存在
     conv_id = request.conversation_id
@@ -153,7 +219,7 @@ async def _run_chat(ctx: AppContext, request: ChatRequest, user_id: str) -> dict
     trace_id = str(uuid.uuid4())
     bind_context(conversation_id=conv_id, trace_id=trace_id, user_id=user_id)
     state = create_initial_state(
-        user_input=user_input,
+        user_input=graph_input,
         conversation_id=conv_id,
         trace_id=trace_id,
         user_id=user_id,

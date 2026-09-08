@@ -9,8 +9,8 @@ interface ChatState {
   isStreaming: boolean;
   streamingContent: string;
   thinkingContent: string;
-  /** 排队待发送的消息内容（回复进行中时新输入进入队列，结束后自动发送） */
-  pendingQueue: string[];
+  /** 排队待发送的消息（回复进行中时新输入进入队列，结束后自动发送；各自携带技能模式） */
+  pendingQueue: { content: string; skill: string }[];
   /** 是否正在从队列里逐条发送（用于显示「已排队 N 条」） */
   queueSending: boolean;
 
@@ -20,7 +20,7 @@ interface ChatState {
   deleteConversation: (convId: string) => Promise<void>;
   renameConversation: (convId: string, title: string) => Promise<void>;
   togglePin: (convId: string, pinned: boolean) => Promise<void>;
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, skill?: string) => Promise<void>;
   cancelStream: () => void;
   flushQueue: () => void;
   clearQueue: () => void;
@@ -129,13 +129,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (content: string) => {
+  sendMessage: async (content: string, skill: string = '') => {
     const { currentConvId, conversations, isStreaming } = get();
 
     // 回复进行中：新输入进入队列，结束后自动发送，避免误打断
     if (isStreaming) {
       set((state) => ({
-        pendingQueue: [...state.pendingQueue, content],
+        pendingQueue: [...state.pendingQueue, { content, skill }],
         queueSending: true,
       }));
       return;
@@ -268,6 +268,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       (content) => {
         set({ thinkingContent: content });
       },
+      // skill 模式：应聘助手 / 科技资讯助手 / 通用助手（空）
+      skill,
     );
 
     // 保存 controller 供取消
@@ -284,7 +286,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     const next = pendingQueue[0];
     set((state) => ({ pendingQueue: state.pendingQueue.slice(1) }));
-    void get().sendMessage(next);
+    void get().sendMessage(next.content, next.skill);
   },
 
   clearQueue: () => {

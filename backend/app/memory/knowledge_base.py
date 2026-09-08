@@ -520,6 +520,7 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
         category_l1: str | None = None,
         category_l2: str | None = None,
         category_l3: str | None = None,
+        include: list[str] | None = None,
     ) -> list[KnowledgeEntry]:
         """
         列出知识库条目（按 ChromaDB 存储顺序返回，未保证时间排序）。
@@ -532,6 +533,8 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
             category_l1: 一级分类过滤
             category_l2: 二级分类过滤
             category_l3: 三级分类过滤
+            include: ChromaDB 返回字段，默认 ["documents","metadatas"]；
+                     仅需计数/元数据时可传 ["metadatas"] 避免加载全文，显著提速。
 
         Returns:
             KnowledgeEntry 列表
@@ -546,11 +549,13 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
             category_l3=category_l3,
         )
 
+        include = include or ["documents", "metadatas"]
+
         result = await asyncio.to_thread(
             self._collection.get,
             where=where_filter,
             limit=limit + offset,
-            include=["documents", "metadatas"],  # 不加载 embeddings，避免大库慢查询超时
+            include=include,  # 不加载 embeddings，避免大库慢查询超时
         )
 
         entries = []

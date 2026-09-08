@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Layout, List, Input, Button, Typography, Space, Spin, Popconfirm, Checkbox, Popover, message as antMsg,
+  Layout, List, Input, Button, Typography, Space, Spin, Popconfirm, Checkbox, Drawer, message as antMsg,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, SendOutlined, StopOutlined,
@@ -20,6 +20,13 @@ import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 const { Text } = Typography;
 const { Sider, Content } = Layout;
+
+/** 技能列表（聊天框下功能按钮，参考豆包）：点击切换技能模式，注入对应模块知识 */
+const SKILLS: { value: string; label: string; icon: string; tip: string }[] = [
+  { value: '通用助手', label: '通用助手', icon: '💬', tip: '普通知识库问答' },
+  { value: '应聘助手', label: '应聘助手', icon: '💼', tip: '结合求职画像与招聘分析深度沟通' },
+  { value: '科技资讯助手', label: '科技资讯助手', icon: '📰', tip: '结合关注大类与资讯日报问答' },
+];
 
 /** 代码块组件：带语言标签 + 复制按钮 */
 const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, code }) => {
@@ -110,6 +117,8 @@ const Chat: React.FC = () => {
   // 单条消息「已复制」状态（记录消息下标，短暂显示）
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [currentSkill, setCurrentSkill] = useState<string>('通用助手');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [searchParams] = useSearchParams();
@@ -144,7 +153,7 @@ const Chat: React.FC = () => {
     });
     const done = logger.perf('chat_send_message', { conv_id: currentConvId || null });
     try {
-      await sendMessage(content);
+      await sendMessage(content, currentSkill);
       done({ result: 'success' });
     } catch (err: any) {
       done({ result: 'error', msg: err?.message });
@@ -374,7 +383,15 @@ const Chat: React.FC = () => {
       </Sider>
 
       {/* 聊天主区域 */}
-      <Content style={{ display: 'flex', flexDirection: 'column', background: '#fff' }}>
+      <Content style={{ display: 'flex', flexDirection: 'column', background: '#fff', position: 'relative' }}>
+        {/* 右侧历史对话快速导航：常驻触发条（点击/悬停展开，参考 deepseek） */}
+        <div
+          className="history-nav-trigger"
+          onClick={() => setHistoryOpen(true)}
+          title="历史对话"
+        >
+          <HistoryOutlined />
+        </div>
         {/* 顶部工具栏：多选 / 导出 / 分享 */}
         {currentConvId && (
           <div
@@ -409,58 +426,6 @@ const Chat: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <Popover
-                    trigger="hover"
-                    placement="bottomRight"
-                    overlayStyle={{ width: 300 }}
-                    title="历史会话（点击切换）"
-                    content={
-                      <div style={{ maxHeight: 400, overflow: 'auto' }}>
-                        {conversations.length === 0 ? (
-                          <Text type="secondary" style={{ fontSize: 12 }}>暂无对话</Text>
-                        ) : (
-                          <List
-                            size="small"
-                            dataSource={conversations}
-                            renderItem={(conv) => (
-                              <List.Item
-                                onClick={() => selectConversation(conv.conv_id)}
-                                style={{
-                                  cursor: 'pointer',
-                                  background: currentConvId === conv.conv_id ? '#e6f4ff' : undefined,
-                                  paddingLeft: 8,
-                                }}
-                                actions={[
-                                  <span
-                                    key="pin"
-                                    onClick={(e) => { e.stopPropagation(); handleTogglePin(conv.conv_id, !!conv.pinned); }}
-                                    style={{ cursor: 'pointer' }}
-                                    title={conv.pinned ? '取消置顶' : '置顶'}
-                                  >
-                                    {conv.pinned
-                                      ? <PushpinFilled style={{ color: '#faad14' }} />
-                                      : <PushpinOutlined style={{ color: '#999' }} />}
-                                  </span>,
-                                  <Popconfirm title="确定删除？" onConfirm={() => handleDelete(conv.conv_id)} key="del">
-                                    <DeleteOutlined style={{ color: '#999' }} />
-                                  </Popconfirm>,
-                                ]}
-                              >
-                                <Text
-                                  ellipsis={{ tooltip: conv.title }}
-                                  style={{ maxWidth: 170, cursor: 'pointer', fontSize: 13 }}
-                                >
-                                  {conv.pinned ? '📌 ' : ''}{conv.title || '新对话'}
-                                </Text>
-                              </List.Item>
-                            )}
-                          />
-                        )}
-                      </div>
-                    }
-                  >
-                    <Button size="small" icon={<HistoryOutlined />}>历史会话</Button>
-                  </Popover>
                   <Button size="small" icon={<CheckSquareOutlined />} onClick={enterMultiSelect}>多选</Button>
                   <Button size="small" icon={<DownloadOutlined />} onClick={handleExport}>导出</Button>
                   <Button size="small" icon={<ShareAltOutlined />} loading={sharing} onClick={handleShare}>分享</Button>
@@ -636,7 +601,103 @@ const Chat: React.FC = () => {
                 : '回复进行中，输入的消息会自动排队发送（点「停止」取消）'}
             </Text>
           )}
+          {/* 技能按钮（参考豆包）：切换技能模式，注入对应模块知识 */}
+          <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {SKILLS.map((s) => (
+              <Button
+                key={s.value}
+                size="small"
+                type={currentSkill === s.value ? 'primary' : 'default'}
+                title={s.tip}
+                onClick={() => setCurrentSkill(s.value)}
+                style={{ borderRadius: 16 }}
+              >
+                <span style={{ marginRight: 4 }}>{s.icon}</span>{s.label}
+              </Button>
+            ))}
+            {currentSkill !== '通用助手' && (
+              <Text type="secondary" style={{ fontSize: 12, alignSelf: 'center' }}>
+                {SKILLS.find((s) => s.value === currentSkill)?.tip || ''}
+              </Text>
+            )}
+          </div>
         </div>
+
+        {/* 历史对话右侧导航（deepseek 风格）：右侧 Drawer */}
+        <Drawer
+          title="历史对话"
+          placement="right"
+          width={360}
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+          bodyStyle={{ padding: 0 }}
+        >
+          <List
+            dataSource={conversations}
+            renderItem={(conv) => (
+              <List.Item
+                onClick={() => { selectConversation(conv.conv_id); setHistoryOpen(false); }}
+                style={{
+                  cursor: 'pointer',
+                  padding: '10px 16px',
+                  background: currentConvId === conv.conv_id ? '#e6f4ff' : (conv.pinned ? '#fffbe6' : undefined),
+                  borderLeft: currentConvId === conv.conv_id ? '3px solid #1677ff' : '3px solid transparent',
+                }}
+                actions={[
+                  <span
+                    key="pin"
+                    onClick={(e) => { e.stopPropagation(); handleTogglePin(conv.conv_id, !!conv.pinned); }}
+                    style={{ cursor: 'pointer' }}
+                    title={conv.pinned ? '取消置顶' : '置顶'}
+                  >
+                    {conv.pinned
+                      ? <PushpinFilled style={{ color: '#faad14' }} />
+                      : <PushpinOutlined style={{ color: '#999' }} />}
+                  </span>,
+                  <Popconfirm title="确定删除？" onConfirm={() => handleDelete(conv.conv_id)} key="delete">
+                    <DeleteOutlined style={{ color: '#999' }} />
+                  </Popconfirm>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={
+                    editingId === conv.conv_id ? (
+                      <Input
+                        size="small"
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        onBlur={() => handleRenameConfirm(conv.conv_id)}
+                        onPressEnter={() => handleRenameConfirm(conv.conv_id)}
+                        autoFocus
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
+                      <Space>
+                        <Text
+                          ellipsis={{ tooltip: conv.title }}
+                          style={{ maxWidth: 220, cursor: 'pointer' }}
+                          onDoubleClick={() => handleRenameStart(conv.conv_id, conv.title)}
+                        >
+                          {conv.pinned ? '📌 ' : ''}{conv.title || '新对话'}
+                        </Text>
+                        <EditOutlined
+                          style={{ color: '#999', fontSize: 12, cursor: 'pointer' }}
+                          onClick={(e) => { e.stopPropagation(); handleRenameStart(conv.conv_id, conv.title); }}
+                        />
+                      </Space>
+                    )
+                  }
+                  description={
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {conv.updated_at ? new Date(conv.updated_at).toLocaleString('zh-CN') : ''}
+                    </Text>
+                  }
+                />
+              </List.Item>
+            )}
+            locale={{ emptyText: '暂无对话' }}
+          />
+        </Drawer>
       </Content>
 
       <style>{`
@@ -667,6 +728,28 @@ const Chat: React.FC = () => {
         @keyframes thinking-bounce {
           0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
           40% { transform: scale(1); opacity: 1; }
+        }
+        /* 右侧历史对话快速导航触发条 */
+        .history-nav-trigger {
+          position: absolute;
+          right: 0;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 22px;
+          height: 88px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #bfbfbf;
+          background: linear-gradient(to left, #f5f5f5, transparent);
+          border-radius: 8px 0 0 8px;
+          cursor: pointer;
+          transition: color 0.2s, background 0.2s;
+          z-index: 5;
+        }
+        .history-nav-trigger:hover {
+          color: #1677ff;
+          background: #e6f4ff;
         }
       `}</style>
     </Layout>
