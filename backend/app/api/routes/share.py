@@ -65,6 +65,10 @@ class CreateShareRequest(BaseModel):
     """创建分享请求。"""
 
     title: str = Field(default="", max_length=100, description="分享标题")
+    # 分享范围：三级分类（空表示不限该级）；三个都为空 = 分享整个知识库
+    category_l1: str = Field(default="", description="分享范围·一级分类")
+    category_l2: str = Field(default="", description="分享范围·二级分类")
+    category_l3: str = Field(default="", description="分享范围·三级分类")
 
 
 class SharedChatRequest(BaseModel):
@@ -164,7 +168,7 @@ async def create_share(
     request: CreateShareRequest,
     user_id: str = Depends(get_current_user),
 ):
-    """创建知识库分享链接。"""
+    """创建知识库分享链接（可限定三级分类范围，空表示整个知识库）。"""
     ctx = get_app_context()
     share_storage = _require_share_storage(ctx)
 
@@ -172,24 +176,54 @@ async def create_share(
     if ctx.knowledge_base is None or ctx.vector_store is None:
         raise HTTPException(503, "知识库未启用，无法分享")
 
+    cat_l1 = (request.category_l1 or "").strip()
+    cat_l2 = (request.category_l2 or "").strip()
+    cat_l3 = (request.category_l3 or "").strip()
+
+    # 分类范围合法性校验（选择下级必须带上级，且必须存在于默认目录）
+    if cat_l1:
+        from app.core.categories import DEFAULT_CATEGORY_TREE, validate_category
+
+        if cat_l2 and cat_l3:
+            valid = validate_category(cat_l1, cat_l2, cat_l3)
+        elif cat_l2:
+            valid = cat_l2 in (DEFAULT_CATEGORY_TREE.get(cat_l1) or {})
+        else:
+            valid = cat_l1 in DEFAULT_CATEGORY_TREE
+        if not valid:
+            raise HTTPException(400, "分享范围分类无效，请重新选择")
+
     try:
-        total = await ctx.vector_store.count(user_id=user_id)
+        total = await ctx.knowledge_base.count_entries(
+            user_id=user_id,
+            category_l1=cat_l1 or None,
+            category_l2=cat_l2 or None,
+            category_l3=cat_l3 or None,
+        )
     except Exception as e:
         logger.error("查询知识库条目数失败", error=str(e))
         total = 0
 
     if total == 0:
-        raise HTTPException(400, "知识库为空，无法分享")
+        raise HTTPException(400, "所选分享范围内没有内容，无法分享")
 
     share = await share_storage.create_share(
         owner_user_id=user_id,
         title=request.title or "我的知识库",
+        category_l1=cat_l1,
+        category_l2=cat_l2,
+        category_l3=cat_l3,
     )
-    logger.info("分享已创建", share_id=share.share_id, owner=user_id, entries=total)
+    logger.info("分享已创建", share_id=share.share_id, owner=user_id, entries=total,
+                category=share.category_label())
     return {
         "share_id": share.share_id,
         "title": share.title,
         "permission": share.permission,
+        "category_l1": share.category_l1,
+        "category_l2": share.category_l2,
+        "category_l3": share.category_l3,
+        "category_label": share.category_label(),
         "created_at": _fmt_dt(share.created_at),
         "share_url": f"/sekb/share/{share.share_id}",
         "entries_count": total,
@@ -205,19 +239,28 @@ async def list_my_shares(
     share_storage = _require_share_storage(ctx)
     shares = await share_storage.list_by_owner(user_id)
 
-    # 附带条目数
+    # 附带条目数（按分享范围统计）
     result = []
     for s in shares:
         entries_count = 0
         try:
-            if ctx.vector_store is not None:
-                entries_count = await ctx.vector_store.count(user_id=s.owner_user_id)
+            if ctx.knowledge_base is not None:
+                entries_count = await ctx.knowledge_base.count_entries(
+                    user_id=s.owner_user_id,
+                    category_l1=s.category_l1 or None,
+                    category_l2=s.category_l2 or None,
+                    category_l3=s.category_l3 or None,
+                )
         except Exception:
             pass
         result.append({
             "share_id": s.share_id,
             "title": s.title,
             "permission": s.permission,
+            "category_l1": s.category_l1,
+            "category_l2": s.category_l2,
+            "category_l3": s.category_l3,
+            "category_label": s.category_label(),
             "created_at": _fmt_dt(s.created_at),
             "is_active": s.is_active,
             "has_expired": not s.is_valid(),
@@ -238,8 +281,13 @@ async def get_share_info(
 
     entries_count = 0
     try:
-        if ctx.vector_store is not None:
-            entries_count = await ctx.vector_store.count(user_id=share.owner_user_id)
+        if ctx.knowledge_base is not None:
+            entries_count = await ctx.knowledge_base.count_entries(
+                user_id=share.owner_user_id,
+                category_l1=share.category_l1 or None,
+                category_l2=share.category_l2 or None,
+                category_l3=share.category_l3 or None,
+            )
     except Exception:
         pass
 
@@ -247,6 +295,10 @@ async def get_share_info(
         "share_id": share.share_id,
         "title": share.title,
         "permission": share.permission,
+        "category_l1": share.category_l1,
+        "category_l2": share.category_l2,
+        "category_l3": share.category_l3,
+        "category_label": share.category_label(),
         "owner_name": _owner_display_name(ctx, share.owner_user_id),
         "is_active": share.is_active,
         "has_expired": not share.is_valid(),
@@ -288,12 +340,18 @@ async def list_shared_entries(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
-    """浏览分享知识库条目（只读）。"""
+    """浏览分享知识库条目（只读；分享限定了分类范围时，强制只看该范围内条目）。"""
     ctx = get_app_context()
     share = await _get_valid_share(ctx, share_id)
 
     if ctx.knowledge_base is None:
         return {"entries": [], "total": 0, "page": page, "page_size": page_size}
+
+    # 分享若限定了分类范围，则以分享范围为准（忽略/覆盖查询参数，防止越权看其他分类）
+    if share.is_scoped():
+        category_l1 = share.category_l1
+        category_l2 = share.category_l2 or None
+        category_l3 = share.category_l3 or None
 
     try:
         offset = (page - 1) * page_size
@@ -387,12 +445,15 @@ async def shared_chat_stream(
         yield f"data: {json.dumps({'type': 'thinking', 'content': '正在检索知识库...'}, ensure_ascii=False)}\n\n".encode("utf-8")
 
         try:
-            # 1. RAG 检索（读取所有者知识库）
+            # 1. RAG 检索（读取所有者知识库；分享限定分类范围时按范围检索）
             retrieved = await ctx.vector_store.search(
                 query=user_input,
                 user_id=owner_user_id,
                 top_k=_RETRIEVE_TOP_K,
                 min_score=0.3,
+                category_l1=share.category_l1 or None,
+                category_l2=share.category_l2 or None,
+                category_l3=share.category_l3 or None,
             )
             context_text = _build_rag_context(retrieved)
 

@@ -42,6 +42,10 @@ interface ShareItem {
   has_expired: boolean;
   share_url: string;
   entries_count: number;
+  category_l1?: string;
+  category_l2?: string;
+  category_l3?: string;
+  category_label?: string;
 }
 
 /** 将分类原始结构转为 Cascader 选项 */
@@ -252,9 +256,16 @@ const Knowledge: React.FC = () => {
 
   const handleCreateShare = async () => {
     const title = shareForm.getFieldValue('title') || '';
+    // 分类范围：Cascader 选中的 [l1, l2?, l3?]，空 = 分享整个知识库
+    const category: string[] = shareForm.getFieldValue('category') || [];
     setCreatingShare(true);
     try {
-      const res = await apiClient.post('/share', { title });
+      const res = await apiClient.post('/share', {
+        title,
+        category_l1: category[0] || '',
+        category_l2: category[1] || '',
+        category_l3: category[2] || '',
+      });
       const data = unwrap<ShareItem>(res);
       const origin = window.location.origin;
       setCreatedShare({ ...data, share_url: `${origin}${data.share_url}` });
@@ -472,7 +483,7 @@ const Knowledge: React.FC = () => {
               </Button>
             </Input.Group>
             <Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>
-              权限：只读浏览 + 可对话 · 共享知识条目 {createdShare.entries_count} 条
+              分享范围：{createdShare.category_label || '全部'} · 权限：只读浏览 + 可对话 · 共享知识条目 {createdShare.entries_count} 条
             </Paragraph>
           </div>
         ) : (
@@ -480,8 +491,21 @@ const Knowledge: React.FC = () => {
             <Form.Item name="title" label="分享标题">
               <Input placeholder={`${user?.name || user?.email || '我'}的知识库`} />
             </Form.Item>
+            <Form.Item
+              name="category"
+              label="分享范围（可选，默认整个知识库）"
+              extra="可只分享某一大类（如「技术开发」）、子类或细类，选到哪一级就只分享到哪一级"
+            >
+              <Cascader
+                options={cascaderOptions}
+                placeholder="全部（整个知识库）"
+                allowClear
+                changeOnSelect
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
             <Paragraph type="secondary" style={{ fontSize: 12 }}>
-              分享后，其他已注册用户可通过链接只读浏览你的知识库，并基于其内容进行问答对话，无法修改或删除你的文档。
+              分享后，其他已注册用户可通过链接只读浏览分享范围内的知识，并基于其内容进行问答对话，无法修改或删除你的文档。
             </Paragraph>
           </Form>
         )}
@@ -502,6 +526,12 @@ const Knowledge: React.FC = () => {
           locale={{ emptyText: '暂无分享' }}
           columns={[
             { title: '标题', dataIndex: 'title', key: 'title' },
+            {
+              title: '范围', key: 'scope', width: 130,
+              render: (_: unknown, r: ShareItem) => (
+                <Tag color={r.category_label ? 'geekblue' : 'default'}>{r.category_label || '全部'}</Tag>
+              ),
+            },
             { title: '条目', dataIndex: 'entries_count', key: 'entries_count', width: 70 },
             {
               title: '状态', key: 'status', width: 90,

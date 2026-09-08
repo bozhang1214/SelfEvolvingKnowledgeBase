@@ -21,6 +21,7 @@ interface ShareInfo {
   entries_count: number;
   is_owner: boolean;
   has_expired: boolean;
+  category_label?: string;
 }
 
 interface SharedEntry {
@@ -235,6 +236,9 @@ const SharedKnowledge: React.FC = () => {
           <Space>
             <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/knowledge')} />
             <Text strong>知识条目</Text>
+            {info.category_label && info.category_label !== '全部' && (
+              <Tag color="geekblue">{info.category_label}</Tag>
+            )}
             <Tag color="blue">{info.entries_count}</Tag>
           </Space>
         </div>

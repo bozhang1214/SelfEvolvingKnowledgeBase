@@ -64,16 +64,27 @@ class ShareStorage:
         self,
         owner_user_id: str,
         title: str = "",
+        category_l1: str = "",
+        category_l2: str = "",
+        category_l3: str = "",
     ) -> SharedKnowledge:
-        """创建一条分享记录。"""
+        """创建一条分享记录（可限定三级分类范围，空表示分享整个知识库）。"""
         self._ensure_initialized()
         share = SharedKnowledge(
             owner_user_id=owner_user_id,
             title=title or "我的知识库",
+            category_l1=category_l1 or "",
+            category_l2=category_l2 or "",
+            category_l3=category_l3 or "",
         )
         self._shares[share.share_id] = share.model_dump(mode="json")
         await self._save()
-        logger.info("分享已创建", share_id=share.share_id, owner=owner_user_id)
+        logger.info(
+            "分享已创建",
+            share_id=share.share_id,
+            owner=owner_user_id,
+            category=share.category_label(),
+        )
         return share
 
     async def get_share(self, share_id: str) -> SharedKnowledge | None:

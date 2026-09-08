@@ -48,6 +48,9 @@ class DirectVectorStore:
         user_id: str = "default",
         top_k: int = 5,
         min_score: float = 0.3,
+        category_l1: str | None = None,
+        category_l2: str | None = None,
+        category_l3: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         直接调用知识库检索。
@@ -57,6 +60,7 @@ class DirectVectorStore:
             user_id: 用户 ID（用于隔离）
             top_k: 返回的最大条目数
             min_score: 最小相似度阈值
+            category_l1/l2/l3: 可选三级分类过滤
 
         Returns:
             检索结果列表，每项包含：
@@ -72,6 +76,9 @@ class DirectVectorStore:
             user_id=user_id,
             top_k=top_k,
             min_score=min_score,
+            category_l1=category_l1,
+            category_l2=category_l2,
+            category_l3=category_l3,
         )
 
         results: list[dict[str, Any]] = []

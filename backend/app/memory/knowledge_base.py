@@ -253,6 +253,9 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
         user_id: str | None = None,
         top_k: int = 5,
         min_score: float = 0.3,
+        category_l1: str | None = None,
+        category_l2: str | None = None,
+        category_l3: str | None = None,
     ) -> list[KnowledgeEntry]:
         """
         检索相关知识条目。
@@ -262,6 +265,7 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
             user_id: 用户 ID（用于隔离，None 表示不过滤）
             top_k: 返回的最大条目数
             min_score: 最小相似度阈值（0.0~1.0），低于此值的结果被过滤
+            category_l1/l2/l3: 可选三级分类过滤（如分享限定分类范围时使用）
 
         Returns:
             KnowledgeEntry 列表，按相似度降序排列
@@ -276,10 +280,13 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
         # 生成查询向量（异步）
         query_embeddings = await self._async_embed([query])
 
-        # 构建 where 条件（用户隔离）
-        where_filter: dict[str, Any] | None = None
-        if user_id is not None:
-            where_filter = {"user_id": user_id}
+        # 构建 where 条件（用户隔离 + 可选分类过滤）
+        where_filter = _build_where_filter(
+            user_id=user_id,
+            category_l1=category_l1,
+            category_l2=category_l2,
+            category_l3=category_l3,
+        )
 
         # ChromaDB 查询用 to_thread 包装
         t1 = time.perf_counter()

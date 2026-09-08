@@ -8,6 +8,7 @@
 - owner_user_id: 知识库所有者（被分享的知识库归属此用户）
 - title: 分享标题（便于展示）
 - permission: 权限粒度（当前固定为 read_chat：只读 + 可对话）
+- category_l1/l2/l3: 分享范围（三级分类，空表示分享整个知识库）
 - created_at / expires_at: 创建与过期时间（过期后不可访问）
 - is_active: 是否启用（所有者可主动撤销）
 """
@@ -35,6 +36,10 @@ class SharedKnowledge(BaseModel):
     owner_user_id: str
     title: str = ""
     permission: str = "read_chat"  # read_chat: 只读 + 可对话
+    # 分享范围：三级分类（空字符串表示该级别不限）；三个都为空 = 分享整个知识库
+    category_l1: str = ""
+    category_l2: str = ""
+    category_l3: str = ""
     created_at: datetime = Field(default_factory=_now_iso)
     expires_at: datetime | None = None
     is_active: bool = True
@@ -48,3 +53,12 @@ class SharedKnowledge(BaseModel):
             if now > self.expires_at:
                 return False
         return True
+
+    def is_scoped(self) -> bool:
+        """是否限定了分类范围（非整个知识库）。"""
+        return bool(self.category_l1)
+
+    def category_label(self) -> str:
+        """返回人类可读的分享范围（三级分类或「全部」）。"""
+        parts = [p for p in (self.category_l1, self.category_l2, self.category_l3) if p]
+        return " / ".join(parts) if parts else "全部"
