@@ -48,8 +48,8 @@ async def refresh_news(
 
 
 @router.get("/reports")
-async def list_reports():
-    """列出历史日报（元信息）。"""
+async def list_reports(user_id: str = Depends(get_current_user)):
+    """列出历史日报（元信息，需登录，预览账号可读）。"""
     agent = _require_news_agent()
     return {"reports": agent.list_reports()}
 
@@ -57,8 +57,9 @@ async def list_reports():
 @router.get("/report")
 async def get_report(
     date: str | None = Query(None, description="日报日期 YYYY-MM-DD，缺省最新"),
+    user_id: str = Depends(get_current_user),
 ):
-    """读取指定日期的日报（含 Markdown）。"""
+    """读取指定日期的日报（含 Markdown，需登录，预览账号可读）。"""
     agent = _require_news_agent()
     if date:
         report = agent.read_report(date)
@@ -94,8 +95,12 @@ async def generate_periodic(
 
 
 @router.get("/{report_type}")
-async def list_periodic(report_type: str, period: str | None = Query(None)):
-    """列出周报/月报，或读取某期（?period=）。"""
+async def list_periodic(
+    report_type: str,
+    period: str | None = Query(None),
+    user_id: str = Depends(get_current_user),
+):
+    """列出周报/月报，或读取某期（?period=，需登录，预览账号可读）。"""
     if report_type not in ("weekly", "monthly"):
         raise HTTPException(400, "report_type 只支持 weekly 或 monthly")
     agent = _require_news_agent()
