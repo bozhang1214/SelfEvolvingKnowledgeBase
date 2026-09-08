@@ -39,6 +39,38 @@
 - 知识分享（share）+ 知识分类展示
 - 飞书告警卡片（LowGroundedness 等说明 + 操作按钮）
 
+## 四、代码审计跟踪（2026-09 全域评审）
+
+> 来源：`docs/codeReview/2026-09-全域评审/`（01 工程评审、02 文档工程、03 路线图、04 第二轮复核）。
+> 本轮（A 止血 + 白名单 + B1 思考流式 + B2 快捷键）已处理，其余未做项在此登记。
+
+**本轮已处理**：SEC-01（会话越权）、SEC-04（异常脱敏）、SEC-05（资讯只读鉴权）、R2-01/02（分享分类限定+过期）、R2-03（备份 trap+restore）、R2-05（队列卡死）、R2-18（单测断言）、RAG-09（检索失败标记，部分）、R2-06（思考过程流式，部分）、用户白名单（新增）。
+
+**未做（按优先级登记）**：
+
+| 优先级 | 审计编号 | 事项（摘要） |
+|---|---|---|
+| P0（安全/可见性，本周） | SEC-02 | JWT 强化（禁默认密钥、jti 黑名单、刷新链限制） |
+| P0 | SEC-03 | 重新启用限流中间件（auth/upload/job/news-refresh） |
+| P0 | AGENT-06 | news/job/classifier/image 统一走 `ainvoke_with_stats`（成本可观测） |
+| P0 | AGENT-09 | 降级可见化（degraded 标记 → 响应/指标/前端） |
+| P0 | RAG-01 | 入库闸门公式修正 + 阈值入 config（低质条目入库） |
+| P0 | OBS-01 | Tracing 打通（collector 持有 + 中间件 trace_id） |
+| P0 | R2-06 收尾 | 答案 token 真流式（当前思考过程已流式，答案仍伪流式） |
+| P0 | R2-03 收尾 | 备份 cron IaC 化 + 恢复演练 |
+| P1（本月） | AGENT-01/02/03/04/05 | 反思回路（needs_rewrite、replan 计数、should_reflect、checkpointer、LLM 重试计数） |
+| P1 | AGENT-07/08 | PromptRegistry + 模板转义 |
+| P1 | AGENT-12/13/14 | 步骤并行调度、预检索回灌 supervisor、suggestions 回灌 planner |
+| P1 | RAG-02/03/04/06 | 知识过期驱逐、混合检索/Rerank/Query Rewrite、分块策略、get/update/delete user_id 前置 |
+| P1 | OBS-02~07 | 指标补埋点、trace 上下文、news/job 指标 |
+| P1 | DATA-01~04 | 存储层锁、news index 原子写、缓存清理、archive 按用户淘汰 |
+| P1 | FE-01/02 | 前端错误可见、SSE 重连/controller 治理 |
+| P1 | PERF-01~06 | news 并发/分批、周月报复用、采集限流、同步 IO |
+| P1 | R2-07~17,19,20,26,27 | 会话锁 key、非流式 inflight、skill 注入面、画像锁/路径/缓存失效、队列上限/绑 conv、MD5 原子写、upload limit 5000、新功能测试 |
+| P2（本季度） | OPS-01~10、ARCH-01~07、SEC-06~11、DOC-01~14 | 灰度链路、编排层合并、SSRF/cookie/采集合规、文档工程（用户已定暂缓） |
+
+> 详细条目、证据与验收标准见 `docs/codeReview/2026-09-全域评审/01/03/04`；批次顺序以 03 号路线图为准。
+
 ---
 
 ### 约定
