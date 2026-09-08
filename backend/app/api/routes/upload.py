@@ -852,9 +852,20 @@ async def re_series(user_id: str = Depends(get_current_user)) -> dict[str, Any]:
     _require_vector_store(ctx)
 
     try:
-        entries = await ctx.knowledge_base.list_entries(
-            user_id=user_id, source=_DOCUMENT_SOURCE, limit=5000
-        )
+        # 分页拉全量文档条目，避免条目数超过单次 limit 时静默漏掉部分文件
+        entries: list[Any] = []
+        page_size = 1000
+        offset = 0
+        while True:
+            batch = await ctx.knowledge_base.list_entries(
+                user_id=user_id, source=_DOCUMENT_SOURCE, limit=page_size, offset=offset
+            )
+            if not batch:
+                break
+            entries.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
     except Exception as e:
         logger.error("重新识别系列失败：查询条目异常", error=str(e), exc_info=True)
         raise HTTPException(

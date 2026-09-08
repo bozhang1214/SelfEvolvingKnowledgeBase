@@ -8,6 +8,7 @@
 - "React Native 实战 Part 1 / Part 2"
 - "大模型入门（上）/（中）/（下）"
 - "论文阅读笔记 01 / 02 / 03"
+- "2-Agent全栈开发学习实践/2-s1-w1/d1-HTML 基础.md"（dN 第N天，系列名取顶级目录名）
 
 使用方式：
     from app.services.series import detect_series
@@ -30,6 +31,8 @@ _RE_EN_PART = re.compile(r"[Pp]art\s*([0-9]+)")
 _RE_CN_STAGE = re.compile(r"[（(]([上中下])[)）]")
 # 「01 / 02 / 03」数字后缀（紧贴结尾）
 _RE_NUM_SUFFIX = re.compile(r"[_\-\s]+(\d{1,3})$")
+# 「dN / dN-」第N天（如 d1-、d15-、d2-DOM）
+_RE_D_DAY = re.compile(r"^[dD](\d{1,3})(?:[-_—·]|$)")
 
 
 def _to_int(raw: str) -> int:
@@ -79,11 +82,15 @@ def detect_series(file_name: str) -> dict[str, object]:
 
     stem = name.rsplit(".", 1)[0] if "." in name else name
 
-    # 文件夹最后一段作为「文件夹名」，文件名本身无系列名时用它兜底
-    folder_base = folder.rstrip("/").rsplit("/", 1)[-1].strip() if folder else ""
+    # 最近一级目录作为「系列名」兜底（如「3-技术文章汇总/第4篇」→「3-技术文章汇总」）
+    folder_base = folder.split("/")[-1].strip() if folder else ""
 
     def _base_or_folder(base: str) -> str:
         return base if base else folder_base
+
+    # 顶级目录名，用于「dN 第N天」这类按天编号的系列（如
+    # 「2-Agent全栈开发学习实践/2-s1-w1/d1-xxx」→「2-Agent全栈开发学习实践」）
+    top_folder = folder.split("/")[0].strip() if folder else ""
 
     # 1. （上）/（中）/（下）
     m = _RE_CN_STAGE.search(name)
@@ -116,5 +123,10 @@ def detect_series(file_name: str) -> dict[str, object]:
         base = _base_or_folder(_clean_base(stem[: m.start()]))
         if base and part > 0:
             return {"series": base, "part": part, "is_series": True}
+
+    # 5. dN 第N天（d1-、d15-、d2-DOM），系列名用顶级目录名
+    m = _RE_D_DAY.match(stem)
+    if m and top_folder:
+        return {"series": top_folder, "part": int(m.group(1)), "is_series": True}
 
     return {"series": "", "part": 0, "is_series": False}
