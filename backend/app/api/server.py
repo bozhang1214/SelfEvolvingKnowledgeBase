@@ -249,6 +249,7 @@ def create_app() -> FastAPI:
     from app.api.routes.metrics import router as metrics_router
     from app.api.routes.monitoring import router as monitoring_router
     from app.api.routes.news import router as news_router
+    from app.api.routes.profile import router as profile_router
     from app.api.routes.share import router as share_router
     from app.api.routes.upload import router as upload_router
 
@@ -262,6 +263,7 @@ def create_app() -> FastAPI:
     app.include_router(metrics_router)
     app.include_router(monitoring_router)
     app.include_router(news_router)
+    app.include_router(profile_router)
     app.include_router(share_router)
     app.include_router(upload_router)
 
