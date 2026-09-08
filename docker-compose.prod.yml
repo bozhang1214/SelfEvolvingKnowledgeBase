@@ -65,6 +65,8 @@ services:
       TZ: Asia/Shanghai
       # HuggingFace 镜像（sentence-transformers 下载模型用，加速国内构建）
       HF_ENDPOINT: https://hf-mirror.com
+      # 模型缓存目录指向数据卷，重建容器后无需重新下载 embedding 模型
+      HF_HOME: /app/data/hf_cache
     volumes:
       # 数据持久化：会话/索引/向量库/日志/trace 全部写入挂载卷
       - sekb_data:/app/data
