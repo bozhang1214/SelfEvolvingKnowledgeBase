@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from typing import Any, AsyncIterator
@@ -45,6 +46,9 @@ _DEFAULT_USER_ID = "default"
 
 # 同一 (user, conversation) 正在流式回复的会话集合：防止多标签页/并发请求误打断
 _conv_inflight: set[str] = set()
+
+# 求职偏好结构化标签（应聘助手在回复末尾输出，供系统提取并更新用户画像）
+_PREF_RE = re.compile(r"<PREF>(.*?)</PREF>", re.DOTALL)
 
 
 # ============================================================
@@ -122,9 +126,21 @@ async def _build_skill_context(ctx: AppContext, user_id: str, skill: str) -> str
         logger.warning("skill 上下文：读取画像失败", error=str(e))
 
     if skill == "应聘助手":
+        # 角色指令：不强依赖画像，主动向用户提问了解求职偏好；约定输出结构化偏好标签
+        parts.append(
+            "你是一名专业求职顾问。请结合用户的求职背景提供深入咨询"
+            "（岗位匹配、虚拟面试、知识补充、简历建议等）。\n"
+            "如果还不清楚用户的求职偏好，请主动、自然地向他提问以下关键信息："
+            "目标岗位方向、意向城市、期望月薪、掌握的技能/技术栈、职业目标。"
+            "用户给出信息后，请在回复最后单独输出一行 "
+            "`<PREF>{\"target_roles\":[\"..\"],\"target_cities\":[\"..\"],"
+            "\"min_salary_k\":30,\"keywords\":[\"..\"]}</PREF>` "
+            "总结提取到的求职偏好（字段可省略，无则忽略），供系统更新画像。"
+        )
+        # 画像参考（如已有，简明给出）
         if profile and profile.job_preferences:
             jp = profile.job_preferences
-            lines = ["【求职者画像】"]
+            lines = ["【已知求职者画像（供参考，不全则补充提问）】"]
             if jp.target_roles:
                 lines.append("- 目标岗位：" + "、".join(jp.target_roles))
             if jp.target_cities:
@@ -153,6 +169,43 @@ async def _build_skill_context(ctx: AppContext, user_id: str, skill: str) -> str
             )
 
     return "\n\n".join(parts)
+
+
+async def _extract_and_update_profile(user_id: str, answer: str) -> str:
+    """
+    从应聘助手回复中提取 ``<PREF>...</PREF>`` 求职偏好，更新用户画像，并返回去掉该标签的干净回复。
+
+    实现「聊天偏好 → 用户画像」的反馈闭环：LLM 在回复末尾输出结构化偏好，
+    系统解析后写入画像（按 user_id 隔离），供后续 skill 与招聘/资讯模块使用。
+    """
+    m = _PREF_RE.search(answer)
+    if not m:
+        return answer
+    try:
+        import json
+
+        data = json.loads(m.group(1).strip())
+        patch: dict[str, Any] = {}
+        job: dict[str, Any] = {}
+        for key in ("target_roles", "target_cities", "min_salary_k", "keywords"):
+            if key in data:
+                job[key] = data[key]
+        if job:
+            patch["job_preferences"] = job  # upsert_update 深合并，不覆盖未传字段
+        if data.get("skills"):
+            patch["skills"] = data["skills"]
+        if data.get("career_goal"):
+            patch["career_goal"] = data["career_goal"]
+        if patch:
+            from app.storage.profile_storage import ProfileStorage
+
+            await ProfileStorage("data/profile").upsert_update(user_id, patch)
+            logger.info("已从聊天更新用户画像", user_id=user_id, fields=list(patch.keys()))
+    except Exception as e:
+        logger.warning("解析/更新求职偏好失败", user_id=user_id, error=str(e))
+
+    # 去掉 <PREF> 标签，避免展示给用户
+    return _PREF_RE.sub("", answer).strip()
 
 
 async def _run_chat(ctx: AppContext, request: ChatRequest, user_id: str) -> dict[str, Any]:
@@ -268,6 +321,8 @@ async def _run_chat(ctx: AppContext, request: ChatRequest, user_id: str) -> dict
         or state_dict.get("draft_answer")
         or "（无回复）"
     )
+    # 反馈闭环：应聘助手可能输出 <PREF> 求职偏好，提取后更新用户画像，并去掉标签
+    answer = await _extract_and_update_profile(user_id, answer)
     metrics = state_dict.get("metrics") or {}
     # P0-6 修复：回填 e2e_latency_ms（Scribe 占位 0，由外层回填真实值）
     metrics["e2e_latency_ms"] = latency_ms

@@ -559,9 +559,10 @@ class ChromaKnowledgeBase(KnowledgeBaseBackend):
         )
 
         entries = []
-        ids = result.get("ids", [])
-        docs = result.get("documents", [])
-        metas = result.get("metadatas", [])
+        # 用 `or []` 而非 get(key, []) 兜底：include 不请求某字段时 ChromaDB 会保留该键但值为 None
+        ids = result.get("ids") or []
+        docs = result.get("documents") or []
+        metas = result.get("metadatas") or []
 
         for i in range(len(ids)):
             if i < offset:

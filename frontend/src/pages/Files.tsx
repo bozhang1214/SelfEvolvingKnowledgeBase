@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Button, Typography, message, Progress, Space, Tag, Alert, Card, Statistic, Row, Col, Modal, List, Checkbox, Tree } from 'antd';
 import {
-  InboxOutlined, FileOutlined, FileImageOutlined, ReloadOutlined, StopOutlined, RadarChartOutlined, FolderOpenOutlined,
+  InboxOutlined, FileOutlined, FileTextOutlined, FileImageOutlined, ReloadOutlined, StopOutlined,
+  RadarChartOutlined, FolderOpenOutlined, FolderOutlined, ReadOutlined,
 } from '@ant-design/icons';
 import {
   getKnowledgeStatus,
@@ -111,7 +112,7 @@ function buildSeriesTree(groups: SeriesGroup[]): any[] {
 
       if (dirParts.length === 0) {
         // 无子目录，直接挂在系列下
-        rootChildren.push({ key: f.file_name, title: label, isLeaf: true });
+        rootChildren.push({ key: f.file_name, title: label, icon: <FileTextOutlined />, isLeaf: true });
       } else {
         // 有子目录，逐级构建
         let currentLevel = rootChildren;
@@ -120,19 +121,20 @@ function buildSeriesTree(groups: SeriesGroup[]): any[] {
           currentPath = currentPath ? `${currentPath}/${dir}` : dir;
           let node = dirMap.get(currentPath);
           if (!node) {
-            node = { key: currentPath, title: `📁 ${dir}`, children: [] };
+            node = { key: currentPath, title: dir, icon: <FolderOutlined />, children: [] };
             dirMap.set(currentPath, node);
             currentLevel.push(node);
           }
           currentLevel = node.children;
         }
-        currentLevel.push({ key: f.file_name, title: label, isLeaf: true });
+        currentLevel.push({ key: f.file_name, title: label, icon: <FileTextOutlined />, isLeaf: true });
       }
     }
 
     return {
       key: g.series,
-      title: `📚 ${g.series}（${g.count} 篇）`,
+      title: `${g.series}（${g.count} 篇）`,
+      icon: <ReadOutlined />,
       children: rootChildren,
     };
   });
@@ -813,6 +815,7 @@ const Files: React.FC = () => {
           <Tree
             treeData={buildSeriesTree(seriesGroups)}
             showLine
+            showIcon
             blockNode
             style={{ background: 'transparent' }}
           />
