@@ -618,6 +618,14 @@ const Chat: React.FC = () => {
                 : '回复进行中，输入的消息会自动排队发送（点「停止」取消）'}
             </Text>
           )}
+          {!isStreaming && pendingQueue.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <Text type="warning" style={{ fontSize: 12 }}>
+                有 {pendingQueue.length} 条消息尚未发送
+              </Text>
+              <Button size="small" type="link" onClick={clearQueue}>清空队列</Button>
+            </div>
+          )}
           {/* 技能按钮（参考豆包）：切换技能模式，注入对应模块知识 */}
           <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {SKILLS.map((s) => (

@@ -199,6 +199,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (!realConvId) {
           // 无效 conversation_id，不迁移消息，仅结束 streaming 状态
           set({ isStreaming: false, streamingContent: '', thinkingContent: '' });
+          // 仍有排队消息时继续发送，避免队列永久卡死
+          get().flushQueue();
           return;
         }
         const assistantMsg: Message = {
