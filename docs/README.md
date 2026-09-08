@@ -1,9 +1,24 @@
 # 自迭代个人知识库 Agent — 文档工程
 
 > 项目代号：SelfEvolvingKnowledgeBase
-> 当前阶段：Phase 1~4 均已实现，生产部署就绪
-> 文档版本：v1.1.1
-> 最后更新：2026-09-07
+> 当前阶段：Phase 1~5 均已实现，生产部署就绪
+> 文档版本：v1.2.0
+> 最后更新：2026-09-08
+
+---
+
+## 零、Phase 5 新增能力速览（文档待补，代码已上线）
+
+Phase 5 在 Phase 1~4 基础上新增了以下能力，**本目录尚未为其单独成篇**，说明见各模块代码与 CHANGELOG：
+
+| 能力 | 说明 | 入口 |
+|---|---|---|
+| **资讯日报（news）** | 定时抓取 RSS/网页源 → LLM 语义分类 → 生成日报/周报/月报 | `/news` |
+| **职位分析（job）** | 多源采集职位 → 批量市场分析 / 单职位深度分析 → 求职画像联动 | `/job` |
+| **知识分享（share / chat_share）** | 按三级分类限定范围分享知识库 / 分享对话 | `/knowledge`、`/chat` |
+| **用户画像（profile）** | 按用户隔离的求职偏好/技能/职业目标，聊天中回流 | `/profile` |
+| **skill 技能调度** | 聊天框下「通用/应聘/科技资讯助手」切换，注入画像与模块知识 | `/chat` |
+| **系列文章识别（series）** | 文件名启发式识别系列（第N篇/dN 第N天/数字前缀），树状展示 | `/files` |
 
 ---
 
@@ -42,7 +57,18 @@
 | [ALERTING-TROUBLESHOOTING.md](./ALERTING-TROUBLESHOOTING.md) | 告警模块故障排查指南：Alertmanager + feishu-webhook 常见故障与解决步骤 | 运维与 DevOps |
 | [TAILSCALE-ACCESS.md](./TAILSCALE-ACCESS.md) | **监控页面远程访问手册**：Tailscale 组网（云服务器 / MacBook Pro / 手机），免公网端口、免 SSH 隧道访问 Grafana/Prometheus | 个人 / 运维 |
 | [testCase/TEST-CASES.md](./testCase/TEST-CASES.md) | 测试用例汇总：单元测试、集成测试、评估黄金数据集、测试数据、自动化测试指南 | 测试与开发 |
-| [python311-upgrade-plan.md](./python311-upgrade-plan.md) | Python 3.11 升级计划 | 开发 |
+| [testCase/INCREMENTAL-TEST-CASES.md](./testCase/INCREMENTAL-TEST-CASES.md) | 增量测试用例（阶段性补充） | 测试与开发 |
+| [job-sources.md](./job-sources.md) | 职位采集渠道跟踪（各平台来源与可用性） | 职位分析开发 |
+| [boss-jd-cookie-manual.md](./boss-jd-cookie-manual.md) | [已归档] BOSS 直聘 JD Cookie 操作（现改为扫码登录） | 运维 |
+
+### 二-1 归档 / 历史文档（只读，不随当前实现更新）
+
+| 文档 | 说明 |
+|---|---|
+| [python311-upgrade-plan.md](./python311-upgrade-plan.md) | [已完成] Python 3.11 升级计划 |
+| [ISSUES-FIXES-2026-08.md](./ISSUES-FIXES-2026-08.md) | [已归档] 2026-08 问题记录，已并入 CHANGELOG/incidents |
+| [codeReview/](./codeReview/) | 历次只读审查报告（2026-09 全域评审为最新，见下） |
+| [codeReview/2026-09-全域评审/](./codeReview/2026-09-全域评审/) | **2026-09 全域工程评审**（01 工程评审 / 02 文档工程 / 03 路线图 / 04 第二轮复核 / Qoder 深度审查）——当前待办项的权威来源 |
 
 ---
 
@@ -65,6 +91,7 @@
 | **Phase 2** | L3 记忆（ChromaDB）+ RAG 检索增强 + 知识库自迭代 + 文件上传 | ✅ 已实现（L2 中期记忆与 PostgreSQL 迁移预留接口） |
 | **Phase 3** | 前端 UI（聊天/文件/知识库/设置）+ 多用户 + JWT 鉴权 + API 安全 | ✅ 已实现 |
 | **Phase 4** | 生产部署（Docker、监控、CI/CD、灰度发布、备份恢复、安全加固） | ✅ 已实现 |
+| **Phase 5** | 资讯日报 + 职位分析 + 分享（分类限定）+ 用户画像 + skill 调度 + 系列识别 | ✅ 已实现（详见本页「零、Phase 5 新增能力速览」） |
 
 ---
 
