@@ -227,13 +227,25 @@ def create_app() -> FastAPI:
     async def unhandled_exception_handler(
         _request: Request, exc: Exception
     ) -> JSONResponse:
-        """捕获所有未处理异常，返回 500 并记录日志。"""
-        logger.error("未处理异常", error=str(exc), exc_info=True)
+        """捕获所有未处理异常，返回 500 并记录日志。
+
+        安全：响应只返回脱敏的 error_id，异常原文仅进日志，不外泄（SEC-04）。
+        """
+        import uuid as _uuid
+
+        error_id = _uuid.uuid4().hex[:12]
+        logger.error(
+            "未处理异常",
+            error_id=error_id,
+            error=str(exc),
+            exc_info=True,
+        )
         return JSONResponse(
             status_code=500,
             content={
                 "error": "InternalServerError",
-                "message": f"内部错误: {exc}",
+                "error_id": error_id,
+                "message": "服务内部错误，请稍后重试",
             },
         )
 

@@ -422,9 +422,9 @@ async def _run_chat(ctx: AppContext, request: ChatRequest, user_id: str) -> dict
         conv_id = await ctx.storage.create_conversation(user_id, title)
         logger.info("API 创建新会话", conv_id=conv_id, title=title)
     else:
-        # 校验会话存在
+        # 校验会话存在 + 归属（SEC-01 越权修复：非本用户会话一律 404，不泄露存在性）
         conv = await ctx.storage.get_conversation(conv_id)
-        if conv is None:
+        if conv is None or conv.get("user_id") != user_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"会话不存在: {conv_id}",

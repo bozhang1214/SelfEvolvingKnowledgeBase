@@ -241,7 +241,11 @@ async def rag_retrieval_node(
         }
     except Exception as e:
         logger.warning("RAG 检索失败，降级为空结果", error=str(e))
-        return {"pre_retrieval_results": []}
+        # 区分「检索失败」与「无结果」：失败时给 rag_fallback_message 打标记（RAG-09）
+        return {
+            "pre_retrieval_results": [],
+            "rag_fallback_message": f"检索失败: {type(e).__name__}",
+        }
 
 
 # ============================================================
