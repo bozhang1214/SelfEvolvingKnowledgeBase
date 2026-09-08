@@ -64,7 +64,7 @@ async def analyze_job(body: JobAnalyzeRequest, user_id: str = Depends(get_curren
         return {**cached, "cached": True}
 
     try:
-        result = await agent.analyze_job(jd, body.job_meta)
+        result = await agent.analyze_job(jd, body.job_meta, user_id)
         save_analysis(user_id, jd, result)
         # 自动存档到历史报告
         from app.agents.job.archive import save_report
@@ -215,7 +215,7 @@ async def batch_analyze(body: BatchAnalyzeReq, user_id: str = Depends(get_curren
             keyword=keyword,
             city=city,
             llm_factory=ctx.llm_factory,
-            user_profile=load_user_profile(),
+            user_profile=load_user_profile(user_id),
             jobs=body.jobs,
         )
         # 自动存档到历史报告

@@ -58,8 +58,8 @@ def _resolve_profile_path() -> Path | None:
     return None
 
 
-def load_user_profile() -> str:
-    """加载用户画像文本（优先 README 的 yaml 段，缺失则用内置画像）。"""
+def _load_base_profile() -> str:
+    """加载基础画像文本（README 的 yaml 段，缺失则用内置画像）。"""
     path = _resolve_profile_path()
     if path:
         try:
@@ -74,3 +74,48 @@ def load_user_profile() -> str:
             logger.warning("读取用户画像失败，使用内置画像", error=str(e))
     logger.warning("未找到用户画像文件，使用内置画像")
     return _FALLBACK_PROFILE
+
+
+def _profile_to_supplement_text(profile) -> str:
+    """把按用户的 UserProfile 转成提示词友好的补充文本（空则返回空串）。"""
+    lines: list[str] = []
+    if getattr(profile, "bio", ""):
+        lines.append(f"自我介绍: {profile.bio}")
+    if getattr(profile, "career_goal", ""):
+        lines.append(f"职业目标: {profile.career_goal}")
+    if getattr(profile, "skills", None):
+        lines.append(f"技能: {', '.join(profile.skills)}")
+    jp = getattr(profile, "job_preferences", None)
+    if jp:
+        if jp.target_roles:
+            lines.append(f"目标岗位: {', '.join(jp.target_roles)}")
+        if jp.target_cities:
+            lines.append(f"意向城市: {', '.join(jp.target_cities)}")
+        if jp.min_salary_k:
+            lines.append(f"最低薪资: {jp.min_salary_k}K×14")
+        if jp.keywords:
+            lines.append(f"关注方向: {', '.join(jp.keywords)}")
+    return "\n".join(lines)
+
+
+def load_user_profile(user_id: str | None = None) -> str:
+    """
+    加载用户画像文本：基础画像（README/内置） + 按用户实时画像补充。
+
+    实现 D14「画像反向影响职位分析」：聊天中积累的求职偏好/技能/职业目标
+    会作为补充注入职位分析提示词，让分析与用户的真实诉求更贴合。
+    """
+    base = _load_base_profile()
+    if not user_id:
+        return base
+    try:
+        from app.storage.profile_storage import ProfileStorage
+
+        profile = ProfileStorage("data/profile").get_sync(user_id)
+        if profile:
+            supplement = _profile_to_supplement_text(profile)
+            if supplement:
+                return base + "\n\n【用户实时更新偏好】\n" + supplement
+    except Exception as e:
+        logger.warning("读取用户实时画像补充失败", error=str(e))
+    return base
