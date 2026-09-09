@@ -8,6 +8,15 @@
 
 ## 2026-09-09
 
+### AI 对话体验优化（技能按钮移除 + 消息操作 + 滚动跟随 + 真流式确认）
+- **移除技能按钮（任务1）**：删除 AI 对话输入区「通用/应聘/科技资讯助手」技能按钮及 `skill` 参数链路（前端 service/store/Chat + 后端 ChatRequest/`_build_skill_context`/`_schedule_preference_extraction` 调用）。技能模式后续有更具体需求再开发。
+- **消息操作按钮（任务2）**：AI 答复下新增 复制/重生成/转发；用户输入下新增 复制/编辑。store 新增 `regenerateAssistant`（截断到该用户消息后重发）+ `editUserMessage`（替换内容+删除其后消息重发），两者复用 `runStream` 走真流式。
+- **滚动跟随（任务3）**：用户上滚（距底 >80px）即停止自动跟随，右下角出现悬浮「回到底部」按钮；点击恢复跟随。
+- **真流式确认与思考进度修复（任务4）**：作答 token 已确认是**真流式**（`astream_with_stats` → token sink）。首字延迟主因是顺序多智能体链（supervisor → RAG → **deepseek-reasoner planner 15~35s** → executor 逐次 LLM 调用），非推送端问题。修复「思考过程停在旧文案」：`astream`（仅节点结束推送）→ `astream_events`（节点**开始**即推送「正在…」进度），长耗时 LLM 节点期间进度条实时可见。实测节点进度随执行实时推进（0s 理解意图→1s 检索/规划→3s 执行→6s 反思→7s 生成），简单问题首字 5.8s，复杂问题首字延迟取决于 reasoner 规划时长。
+
+
+## 2026-09-09
+
 ### 测试工具链整合（代码审查批次 1+2，含精简去重）
 - **约定确立**：每次提交前跑改动范围**增量测试**（`scripts/incremental_test.sh`，支持 `--staged` 提交前对比）；每两周/每月跑一次**全量测试**（`scripts/full_test.sh`）。
 - **增量/全量脚本**：`scripts/incremental_test.sh`（改动映射：后端 ruff+mypy 回归门禁+相关 pytest，前端 tsc+eslint+vitest）+ `scripts/full_test.sh`（后端全量单测/集成/门禁 + 前端全量/构建）；后端测试跑在自动构建的 `sekb-toolbox` 镜像（backend 镜像 + ruff/mypy/pytest/feedparser）。
