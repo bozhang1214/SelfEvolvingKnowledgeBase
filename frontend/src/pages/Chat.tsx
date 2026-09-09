@@ -96,14 +96,20 @@ function joinSelectedMessages(msgs: Message[]): string {
 
 const Chat: React.FC = () => {
   const {
-    conversations, currentConvId, messages, isStreaming, streamingContent, thinkingContent,
-    streamingConvId, pendingQueue,
+    conversations, currentConvId, messages, streamingByConv, queueByConv,
     loadConversations, selectConversation, createConversation,
     deleteConversation, renameConversation, togglePin, sendMessage, cancelStream, clearQueue,
     regenerateAssistant, editUserMessage,
   } = useChatStore();
   const { user } = useUserStore();
   const sendKey = user?.settings?.send_key || 'enter';
+
+  // 当前会话的流式状态（按会话隔离，不串台）
+  const thisConvStream = currentConvId ? streamingByConv[currentConvId] : undefined;
+  const isThisConvStreaming = !!thisConvStream;
+  const streamingContent = thisConvStream?.content || '';
+  const thinkingContent = thisConvStream?.thinking || '';
+  const pendingQueue = currentConvId ? (queueByConv[currentConvId] || []) : [];
 
   const [inputValue, setInputValue] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -139,21 +145,23 @@ const Chat: React.FC = () => {
     }
   }, [searchParams, selectConversation]);
 
-  // 切换会话后需要「瞬间到底」（无动画）；标记在下一次滚动时消费
-  const instantScrollRef = useRef(true);
+  // 需要「瞬间到底」的目标会话（进入/切换会话时设置，待其消息加载完成后消费）
+  const instantScrollConvRef = useRef<string | null>(null);
 
-  // 会话切换：标记瞬间到底
+  // 会话切换：标记该会话需要瞬间到底（无动画）
   useEffect(() => {
-    instantScrollRef.current = true;
+    instantScrollConvRef.current = currentConvId;
     setAtBottom(true);
   }, [currentConvId]);
 
   // 自动滚动到底部：仅在用户靠近底部时跟随
   useEffect(() => {
     if (!atBottom) return;
-    if (instantScrollRef.current) {
-      // 进入/切换会话：瞬间定位到底，无动画
-      instantScrollRef.current = false;
+    const isPendingInstant = instantScrollConvRef.current === currentConvId;
+    if (isPendingInstant) {
+      // 若该会话消息尚未加载（首次进入历史会话），等待加载完成再瞬间定位
+      if (currentConvId && messages[currentConvId] === undefined) return;
+      instantScrollConvRef.current = null;
       messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
     } else {
       // 流式新增内容：平滑跟随
@@ -227,7 +235,9 @@ const Chat: React.FC = () => {
 
   const handleStopStream = () => {
     logger.info('chat_cancel_stream', { conv_id: currentConvId || null });
-    cancelStream();
+    if (currentConvId) {
+      cancelStream(currentConvId);
+    }
   };
 
   const handleDelete = async (convId: string) => {
@@ -258,8 +268,6 @@ const Chat: React.FC = () => {
   };
 
   const currentMessages = currentConvId ? (messages[currentConvId] || []) : [];
-  // 流式/思考内容仅属于发起它的会话：当前查看的会话若不是发起者，则不展示（task-issue 1 修复）
-  const isThisConvStreaming = isStreaming && streamingConvId === currentConvId;
   // 思考阶段（有 thinkingContent 但无 streamingContent）不显示 assistant 气泡
   // 正常流式输出阶段（有 streamingContent）才显示 assistant 气泡
   const showStreamingBubble = isThisConvStreaming && streamingContent.length > 0;
@@ -702,7 +710,7 @@ const Chat: React.FC = () => {
                           className="msg-action-btn"
                           icon={<RedoOutlined />}
                           onClick={() => handleRegenerate(msg, idx)}
-                          disabled={isStreaming}
+                          disabled={isThisConvStreaming}
                           title="重生成"
                         />
                         {/* 转发 */}
@@ -783,7 +791,7 @@ const Chat: React.FC = () => {
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={
-                isStreaming
+                isThisConvStreaming
                   ? '回复进行中，输入将进入队列（结束后自动发送）'
                   : (sendKey === 'cmd_enter'
                     ? '输入消息，Cmd/Ctrl+Enter 发送，Enter 换行'
@@ -791,12 +799,12 @@ const Chat: React.FC = () => {
               }
               autoSize={{ minRows: 2, maxRows: 6 }}
             />
-            {isStreaming && (
+            {isThisConvStreaming && (
               <Button
                 danger
                 icon={<StopOutlined />}
                 onClick={() => {
-                  clearQueue();
+                  clearQueue(currentConvId || '');
                   handleStopStream();
                 }}
                 style={{ height: 'auto' }}
@@ -811,22 +819,22 @@ const Chat: React.FC = () => {
               disabled={!inputValue.trim()}
               style={{ height: 'auto' }}
             >
-              {isStreaming ? '排队' : '发送'}
+              {isThisConvStreaming ? '排队' : '发送'}
             </Button>
           </Space.Compact>
-          {isStreaming && (
+          {isThisConvStreaming && (
             <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
               {pendingQueue.length > 0
                 ? `回复进行中 · 已排队 ${pendingQueue.length} 条，回复结束后自动发送`
                 : '回复进行中，输入的消息会自动排队发送（点「停止」取消）'}
             </Text>
           )}
-          {!isStreaming && pendingQueue.length > 0 && (
+          {!isThisConvStreaming && pendingQueue.length > 0 && (
             <div style={{ marginTop: 6 }}>
               <Text type="warning" style={{ fontSize: 12 }}>
                 有 {pendingQueue.length} 条消息尚未发送
               </Text>
-              <Button size="small" type="link" onClick={clearQueue}>清空队列</Button>
+              <Button size="small" type="link" onClick={() => clearQueue(currentConvId || '')}>清空队列</Button>
             </div>
           )}
         </div>

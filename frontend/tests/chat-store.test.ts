@@ -48,11 +48,8 @@ describe('chat store', () => {
       conversations: [],
       currentConvId: null,
       messages: {},
-      isStreaming: false,
-      streamingContent: '',
-      thinkingContent: '',
-      pendingQueue: [],
-      queueSending: false,
+      streamingByConv: {},
+      queueByConv: {},
     });
     vi.mocked(chatService.listConversations).mockReset();
     vi.mocked(chatService.getMessages).mockReset();
@@ -222,12 +219,18 @@ describe('chat store', () => {
   });
 
   describe('sendMessage: 防重发', () => {
-    it('isStreaming=true → 不调用 streamChat', async () => {
-      useChatStore.setState({ isStreaming: true, currentConvId: 'c1' });
+    it('当前会话已在流式 → 入队而不调用 streamChat', async () => {
+      useChatStore.setState({
+        currentConvId: 'c1',
+        streamingByConv: { c1: { content: '', thinking: '' } },
+        queueByConv: {},
+      });
 
       await useChatStore.getState().sendMessage('hello');
 
       expect(chatService.streamChat).not.toHaveBeenCalled();
+      // 已入该会话的队列
+      expect(useChatStore.getState().queueByConv['c1']).toEqual(['hello']);
     });
   });
 
@@ -251,7 +254,7 @@ describe('chat store', () => {
 
       const state = useChatStore.getState();
       expect(state.currentConvId).toBe('real-conv-1');
-      expect(state.isStreaming).toBe(false);
+      expect(state.streamingByConv['real-conv-1']).toBeUndefined();
       // 真实会话下应有 user + assistant 两条消息
       expect(state.messages['real-conv-1']).toHaveLength(2);
       expect(state.messages['real-conv-1'][1].role).toBe('assistant');
@@ -274,7 +277,7 @@ describe('chat store', () => {
       onDoneCb!({} as any);
 
       const state = useChatStore.getState();
-      expect(state.isStreaming).toBe(false);
+      expect(state.streamingByConv[tempIdBefore]).toBeUndefined();
       // currentConvId 仍为 temp_xxx，未被设为空或无效值
       expect(state.currentConvId).toBe(tempIdBefore);
       // 消息仍留在 temp 会话下，不迁移
@@ -283,11 +286,10 @@ describe('chat store', () => {
   });
 
   describe('streaming 会话隔离（切走不串台）', () => {
-    it('发送后 streamingConvId 指向当前会话', async () => {
+    it('发送后 streamingByConv 记录当前会话', async () => {
       useChatStore.setState({ currentConvId: 'c1', messages: { c1: [] } });
       await useChatStore.getState().sendMessage('hello');
-      expect(useChatStore.getState().streamingConvId).toBe('c1');
-      expect(useChatStore.getState().isStreaming).toBe(true);
+      expect(useChatStore.getState().streamingByConv['c1']).toBeDefined();
     });
 
     it('切到其它会话后 done 不把 currentConvId 跳回', async () => {
@@ -314,8 +316,7 @@ describe('chat store', () => {
       onDoneCb!({ conversation_id: 'c1', intent: '', metrics: {} } as any);
 
       expect(useChatStore.getState().currentConvId).toBe('c2');
-      expect(useChatStore.getState().isStreaming).toBe(false);
-      expect(useChatStore.getState().streamingConvId).toBeNull();
+      expect(useChatStore.getState().streamingByConv['c1']).toBeUndefined();
       // 回答仍写入 c1
       expect(useChatStore.getState().messages['c1'].some((m) => m.role === 'assistant')).toBe(true);
     });
@@ -342,6 +343,30 @@ describe('chat store', () => {
       expect(useChatStore.getState().currentConvId).toBe('c2');
       expect(useChatStore.getState().messages['real-1']).toBeDefined();
     });
+
+    it('两会话可独立流式：c1 流式期间切 c2 发送，c2 独立发起不排队', async () => {
+      const cbs: Record<string, ((meta: any) => void) | null> = {};
+      vi.mocked(chatService.streamChat).mockImplementation(
+        (convId, _msg, _onToken, onDone, _onError, _onThinking) => {
+          cbs[convId] = onDone;
+          return new AbortController();
+        }
+      );
+
+      useChatStore.setState({ currentConvId: 'c1', messages: { c1: [], c2: [] } });
+      await useChatStore.getState().sendMessage('c1 的问题');
+      expect(useChatStore.getState().streamingByConv['c1']).toBeDefined();
+
+      // 切到 c2 发送
+      await useChatStore.getState().selectConversation('c2');
+      await useChatStore.getState().sendMessage('c2 的问题');
+
+      // c2 独立发起（不是排队），且 c1 仍在流式
+      expect(cbs['c2']).toBeDefined();
+      expect(useChatStore.getState().queueByConv['c2']).toBeUndefined();
+      expect(useChatStore.getState().streamingByConv['c1']).toBeDefined();
+      expect(useChatStore.getState().streamingByConv['c2']).toBeDefined();
+    });
   });
 
   describe('regenerateAssistant', () => {
@@ -355,7 +380,6 @@ describe('chat store', () => {
             makeMsg('a1', convId, 'assistant', '回答1'),
           ],
         },
-        isStreaming: false,
       });
 
       await useChatStore.getState().regenerateAssistant(convId, 'u1', '问题1');
@@ -368,7 +392,7 @@ describe('chat store', () => {
       const msgs = useChatStore.getState().messages[convId];
       expect(msgs).toHaveLength(1);
       expect(msgs[0].role).toBe('user');
-      expect(useChatStore.getState().isStreaming).toBe(true);
+      expect(useChatStore.getState().streamingByConv[convId]).toBeDefined();
     });
   });
 
@@ -383,7 +407,6 @@ describe('chat store', () => {
             makeMsg('a1', convId, 'assistant', '旧回答'),
           ],
         },
-        isStreaming: false,
       });
 
       await useChatStore.getState().editUserMessage(convId, 'u1', '新问题');
@@ -394,7 +417,7 @@ describe('chat store', () => {
       const msgs = useChatStore.getState().messages[convId];
       expect(msgs).toHaveLength(1);
       expect(msgs[0].content).toBe('新问题'); // 内容已替换，其后 assistant 已删除
-      expect(useChatStore.getState().isStreaming).toBe(true);
+      expect(useChatStore.getState().streamingByConv[convId]).toBeDefined();
     });
   });
 });

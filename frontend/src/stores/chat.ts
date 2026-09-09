@@ -3,19 +3,20 @@ import type { Conversation, Message, ChatMeta } from '@/types/chat';
 import * as chatService from '@/services/chat';
 import type { SetState, GetState } from 'zustand';
 
+/** 单个会话的流式状态（思考文案 + 已流出的答案） */
+export interface ConvStreamState {
+  content: string;
+  thinking: string;
+}
+
 interface ChatState {
   conversations: Conversation[];
   currentConvId: string | null;
   messages: Record<string, Message[]>;
-  isStreaming: boolean;
-  streamingContent: string;
-  thinkingContent: string;
-  /** 正在流式生成的会话 ID（用于隔离：仅该会话展示思考/流式内容） */
-  streamingConvId: string | null;
-  /** 排队待发送的消息（回复进行中时新输入进入队列，结束后自动发送） */
-  pendingQueue: { content: string }[];
-  /** 是否正在从队列里逐条发送（用于显示「已排队 N 条」） */
-  queueSending: boolean;
+  /** 每个正在流式生成的会话的独立流式状态（key = convId，新会话用 tempId） */
+  streamingByConv: Record<string, ConvStreamState>;
+  /** 每个会话的独立排队队列（该会话流式进行中时，后续输入入队） */
+  queueByConv: Record<string, string[]>;
 
   loadConversations: () => Promise<void>;
   selectConversation: (convId: string) => Promise<void>;
@@ -28,11 +29,18 @@ interface ChatState {
   regenerateAssistant: (convId: string, userMessageId: string, userContent: string) => Promise<void>;
   /** 编辑用户消息：替换内容，删除其后消息，重新生成 */
   editUserMessage: (convId: string, messageId: string, newContent: string) => Promise<void>;
-  cancelStream: () => void;
-  flushQueue: () => void;
-  clearQueue: () => void;
+  /** 取消某会话的流式（清空该会话的流式状态与队列） */
+  cancelStream: (convId: string) => void;
+  clearQueue: (convId: string) => void;
   addMessage: (convId: string, message: Message) => void;
+  /** 内部：某会话流结束后发送其队列下一条 */
+  flushQueueFor: (convId: string) => void;
+  /** 内部：直接向指定会话发送（队列续发，不切换 currentConvId） */
+  sendMessageToConv: (convId: string, content: string) => Promise<void>;
 }
+
+/** 每个会话的 AbortController（不放入 state，避免序列化与多余渲染） */
+const streamControllers = new Map<string, AbortController>();
 
 /** 找到 conv 下某条 user 消息的数组下标（按 message_id 匹配） */
 function findUserIndex(messages: Message[], messageId?: string, content?: string): number {
@@ -46,18 +54,11 @@ function findUserIndex(messages: Message[], messageId?: string, content?: string
 }
 
 /**
- * 核心流式请求：负责发起 SSE + 事件回调持久化。
- *
- * 不负责添加用户消息（由 sendMessage / regenerate / edit 各自决定），
- * 仅负责：
- *   - 置 isStreaming / 清空 streamingContent
- *   - onToken 累加内容、onThinking 更新思考提示
- *   - onDone 追加 assistant 消息到 displayConvId；isTemp 时做 temp→real 迁移
- *   - onError 追加错误消息
+ * 核心流式请求：发起 SSE + 事件回调持久化（按会话隔离）。
  *
  * @param cfg.sendConvId    传给后端的 conv_id（'' 表示后端新建会话）
- * @param cfg.displayConvId 前端展示/持久化的会话 key
- * @param cfg.isTemp        是否为新会话（需要 temp→real 迁移并以 real 重命名会话）
+ * @param cfg.displayConvId 前端展示/持久化的会话 key（新会话为 tempId）
+ * @param cfg.isTemp        是否为新会话（需要 temp→real 迁移）
  */
 async function runStream(
   get: GetState<ChatState>,
@@ -77,16 +78,24 @@ async function runStream(
     // onToken
     (token) => {
       fullContent += token;
-      // 收到第一个 token 时清除思考提示，切换为正常输出模式
-      set({ streamingContent: fullContent, thinkingContent: '' });
+      set((state) => ({
+        streamingByConv: {
+          ...state.streamingByConv,
+          [displayConvId]: { content: fullContent, thinking: '' },
+        },
+      }));
     },
     // onDone
     (meta: ChatMeta) => {
       const realConvId = meta.conversation_id || '';
       if (!realConvId) {
-        // 无效 conversation_id，不迁移消息，仅结束 streaming 状态
-        set({ isStreaming: false, streamingContent: '', thinkingContent: '', streamingConvId: null });
-        get().flushQueue();
+        // 无效 conversation_id，不迁移消息，仅结束该会话的流式状态
+        set((state) => {
+          const streamingByConv = { ...state.streamingByConv };
+          delete streamingByConv[displayConvId];
+          return { streamingByConv };
+        });
+        get().flushQueueFor(displayConvId);
         return;
       }
       const finalConvId = isTemp ? realConvId : displayConvId;
@@ -109,6 +118,14 @@ async function runStream(
           delete messages[displayConvId];
         }
         messages[finalConvId] = newMsgs;
+        // 迁移流式状态与队列到最终会话 key（temp→real）
+        const streamingByConv = { ...state.streamingByConv };
+        delete streamingByConv[displayConvId];
+        const queueByConv = { ...state.queueByConv };
+        if (isTemp && displayConvId !== realConvId) {
+          queueByConv[realConvId] = queueByConv[displayConvId] || [];
+          delete queueByConv[displayConvId];
+        }
         const conversations = isTemp
           ? state.conversations.map((c) =>
               c.conv_id === displayConvId
@@ -120,22 +137,16 @@ async function runStream(
                 ? { ...c, message_count: newMsgs.length }
                 : c
             );
-        return {
-          messages,
-          conversations,
-          isStreaming: false,
-          streamingContent: '',
-          thinkingContent: '',
-          streamingConvId: null,
-          // 仅当用户仍停留在本会话时才跟随迁移后的真实会话 ID（避免切走后又跳回）
-          currentConvId: isTemp && state.currentConvId === displayConvId ? realConvId : state.currentConvId,
-        };
+        // 仅当用户仍停留在本会话时才跟随迁移后的真实会话 ID（避免切走后又跳回）
+        const currentConvId =
+          isTemp && state.currentConvId === displayConvId ? realConvId : state.currentConvId;
+        return { messages, conversations, streamingByConv, queueByConv, currentConvId };
       });
 
       // 刷新会话列表（首次发消息时后端自动创建会话，列表里还没有这条记录）
       void get().loadConversations();
-      // 当前回复结束，自动发送排队的下一条
-      get().flushQueue();
+      // 该会话回复结束，自动发送其排队的下一条
+      get().flushQueueFor(finalConvId);
     },
     // onError
     (error) => {
@@ -148,36 +159,38 @@ async function runStream(
       };
       set((state) => {
         const convMsgs = [...(state.messages[displayConvId] || []), errMsg];
+        const streamingByConv = { ...state.streamingByConv };
+        delete streamingByConv[displayConvId];
         return {
           messages: { ...state.messages, [displayConvId]: convMsgs },
-          isStreaming: false,
-          streamingContent: '',
-          thinkingContent: '',
-          streamingConvId: null,
+          streamingByConv,
         };
       });
-      get().flushQueue();
+      get().flushQueueFor(displayConvId);
     },
     // onThinking
-    (content2) => {
-      set({ thinkingContent: content2 });
+    (thinking) => {
+      set((state) => ({
+        streamingByConv: {
+          ...state.streamingByConv,
+          [displayConvId]: {
+            content: state.streamingByConv[displayConvId]?.content || '',
+            thinking,
+          },
+        },
+      }));
     },
   );
 
-  // 保存 controller 供取消
-  (window as any).__stream_controller = controller;
+  streamControllers.set(displayConvId, controller);
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   currentConvId: null,
   messages: {},
-  isStreaming: false,
-  streamingContent: '',
-  thinkingContent: '',
-  streamingConvId: null,
-  pendingQueue: [],
-  queueSending: false,
+  streamingByConv: {},
+  queueByConv: {},
 
   loadConversations: async () => {
     try {
@@ -194,7 +207,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectConversation: async (convId: string) => {
-    set({ currentConvId: convId, streamingContent: '', thinkingContent: '' });
+    set({ currentConvId: convId });
     if (!get().messages[convId]) {
       try {
         const msgs = await chatService.getMessages(convId);
@@ -227,12 +240,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const convs = state.conversations.filter((c) => c.conv_id !== convId);
         const msgs = { ...state.messages };
         delete msgs[convId];
+        const streamingByConv = { ...state.streamingByConv };
+        delete streamingByConv[convId];
+        const queueByConv = { ...state.queueByConv };
+        delete queueByConv[convId];
         return {
           conversations: convs,
           messages: msgs,
+          streamingByConv,
+          queueByConv,
           currentConvId: state.currentConvId === convId ? null : state.currentConvId,
         };
       });
+      streamControllers.get(convId)?.abort();
+      streamControllers.delete(convId);
     } catch {
       // 静默处理
     }
@@ -254,12 +275,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   togglePin: async (convId: string, pinned: boolean) => {
     try {
       await chatService.updateConversation(convId, { pinned });
-      // 更新后重新排序：pinned 优先
       set((state) => {
         const convs = state.conversations.map((c) =>
           c.conv_id === convId ? { ...c, pinned } : c
         );
-        // 排序：pinned 优先，其次按 updated_at 倒序
         convs.sort((a, b) => {
           if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
           return (b.updated_at || '').localeCompare(a.updated_at || '');
@@ -272,18 +291,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content: string) => {
-    const { currentConvId, isStreaming } = get();
+    const convId = get().currentConvId || '';
 
-    // 回复进行中：新输入进入队列，结束后自动发送，避免误打断
-    if (isStreaming) {
+    // 当前会话正在流式：入该会话的队列（不打断，也不污染其它会话）
+    if (convId && get().streamingByConv[convId]) {
       set((state) => ({
-        pendingQueue: [...state.pendingQueue, { content }],
-        queueSending: true,
+        queueByConv: {
+          ...state.queueByConv,
+          [convId]: [...(state.queueByConv[convId] || []), content],
+        },
       }));
       return;
     }
 
-    const convId = currentConvId || '';
     const tempConvId = convId || `temp_${Date.now()}`;
     const isNewConv = !convId;
     if (isNewConv) {
@@ -315,13 +335,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         messages: { ...state.messages, [tempConvId]: convMsgs },
         conversations,
-        isStreaming: true,
-        streamingContent: '',
-        streamingConvId: tempConvId,
+        streamingByConv: {
+          ...state.streamingByConv,
+          [tempConvId]: { content: '', thinking: '' },
+        },
       };
     });
 
-    // SSE 流式聊天：首次发消息时 sendConvId 为空串，后端收到 null 会自动创建新会话
     await runStream(get, set, {
       sendConvId: convId,
       displayConvId: tempConvId,
@@ -331,21 +351,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   regenerateAssistant: async (convId: string, userMessageId: string, userContent: string) => {
-    const { isStreaming } = get();
-    if (isStreaming) return;
     if (!convId || !get().messages[convId]) return;
+    // 该会话已在流式：忽略（避免并发重生成）
+    if (get().streamingByConv[convId]) return;
 
     set((state) => {
       const convMsgs = state.messages[convId] || [];
       const userIdx = findUserIndex(convMsgs, userMessageId, userContent);
-      // 截断到该用户消息（含），删除其后的 assistant 消息
       const truncated = userIdx >= 0 ? convMsgs.slice(0, userIdx + 1) : convMsgs;
       return {
         messages: { ...state.messages, [convId]: truncated },
-        isStreaming: true,
-        streamingContent: '',
-        thinkingContent: '',
-        streamingConvId: convId,
+        streamingByConv: {
+          ...state.streamingByConv,
+          [convId]: { content: '', thinking: '' },
+        },
         currentConvId: convId,
       };
     });
@@ -359,24 +378,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   editUserMessage: async (convId: string, messageId: string, newContent: string) => {
-    const { isStreaming } = get();
-    if (isStreaming) return;
     if (!convId || !get().messages[convId]) return;
+    if (get().streamingByConv[convId]) return;
 
     set((state) => {
       const convMsgs = state.messages[convId] || [];
       const userIdx = convMsgs.findIndex((m) => m.message_id === messageId && m.role === 'user');
       if (userIdx < 0) return {};
-      // 替换内容，并删除该用户消息之后的所有消息
       const updated = [...convMsgs];
       updated[userIdx] = { ...updated[userIdx], content: newContent };
       const truncated = updated.slice(0, userIdx + 1);
       return {
         messages: { ...state.messages, [convId]: truncated },
-        isStreaming: true,
-        streamingContent: '',
-        thinkingContent: '',
-        streamingConvId: convId,
+        streamingByConv: {
+          ...state.streamingByConv,
+          [convId]: { content: '', thinking: '' },
+        },
         currentConvId: convId,
       };
     });
@@ -389,30 +406,65 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 
-  flushQueue: () => {
-    const { isStreaming, pendingQueue } = get();
-    if (isStreaming || pendingQueue.length === 0) {
-      if (!isStreaming && pendingQueue.length === 0) {
-        set({ queueSending: false });
-      }
-      return;
-    }
-    const next = pendingQueue[0];
-    set((state) => ({ pendingQueue: state.pendingQueue.slice(1) }));
-    void get().sendMessage(next.content);
+  /** 某会话流结束后，发送其队列中的下一条（不跨会话） */
+  flushQueueFor: (convId: string) => {
+    const queue = get().queueByConv[convId] || [];
+    if (get().streamingByConv[convId] || queue.length === 0) return;
+    const next = queue[0];
+    set((state) => ({
+      queueByConv: { ...state.queueByConv, [convId]: state.queueByConv[convId].slice(1) },
+    }));
+    void get().sendMessageToConv(convId, next);
   },
 
-  clearQueue: () => {
-    set({ pendingQueue: [], queueSending: false });
+  /** 直接向指定会话发送（用于队列续发；不切换 currentConvId） */
+  sendMessageToConv: async (convId: string, content: string) => {
+    const userMsg: Message = {
+      message_id: `temp_${Date.now()}`,
+      conv_id: convId,
+      role: 'user',
+      content,
+      created_at: new Date().toISOString(),
+    };
+    set((state) => {
+      const convMsgs = [...(state.messages[convId] || []), userMsg];
+      return {
+        messages: { ...state.messages, [convId]: convMsgs },
+        streamingByConv: {
+          ...state.streamingByConv,
+          [convId]: { content: '', thinking: '' },
+        },
+      };
+    });
+    await runStream(get, set, {
+      sendConvId: convId,
+      displayConvId: convId,
+      content,
+      isTemp: false,
+    });
   },
 
-  cancelStream: () => {
-    const controller = (window as any).__stream_controller;
+  clearQueue: (convId: string) => {
+    set((state) => {
+      const queueByConv = { ...state.queueByConv };
+      delete queueByConv[convId];
+      return { queueByConv };
+    });
+  },
+
+  cancelStream: (convId: string) => {
+    const controller = streamControllers.get(convId);
     if (controller) {
       controller.abort();
-      // 停止：取消当前流，同时清空排队队列（一次停止，全部停止）
-      set({ isStreaming: false, streamingContent: '', thinkingContent: '', streamingConvId: null, pendingQueue: [], queueSending: false });
+      streamControllers.delete(convId);
     }
+    set((state) => {
+      const streamingByConv = { ...state.streamingByConv };
+      delete streamingByConv[convId];
+      const queueByConv = { ...state.queueByConv };
+      delete queueByConv[convId];
+      return { streamingByConv, queueByConv };
+    });
   },
 
   addMessage: (convId: string, message: Message) => {
