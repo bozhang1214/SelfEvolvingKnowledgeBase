@@ -217,6 +217,7 @@ flowchart TB
 | browser_client.py | 通用浏览器服务客户端（sekb-browser） | WP2 从 job.py 内联 `_call_browser` 提取；可配置 base_url |
 | upload_service.py | 文件上传入库领域服务 | WP2 从 upload.py 提取：MD5 去重/原文件持久化/入库流水线/分类/LLM 概览；返回 IngestResult |
 | share_service.py | 分享域公共助手 | WP2 从 share/chat_share 去重：get_valid_share / owner_display_name（fallback 参数化） |
+| job_service.py | 招聘文件导入解析 | WP2 从 job.py import_jobs 提取：parse_job_files（FileProcessor + 编码回退） |
 
 ---
 

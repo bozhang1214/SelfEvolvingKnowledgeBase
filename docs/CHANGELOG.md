@@ -8,6 +8,10 @@
 
 ## 2026-09-09
 
+### 深度代码重构（WP2：job 路由文件导入解析下沉）
+- **新增 `services/job_service.py`**：`parse_job_files(files)` 提取 import_jobs 的 55 行文件解析循环（FileProcessor + 临时文件 + 编码回退），job.py 净减 ~50 行并移除不再使用的 os 导入。
+- 新增 test_job_service 3 例；全量 585 passed；ruff 全绿、mypy 301≤310。
+
 ### 深度代码重构（WP2：share/chat_share 重复助手收敛）
 - **新增 `services/share_service.py`**：`get_valid_share`（404/403 校验）与 `owner_display_name`（脱敏展示名，fallback 参数化）单一实现，消除 share.py 与 chat_share.py 各自复制的两份逻辑。
 - 两路由保留各自 `_require_share_storage`（不同存储后端）与薄委托包装，调用点/行为不变。
