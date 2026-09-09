@@ -1,0 +1,77 @@
+# ============================================================
+# 季度文档审阅（自动提醒 + 人工确认后执行）
+# ============================================================
+# 目的：
+#   - 每季度自动运行 docs/tech/.validation/check-freshness.sh
+#   - 若存在「过期 / 落后 HEAD」的文档 → 仅创建 Issue 提醒（不自动改动）
+#   - 由维护者确认后，再手动触发 workflow（manual review）或自行按清单更新
+# 触发：
+#   - schedule：季度首日 01:00 UTC（1/4/7/10 月 1 日）
+#   - workflow_dispatch：手动
+# ============================================================
+name: Quarterly Doc Review
+
+on:
+  schedule:
+    - cron: "0 1 1 1,4,7,10 *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  freshness-check:
+    name: Freshness check + issue reminder
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 需要历史来计算落后 commit 数
+      - name: Run check-freshness
+        id: freshness
+        shell: bash
+        run: |
+          set +e
+          out="$(bash docs/tech/.validation/check-freshness.sh 120 300 2>&1)"
+          code=$?
+          echo "$out"
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          echo "report<<EOF_REPORT" >> "$GITHUB_OUTPUT"
+          echo "$out" >> "$GITHUB_OUTPUT"
+          echo "EOF_REPORT" >> "$GITHUB_OUTPUT"
+      # 有过期文档 → 开 issue（仅提醒，不自动修改任何文档）
+      - name: Open reminder issue if stale
+        if: steps.freshness.outputs.exit != '0'
+        uses: actions/github-script@v7
+        env:
+          REPORT: ${{ steps.freshness.outputs.report }}
+        with:
+          script: |
+            const report = process.env.REPORT || '';
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: ['doc-review'], per_page: 5,
+            });
+            if (existing.data.length > 0) {
+              console.log('已存在未关闭的 doc-review issue，跳过（去重）');
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: '📚 季度文档审阅提醒（请确认后更新）',
+              labels: ['doc-review'],
+              body: [
+                '## 季度 check-freshness 发现以下文档可能过期',
+                '',
+                '```',
+                report,
+                '```',
+                '',
+                '### 执行方式（请人工确认后执行）',
+                '1. 在仓库 Actions 手动运行 **Quarterly Doc Review** 查看完整清单；',
+                '2. 或直接按上面清单逐篇更新对应 `docs/tech/*.md` 的 front-matter（last-updated / based-on-commit）与内容。',
+                '',
+                '> 本 issue 由定时任务自动创建，**仅提醒、不自动改动文档**；确认处理后请关闭本 issue。',
+              ].join('\n'),
+            });
