@@ -204,18 +204,10 @@ class LangSmithConfig(BaseModel):
     endpoint: str = "https://api.smith.langchain.com"
 
 
-class LocalJSONTraceConfig(BaseModel):
-    """本地 JSON trace 配置"""
-    trace_dir: str = "data/traces"
-    max_file_size_mb: int = 10
-
-
 class TracingConfig(BaseModel):
-    """链路追踪配置"""
+    """链路追踪配置（Phase 3：仅 LangSmith；本地 JSON 降级已按 D6 删除）"""
     provider: str = "langsmith"
-    fallback_to_local_on_failure: bool = True
     langsmith: LangSmithConfig = LangSmithConfig()
-    local_json: LocalJSONTraceConfig = LocalJSONTraceConfig()
 
 
 class WebSearchConfig(BaseModel):

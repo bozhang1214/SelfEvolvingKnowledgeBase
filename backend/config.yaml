@@ -175,17 +175,12 @@ cost_control:
 
 # ============ Tracing ============
 tracing:
-  provider: langsmith                    # 首选 LangSmith，失败降级本地 JSON
-  fallback_to_local_on_failure: true     # LangSmith 不可用时自动降级
+  provider: langsmith                    # Phase 3 仅 LangSmith（本地 JSON 降级已按 D6 删除）
   # LangSmith 配置（在线可视化）
   langsmith:
     api_key: ${LANGSMITH_API_KEY}        # API Key，从环境变量读取
     project: self-evolving-kb           # LangSmith 项目名
     endpoint: https://api.smith.langchain.com
-  # 本地 JSON Trace 降级配置
-  local_json:
-    trace_dir: data/traces               # Trace 文件存放目录
-    max_file_size_mb: 10                 # 单个 Trace 文件最大 10MB
 
 # ============ 工具层（MCP 协议） ============
 tools:
