@@ -37,6 +37,7 @@ from app.core.exceptions import SEKBError
 from app.core.logging import bind_context, clear_context, get_logger
 from app.core.metrics import record_chat_error, record_chat_metrics
 from app.core.token_sink import reset_token_sink, set_token_sink
+from app.core.utils import to_state_dict
 from app.graph.state import create_initial_state
 
 logger = get_logger(__name__)
@@ -124,26 +125,6 @@ class ChatResponse(BaseModel):
 # ============================================================
 # 内部辅助
 # ============================================================
-
-def _extract_state_dict(final_state: Any) -> dict[str, Any]:
-    """
-    从 LangGraph ainvoke 返回值中提取 GraphState 字典。
-
-    LangGraph 不同版本可能返回 dict 或带 ``values()`` 方法的对象，
-    统一转换为 dict 形式以便访问字段。
-    """
-    if isinstance(final_state, dict):
-        return final_state
-    if hasattr(final_state, "values"):
-        try:
-            return dict(final_state.values())
-        except Exception:
-            pass
-    try:
-        return dict(final_state)
-    except Exception:
-        return {}
-
 
 async def _build_job_analysis_context(user_id: str) -> str:
     """
@@ -504,7 +485,7 @@ async def _run_chat(
                 if is_node_event and event == "on_chain_end":
                     out = ev.get("data", {}).get("output")
                     if isinstance(out, dict):
-                        acc.update(_extract_state_dict(out))
+                        acc.update(to_state_dict(out))
             final_state = {**dict(state), **acc}
         except Exception as e:
             # 工作流整体异常兜底：返回降级回复而非 500 中断
@@ -534,7 +515,7 @@ async def _run_chat(
     latency_ms = int((time.time() - start_time) * 1000)
 
     # 5. 提取回复与指标
-    state_dict = _extract_state_dict(final_state)
+    state_dict = to_state_dict(final_state)
     answer = (
         state_dict.get("final_answer")
         or state_dict.get("draft_answer")

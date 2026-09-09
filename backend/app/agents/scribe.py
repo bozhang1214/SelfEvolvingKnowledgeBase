@@ -22,6 +22,7 @@ from typing import Any
 from app.agents.base import BaseAgent
 from app.agents.prompts.templates import SCRIBE_PROMPT
 from app.core.exceptions import AgentError
+from app.core.utils import safe_float
 from app.graph.state import GraphState
 
 
@@ -82,7 +83,7 @@ class ScribeAgent(BaseAgent):
             data = await self._parse_json_response(response)
 
             summary = str(data.get("summary", "")).strip()
-            importance_score = self._safe_float(
+            importance_score = safe_float(
                 data.get("importance_score"), 0.0, 1.0
             )
             should_persist = bool(data.get("should_persist", False))
@@ -217,22 +218,3 @@ class ScribeAgent(BaseAgent):
             "llm_degradation_count": llm_degradation_count,
         }
         return metrics
-
-    @staticmethod
-    def _safe_float(value: Any, min_val: float, max_val: float) -> float:
-        """
-        安全转换为 float 并裁剪到 [min_val, max_val] 区间。
-
-        Args:
-            value: 待转换的值
-            min_val: 最小值
-            max_val: 最大值
-
-        Returns:
-            归一化后的 float
-        """
-        try:
-            v = float(value)
-        except (TypeError, ValueError):
-            return 0.0
-        return max(min_val, min(max_val, v))

@@ -21,21 +21,13 @@ from app.core.auth import get_current_user
 from app.core.bootstrap import get_app_context
 from app.core.categories import DEFAULT_CATEGORY_TREE, to_tree_response
 from app.core.logging import get_logger
+from app.core.utils import fmt_dt as _fmt_dt
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"],
     dependencies=[Depends(require_full_access)],
 )
-
-
-def _fmt_dt(v: Any) -> str:
-    """时间字段统一序列化：兼容 str（Chroma 元数据）与 datetime。"""
-    if v is None:
-        return ""
-    if isinstance(v, str):
-        return v
-    return v.isoformat()
 
 
 def _entry_to_dict(e: Any, with_similarity: bool = False) -> dict[str, Any]:

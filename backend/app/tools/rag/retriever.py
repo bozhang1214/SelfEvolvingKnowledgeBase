@@ -11,12 +11,13 @@ RAG 检索器模块
 
 使用方式：
     from app.tools.direct.vector_store import DirectVectorStore
-    from app.tools.rag.retriever import RAGRetriever, format_rag_context
+    from app.tools.rag.format import format_rag_reference
+    from app.tools.rag.retriever import RAGRetriever
 
     retriever = RAGRetriever(vector_store, config={"retrieval_top_k": 5})
     result = await retriever.retrieve_for_query("查询", "user1", "kb_strict")
     if result.context:
-        context_text = format_rag_context(result.context)
+        context_text = format_rag_reference(result.context)
 """
 
 from __future__ import annotations
@@ -221,53 +222,3 @@ class RAGRetriever:
             return "知识库中暂无相关信息，将结合通用能力回答"
         # auxiliary：静默，不提示
         return ""
-
-
-# ============================================================
-# 上下文格式化
-# ============================================================
-
-# 来源中文映射
-_SOURCE_LABELS = {
-    "conversation": "对话",
-    "document": "文档",
-    "manual": "手工录入",
-}
-
-
-def format_rag_context(results: list[dict[str, Any]]) -> str:
-    """
-    将检索结果格式化为可注入 Prompt 的文本。
-
-    格式：
-        【知识库参考】
-        以下是从您的知识库中检索到的相关信息：
-        [参考1]（重要性：0.85，来源：对话）
-        内容...
-        [参考2]（重要性：0.72，来源：文档）
-        内容...
-
-    Args:
-        results: DirectVectorStore.search 返回的检索结果列表
-
-    Returns:
-        格式化后的上下文文本；results 为空时返回空字符串
-    """
-    if not results:
-        return ""
-
-    lines: list[str] = [
-        "【知识库参考】",
-        "以下是从您的知识库中检索到的相关信息：",
-    ]
-
-    for idx, item in enumerate(results, start=1):
-        importance = float(item.get("importance", 0.0))
-        source = item.get("source", "unknown")
-        source_label = _SOURCE_LABELS.get(source, source)
-        content = (item.get("content") or "").strip()
-
-        lines.append(f"[参考{idx}]（重要性：{importance:.2f}，来源：{source_label}）")
-        lines.append(content)
-
-    return "\n".join(lines)

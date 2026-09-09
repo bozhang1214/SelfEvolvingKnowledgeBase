@@ -25,19 +25,11 @@ from app.api.server import get_app_context
 from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
 from app.core.logging import get_logger
+from app.core.utils import fmt_dt as _fmt_dt
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/chat-share", tags=["chat-share"])
-
-
-def _fmt_dt(v: Any) -> str:
-    """时间字段统一序列化：兼容 str 与 datetime。"""
-    if v is None:
-        return ""
-    if isinstance(v, str):
-        return v
-    return v.isoformat()
 
 
 class CreateChatShareRequest(BaseModel):

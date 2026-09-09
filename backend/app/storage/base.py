@@ -13,18 +13,14 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
+
+from app.core.utils import now_iso
 
 # ============================================================
 # 工具函数
 # ============================================================
-
-def now_iso() -> str:
-    """返回当前 UTC 时间的 ISO 格式字符串"""
-    return datetime.now(timezone.utc).isoformat()
-
 
 def new_uuid() -> str:
     """生成一个新的 UUID 字符串"""

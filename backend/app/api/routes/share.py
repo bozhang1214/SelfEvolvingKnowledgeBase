@@ -35,21 +35,14 @@ from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
 from app.core.logging import get_logger
+from app.core.utils import fmt_dt as _fmt_dt
+from app.tools.rag.format import format_rag_share_context as _build_rag_context
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/share", tags=["share"],
     dependencies=[Depends(require_full_access)],
 )
-
-
-def _fmt_dt(v: Any) -> str:
-    """时间字段统一序列化：兼容 str 与 datetime。"""
-    if v is None:
-        return ""
-    if isinstance(v, str):
-        return v
-    return v.isoformat()
 
 
 # 分享对话使用的 LLM 角色（deepseek-chat，自然闲聊）
@@ -115,22 +108,6 @@ def _owner_display_name(ctx: AppContext, owner_user_id: str) -> str:
     if user is None:
         return "知识库所有者"
     return user.name or (user.email.split("@")[0] if user.email else "知识库所有者")
-
-
-def _build_rag_context(retrieved: list[dict[str, Any]]) -> str:
-    """将检索结果拼接为上下文文本。"""
-    if not retrieved:
-        return "（未检索到相关知识）"
-    blocks = []
-    idx = 0
-    for item in retrieved:
-        content = item.get("content", "").strip()
-        if not content:
-            continue
-        idx += 1
-        source = item.get("source_id") or item.get("source") or ""
-        blocks.append(f"[{idx}] (来源:{source})\n{content}")
-    return "\n\n".join(blocks) if blocks else "（未检索到相关知识）"
 
 
 def _history_to_messages(history: list[dict[str, Any]]):

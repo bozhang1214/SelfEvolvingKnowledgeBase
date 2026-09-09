@@ -43,6 +43,7 @@ from app.core.config import AppConfig
 from app.core.exceptions import SEKBError
 from app.core.llm_factory import LLMFactory
 from app.core.logging import bind_context, clear_context, get_logger
+from app.core.utils import to_state_dict
 from app.graph.state import create_initial_state
 from app.memory.short_term import ShortTermMemory
 from app.storage.json_storage import JSONStorage
@@ -223,7 +224,7 @@ class ChatSession:
         latency_ms = int((time.time() - start_time) * 1000)
 
         # 5. 提取回复与指标
-        final_state_dict = self._extract_state_dict(final_state)
+        final_state_dict = to_state_dict(final_state)
         answer = (
             final_state_dict.get("final_answer")
             or final_state_dict.get("draft_answer")
@@ -564,29 +565,3 @@ class ChatSession:
                     self.USER_ID, conv_id, AIMessage(content=content)
                 )
         logger.info("会话历史已恢复", conv_id=conv_id, count=len(messages))
-
-    @staticmethod
-    def _extract_state_dict(final_state: Any) -> dict[str, Any]:
-        """
-        从 LangGraph ainvoke 返回值中提取 GraphState 字典。
-
-        LangGraph 不同版本可能返回 dict 或带 values() 方法的对象，
-        此方法统一转换为 dict 形式以便访问字段。
-
-        Args:
-            final_state: graph.ainvoke 的返回值
-
-        Returns:
-            GraphState 字典
-        """
-        if isinstance(final_state, dict):
-            return final_state
-        if hasattr(final_state, "values"):
-            try:
-                return dict(final_state.values())
-            except Exception:
-                pass
-        try:
-            return dict(final_state)
-        except Exception:
-            return {}

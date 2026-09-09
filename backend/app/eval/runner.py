@@ -34,6 +34,7 @@ from typing import Any
 from app.core.config import AppConfig
 from app.core.exceptions import EvaluationError
 from app.core.logging import get_logger
+from app.core.utils import to_state_dict
 from app.eval.assertion import AssertionEngine, AssertionResult
 from app.eval.metrics import MetricsCollector
 from app.graph.state import ConversationMetrics, GraphState, create_initial_state
@@ -374,27 +375,13 @@ class EvalRunner:
         """
         从 LangGraph 调用结果中提取 GraphState dict。
 
-        LangGraph 不同版本可能返回 dict 或 State 对象，
-        此方法统一转换为 dict 形式。
-
-        Args:
-            final_state: LangGraph ainvoke 返回值
-
-        Returns:
-            GraphState 字典
+        实现收敛至 core.utils.to_state_dict（strict=True），失败抛 EvaluationError。
         """
         if isinstance(final_state, dict):
             return final_state
-        # 某些版本可能返回具备 values() 方法的对象
-        if hasattr(final_state, "values"):
-            try:
-                return dict(final_state.values())
-            except Exception:
-                pass
-        # 兜底：尝试转为 dict
         try:
-            return dict(final_state)
-        except Exception as e:
+            return to_state_dict(final_state, strict=True)  # type: ignore[return-value]
+        except ValueError as e:
             raise EvaluationError(
                 f"无法从 LangGraph 返回值提取 state: {e}",
                 details={"type": type(final_state).__name__},

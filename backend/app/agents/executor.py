@@ -22,6 +22,7 @@ from app.agents.prompts.templates import EXECUTOR_PROMPT
 from app.core.exceptions import AgentError, ToolError
 from app.graph.state import GraphState, TaskStatus, ToolCallRecord
 from app.memory.short_term import ShortTermMemory
+from app.tools.rag.format import format_rag_executor_reference
 from app.tools.registry import ToolRegistry
 
 
@@ -153,7 +154,7 @@ class ExecutorAgent(BaseAgent):
                     )
 
             # 格式化 RAG 上下文（Phase 2：从 pre_retrieval_results 注入）
-            rag_context = self._format_rag_context(
+            rag_context = format_rag_executor_reference(
                 state.get("pre_retrieval_results", [])
             )
 
@@ -281,31 +282,6 @@ class ExecutorAgent(BaseAgent):
                 f"llm_generate 调用失败: {e}",
                 tool_name="llm_generate",
             ) from e
-
-    def _format_rag_context(self, pre_retrieval_results: list[dict[str, Any]]) -> str:
-        """
-        将预检索结果格式化为可注入 Prompt 的知识库参考文本。
-
-        Args:
-            pre_retrieval_results: RAG 预检索结果列表
-
-        Returns:
-            格式化的知识库参考文本，无结果时返回空字符串
-        """
-        if not pre_retrieval_results:
-            return ""
-
-        lines: list[str] = []
-        for i, r in enumerate(pre_retrieval_results, 1):
-            score = r.get("score", 0.0)
-            content = r.get("content", "")
-            source = r.get("source", "")
-            importance = r.get("importance", 0.0)
-            lines.append(
-                f"[参考{i}]（相关度：{score:.2f}，重要性：{importance:.2f}，来源：{source}）\n{content}"
-            )
-
-        return "\n\n".join(lines)
 
     async def _generate_draft(
         self,

@@ -14,7 +14,6 @@ State 流转：
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, TypedDict
 
@@ -240,8 +239,3 @@ def create_initial_state(
         metrics={},
         errors=[],
     )
-
-
-def now_iso() -> str:
-    """当前 UTC 时间的 ISO 格式字符串"""
-    return datetime.now(timezone.utc).isoformat()

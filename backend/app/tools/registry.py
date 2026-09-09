@@ -124,7 +124,7 @@ class ToolRegistry:
         if provider == "bocha":
             try:
                 await self._init_bocha_mcp()
-            except (MCPError, Exception) as e:
+            except Exception as e:
                 logger.warning(
                     "博查 MCP 初始化失败，降级为直接封装模式",
                     error=str(e),

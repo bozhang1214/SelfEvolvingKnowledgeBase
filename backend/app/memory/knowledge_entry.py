@@ -21,15 +21,11 @@ L3 长期知识库条目数据模型。
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-
-def _now_iso() -> str:
-    """返回当前 UTC 时间的 ISO 格式字符串。"""
-    return datetime.now(timezone.utc).isoformat()
+from app.core.utils import now_iso as _now_iso
 
 
 class KnowledgeEntry(BaseModel):

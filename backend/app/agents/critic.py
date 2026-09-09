@@ -19,6 +19,7 @@ from typing import Any
 from app.agents.base import BaseAgent
 from app.agents.prompts.templates import CRITIC_PROMPT
 from app.core.exceptions import AgentError
+from app.core.utils import safe_float
 from app.graph.state import GraphState
 
 
@@ -95,13 +96,13 @@ class CriticAgent(BaseAgent):
             # 提取评估字段
             passed = bool(data.get("passed", False))
             result_str = str(data.get("result", "")).strip()
-            groundedness_score = self._safe_float(
+            groundedness_score = safe_float(
                 data.get("groundedness_score"), 0.0, 1.0
             )
-            coherence_score = self._safe_float(
+            coherence_score = safe_float(
                 data.get("coherence_score"), 0.0, 10.0
             )
-            relevance_score = self._safe_float(
+            relevance_score = safe_float(
                 data.get("relevance_score"), 0.0, 1.0
             )
             issues = (
@@ -177,22 +178,3 @@ class CriticAgent(BaseAgent):
                 "replan_count": int(state.get("replan_count", 0)),
                 "errors": errors,
             }
-
-    @staticmethod
-    def _safe_float(value: Any, min_val: float, max_val: float) -> float:
-        """
-        安全转换为 float 并裁剪到 [min_val, max_val] 区间。
-
-        Args:
-            value: 待转换的值
-            min_val: 最小值
-            max_val: 最大值
-
-        Returns:
-            归一化后的 float
-        """
-        try:
-            v = float(value)
-        except (TypeError, ValueError):
-            return 0.0
-        return max(min_val, min(max_val, v))

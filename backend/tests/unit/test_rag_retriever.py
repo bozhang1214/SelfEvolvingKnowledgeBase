@@ -24,10 +24,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.tools.rag.format import format_rag_reference
 from app.tools.rag.retriever import (
     RAGResult,
     RAGRetriever,
-    format_rag_context,
 )
 
 # ============================================================
@@ -347,16 +347,16 @@ class TestFormatRagContext:
 
     def test_empty_results_returns_empty_string(self):
         """空结果返回空字符串"""
-        assert format_rag_context([]) == ""
+        assert format_rag_reference([]) == ""
 
     def test_none_results_returns_empty_string(self):
         """None 结果返回空字符串"""
-        assert format_rag_context(None) == ""  # type: ignore[arg-type]
+        assert format_rag_reference(None) == ""  # type: ignore[arg-type]
 
     def test_single_result_format(self):
         """单条结果格式化正确"""
         results = [_make_result_item(content="知识内容A", importance=0.85, source="conversation")]
-        text = format_rag_context(results)
+        text = format_rag_reference(results)
 
         assert "【知识库参考】" in text
         assert "以下是从您的知识库中检索到的相关信息：" in text
@@ -371,7 +371,7 @@ class TestFormatRagContext:
             _make_result_item(content="内容1", importance=0.8, source="document"),
             _make_result_item(content="内容2", importance=0.6, source="manual"),
         ]
-        text = format_rag_context(results)
+        text = format_rag_reference(results)
 
         assert "[参考1]" in text
         assert "[参考2]" in text
@@ -383,19 +383,19 @@ class TestFormatRagContext:
     def test_unknown_source_label_passthrough(self):
         """未知来源直接使用原值"""
         results = [_make_result_item(content="内容", source="custom_source")]
-        text = format_rag_context(results)
+        text = format_rag_reference(results)
         assert "来源：custom_source" in text
 
     def test_importance_formatted_two_decimals(self):
         """重要性分数保留两位小数"""
         results = [_make_result_item(importance=0.123456)]
-        text = format_rag_context(results)
+        text = format_rag_reference(results)
         assert "重要性：0.12" in text
 
     def test_empty_content_still_included(self):
         """空内容的条目仍被包含（content 为空字符串）"""
         results = [_make_result_item(content="")]
-        text = format_rag_context(results)
+        text = format_rag_reference(results)
         assert "[参考1]" in text
 
 
