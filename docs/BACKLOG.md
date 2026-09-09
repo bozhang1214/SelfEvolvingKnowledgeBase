@@ -90,7 +90,7 @@
 | WP3 | 聊天瘦身 + 画像解耦 | **D2**、收尾项「skill 注入面/画像锁」、P1-7 状态回填 | ✅ 完成（删 skill + 画像下沉 profile_service，`daa76bd`） |
 | WP4 | LLM 统一入口收口 + RateLimit 重开 + stats 并发 + 指标复核 | P0「限流重开/统一 LLM 入口/降级可见化」、P1「指标补齐」、Q-4.7、NEW-G、SHARE-1（启用后复核）、死指标复核 | ✅ 完成（LLM 收口 `b49889a` + 限流接线 `8f7a2c3`；Q-4.7 已有锁；指标复核并入 WP8） |
 | WP5 | Agent/记忆锁/配置语义/state 清理/tracing 处置 | P2-15、NEW-D、Q-4.3/SHARE-3、P2-12/13、Q-4.12、P2-11（D6） | ✅ 完成（P2-15/NEW-D/Q-4.3/P2-13 `f178bc3`；sample_rate→WP6、tracing D6→WP6、state 字段→WP8） |
-| WP6 | 死配置(49键)/死代码/中间脚本清理 | P1-6（**D3**）、P2-P2-05、`sample_rate`、`trigger_now`、Q-4.8/Q-4.10、D7 脚本 | 待开始 |
+| WP6 | 死配置(49键)/死代码/中间脚本清理 | P1-6（**D3**）、P2-P2-05、`sample_rate`、`trigger_now`、Q-4.8/Q-4.10、D7 脚本 | 🔄 进行中（死代码/死配置/D3 占位关删已完；D6 tracing/D7 脚本/49键全量待续） |
 | WP7 | 前端组件化（Job/Chat/Files） | P1「前端健壮」部分 | 待开始 |
 | WP8 | 全量验证 + 文档收尾 + 部署 | 红线验收、BACKLOG/EVOLUTION 结项 | 待开始 |
 

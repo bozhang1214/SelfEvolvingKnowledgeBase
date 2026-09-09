@@ -8,6 +8,12 @@
 
 ## 2026-09-09
 
+### 深度代码重构（WP6：死配置/死代码/占位配置关删）
+- **死代码清理**：删除 `scheduler.trigger_now`（无调用方）、`verify_phase3.py`（阶段性验证脚本）。
+- **死配置删除**：`TracingConfig.sample_rate`（无消费，P2-12）、`VectorStoreConfig.enabled`（bootstrap 只查 l3_knowledge.enabled，P2-P2-05）。
+- **D3 占位配置关删（P1-6）**：删除 adaptive/sampling 反思占位（factory 原降级为 always）及 config.yaml 段；删除 cost_control 预算占位字段（per_conversation_token_limit/daily_budget_usd/reasoner_ratio_alert_above/auto_downgrade_on_budget，均无消费），仅保留 pricing；实现项列入 11-EVOLUTION。
+- 全量 586 passed；ruff 全绿、mypy 297≤310。
+
 ### 深度代码重构（WP5：记忆压缩加锁 + 恢复压缩 + 配置语义）
 - **P2-15**：`ShortTermMemory.compress_if_needed` 增加按 conv_id 粒度的 `asyncio.Lock`（抽 `_compress_impl`），并发压缩串行化。
 - **NEW-D**：API `_run_chat` 与 CLI `_restore_history_to_memory` 在历史恢复后调用一次压缩，避免超大历史堆积。
