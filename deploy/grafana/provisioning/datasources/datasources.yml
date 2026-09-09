@@ -14,7 +14,7 @@ datasources:
     access: proxy
     url: http://prometheus:9090
     isDefault: true
-    editable: false
+    editable: true
     jsonData:
       httpMethod: POST
       timeInterval: 15s
@@ -24,6 +24,6 @@ datasources:
     type: loki
     access: proxy
     url: http://loki:3100
-    editable: false
+    editable: true
     jsonData:
       maxLines: 1000
