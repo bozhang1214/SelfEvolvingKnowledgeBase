@@ -46,3 +46,11 @@ repos:
         entry: frontend/node_modules/.bin/eslint --config frontend/eslint.config.js
         language: system
         files: ^frontend/.*\.(ts|tsx)$
+
+      # ---------- 文档联动：代码改动提示同步更新技术文档（非阻断）----------
+      - id: doc-sync-check
+        name: doc sync check (code -> docs/tech)
+        entry: bash docs/tech/.validation/check-doc-sync.sh
+        language: system
+        always_run: true
+        pass_filenames: false
