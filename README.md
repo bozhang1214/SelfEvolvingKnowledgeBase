@@ -636,21 +636,23 @@ sekb eval --dataset app/eval/datasets/golden_qa.json
 
 | 文档 | 内容 |
 |------|------|
-| [docs/README.md](docs/README.md) | 文档工程导航与项目定位 |
-| [docs/01-architecture.md](docs/01-architecture.md) | 总体架构、技术栈、ADR |
-| [docs/02-phase1-design.md](docs/02-phase1-design.md) | Phase 1 详细设计 |
-| [docs/03-evaluation-and-testing.md](docs/03-evaluation-and-testing.md) | 评估体系与测试 |
-| [docs/04-config-reference.md](docs/04-config-reference.md) | 配置参考 |
-| [docs/05-phase2-design.md](docs/05-phase2-design.md) | Phase 2 详细设计 |
-| [docs/06-phase3-design.md](docs/06-phase3-design.md) | Phase 3 详细设计 |
-| [docs/07-phase4-design.md](docs/07-phase4-design.md) | Phase 4 详细设计 |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | **项目操作手册**：从零到上线的完整指南 |
-| [docs/PRODUCTION-DEPLOY.md](docs/PRODUCTION-DEPLOY.md) | **线上部署手册**：生产服务器部署实战指南 |
-| [docs/CLOUD-DEPLOY.md](docs/CLOUD-DEPLOY.md) | **云平台部署手册**：国内轻量应用服务器低成本部署 |
-| [docs/ALERTING-TROUBLESHOOTING.md](docs/ALERTING-TROUBLESHOOTING.md) | 告警模块故障排查指南 |
-| [docs/testCase/TEST-CASES.md](docs/testCase/TEST-CASES.md) | 测试用例汇总与自动化测试指南 |
-
----
+| [docs/README.md](docs/README.md) | 文档工程导航（技术文档 / 运维手册 / 变更日志 / 备份） |
+| [docs/tech/00-README.md](docs/tech/00-README.md) | **技术文档总览**：12 篇编号文档的文档地图与阅读路线 |
+| [docs/tech/01-ARCHITECTURE.md](docs/tech/01-ARCHITECTURE.md) | 架构总览（C4 图 + ADR + 技术选型） |
+| [docs/tech/02-RUNTIME-FLOWS.md](docs/tech/02-RUNTIME-FLOWS.md) | 运行时流程（主链路/SSE/状态机/TTFT） |
+| [docs/tech/03-MODULES.md](docs/tech/03-MODULES.md) | 模块详解 |
+| [docs/tech/04-DATA-MODEL.md](docs/tech/04-DATA-MODEL.md) | 数据模型（存储/隔离/生命周期） |
+| [docs/tech/05-API-REFERENCE.md](docs/tech/05-API-REFERENCE.md) | 接口参考（65 端点 + SSE + CLI） |
+| [docs/tech/06-CONFIG-REFERENCE.md](docs/tech/06-CONFIG-REFERENCE.md) | 配置参考（config.yaml + 死配置） |
+| [docs/tech/07-DESIGN-PATTERNS.md](docs/tech/07-DESIGN-PATTERNS.md) | 设计模式与原则评价 |
+| [docs/tech/08-GLOSSARY.md](docs/tech/08-GLOSSARY.md) | 术语表 |
+| [docs/tech/09-OBSERVABILITY.md](docs/tech/09-OBSERVABILITY.md) | 可观测性（指标/日志/告警/排障） |
+| [docs/tech/10-TESTING.md](docs/tech/10-TESTING.md) | 测试与质量 |
+| [docs/tech/11-EVOLUTION.md](docs/tech/11-EVOLUTION.md) | 演进与技术债 |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | 变更日志（活文档） |
+| [docs/BACKLOG.md](docs/BACKLOG.md) | 需求跟踪 / 审计（活文档） |
+| [docs/ops/](docs/ops/) | 部署运维手册（生产部署 / 排障 / 采集渠道） |
+| [docs/backup_20260909/](docs/backup_20260909/) | 2026-09-09 前历史文档归档 |
 
 ## License
 

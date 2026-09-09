@@ -5,7 +5,7 @@ owner: SEKB Team
 status: active
 version: v1.0.0
 last-updated: 2026-09-09
-based-on-commit: TBD
+based-on-commit: 010d83e
 related: [01-ARCHITECTURE, 02-RUNTIME-FLOWS, 03-MODULES, 04-DATA-MODEL, 05-API-REFERENCE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 08-GLOSSARY, 09-OBSERVABILITY, 10-TESTING, 11-EVOLUTION]
 ---
 
