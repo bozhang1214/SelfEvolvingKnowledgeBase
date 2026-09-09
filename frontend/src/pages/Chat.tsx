@@ -646,63 +646,63 @@ const Chat: React.FC = () => {
                       </div>
                     )}
                   </div>
-                  {/* 消息操作按钮：位于文本框下方，按角色居左(AI)/居右(用户) */}
-                  {isPersisted && (
-                    <div
-                      className="msg-actions"
-                      style={{ display: 'flex', gap: 2, alignItems: 'center', marginTop: 4, padding: '0 4px' }}
-                    >
-                      {/* 复制（所有消息） */}
-                      <Button
-                        size="small"
-                        type="text"
-                        className="msg-action-btn"
-                        icon={isCopied ? <CheckOutlined style={{ color: '#52c41a' }} /> : <CopyOutlined />}
-                        onClick={() => handleCopyMessage(msg, idx)}
-                        title="复制"
-                      />
-                      {msg.role === 'user' ? (
-                        editMsgId !== msg.message_id && (
-                          <Button
-                            size="small"
-                            type="text"
-                            className="msg-action-btn"
-                            icon={<EditOutlined />}
-                            onClick={() => startEditMessage(msg)}
-                            title="编辑"
-                          />
-                        )
-                      ) : (
-                        <>
-                          {/* 重生成 */}
-                          <Button
-                            size="small"
-                            type="text"
-                            className="msg-action-btn"
-                            icon={<RedoOutlined />}
-                            onClick={() => handleRegenerate(msg, idx)}
-                            disabled={isStreaming}
-                            title="重生成"
-                          />
-                          {/* 转发 */}
-                          <Button
-                            size="small"
-                            type="text"
-                            className="msg-action-btn"
-                            icon={<ShareAltOutlined />}
-                            onClick={async () => {
-                              const ok = await copyText(msg.content);
-                              if (ok) {
-                                antMsg.success('内容已复制，可转发');
-                              }
-                            }}
-                            title="转发"
-                          />
-                        </>
-                      )}
-                    </div>
-                  )}
                 </div>
+                {/* 消息操作按钮：位于气泡下方，AI 居左 / 用户居右（外层列容器按角色对齐） */}
+                {isPersisted && (
+                  <div
+                    className="msg-actions"
+                    style={{ display: 'flex', gap: 2, alignItems: 'center', marginTop: 4, padding: '0 4px' }}
+                  >
+                    {/* 复制（所有消息） */}
+                    <Button
+                      size="small"
+                      type="text"
+                      className="msg-action-btn"
+                      icon={isCopied ? <CheckOutlined style={{ color: '#52c41a' }} /> : <CopyOutlined />}
+                      onClick={() => handleCopyMessage(msg, idx)}
+                      title="复制"
+                    />
+                    {msg.role === 'user' ? (
+                      editMsgId !== msg.message_id && (
+                        <Button
+                          size="small"
+                          type="text"
+                          className="msg-action-btn"
+                          icon={<EditOutlined />}
+                          onClick={() => startEditMessage(msg)}
+                          title="编辑"
+                        />
+                      )
+                    ) : (
+                      <>
+                        {/* 重生成 */}
+                        <Button
+                          size="small"
+                          type="text"
+                          className="msg-action-btn"
+                          icon={<RedoOutlined />}
+                          onClick={() => handleRegenerate(msg, idx)}
+                          disabled={isStreaming}
+                          title="重生成"
+                        />
+                        {/* 转发 */}
+                        <Button
+                          size="small"
+                          type="text"
+                          className="msg-action-btn"
+                          icon={<ShareAltOutlined />}
+                          onClick={async () => {
+                            const ok = await copyText(msg.content);
+                            if (ok) {
+                              antMsg.success('内容已复制，可转发');
+                            }
+                          }}
+                          title="转发"
+                        />
+                      </>
+                    )}
+                  </div>
+                )}
                 {/* 消息时间戳 */}
                 {(msg as any).created_at && (
                   <Text
