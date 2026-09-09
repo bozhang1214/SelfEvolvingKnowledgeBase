@@ -652,7 +652,6 @@ sekb eval --dataset app/eval/datasets/golden_qa.json
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | 变更日志（活文档） |
 | [docs/BACKLOG.md](docs/BACKLOG.md) | 需求跟踪 / 审计（活文档） |
 | [docs/ops/](docs/ops/) | 部署运维手册（生产部署 / 排障 / 采集渠道） |
-| [docs/backup_20260909/](docs/backup_20260909/) | 2026-09-09 前历史文档归档 |
 
 ## License
 

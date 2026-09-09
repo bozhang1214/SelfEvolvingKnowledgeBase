@@ -96,4 +96,4 @@ related: [00-README, 07-DESIGN-PATTERNS, 11-EVOLUTION]
 
 - [07-DESIGN-PATTERNS.md](./07-DESIGN-PATTERNS.md)（可测试性评分）
 - [11-EVOLUTION.md](./11-EVOLUTION.md)
-- 测试用例旧文档素材：`docs/backup_20260909/testCase/`
+- 测试用例历史素材已随旧 docs 归档移除（git 历史可查）；当前用例见 backend/tests 与 frontend/tests。

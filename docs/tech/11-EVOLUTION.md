@@ -15,7 +15,7 @@ related: [01-ARCHITECTURE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 09-OBSERVABI
 > **适合谁读**：决策者、架构师。
 > **读完能做什么**：按优先级排技术债、规划演进路线、识别依赖风险。
 
-> 技术债证据来自各事实表（T2 死配置 / T3 绕过调用 / T6 存储 / T7 异步 / T8 观测）、BACKLOG 与代码审查记录（docs/backup_20260909/codeReview/）。as-is 与 to-be 分离。
+> 技术债证据来自各事实表（T2 死配置 / T3 绕过调用 / T6 存储 / T7 异步 / T8 观测）、BACKLOG 与代码审查记录（docs/codeReview/）。as-is 与 to-be 分离。
 
 ---
 
@@ -96,4 +96,4 @@ related: [01-ARCHITECTURE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 09-OBSERVABI
 - [07-DESIGN-PATTERNS.md](./07-DESIGN-PATTERNS.md)
 - [09-OBSERVABILITY.md](./09-OBSERVABILITY.md)
 - [docs/BACKLOG.md](../BACKLOG.md)（活跃待办）
-- 审查记录：docs/backup_20260909/codeReview/
+- 审查记录：docs/codeReview/

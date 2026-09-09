@@ -9,7 +9,7 @@
 ## 2026-09-09
 
 ### 文档工程重构（按 1-6 工程逆向分析提示词，完整版 12 篇）
-- **备份**：原 `docs/` 全部移至 `docs/backup_20260909/`（git mv 保留历史）；codeReview 不进入新工程；testCase 文档留备份作 10-TESTING 素材。
+- **备份**：原 `docs/` 历史内容清理：旧技术文档/问题记录/测试用例文档已删（git 历史可查），codeReview 迁移至 `docs/codeReview/`，运维手册至 `docs/ops/`，活文档至 docs 根。
 - **保留**：运维/部署手册副本 → `docs/ops/`（10 篇，真实环境操作）；CHANGELOG/BACKLOG 活文档副本 → `docs/` 根继续维护。
 - **新工程 `docs/tech/`**：完整版 12 篇证据驱动文档（00-README 地图 + 01-ARCHITECTURE C4/ADR + 02-RUNTIME-FLOWS + 03-MODULES + 04-DATA-MODEL + 05-API(65端点/SSE/CLI) + 06-CONFIG + 07-DESIGN-PATTERNS + 08-GLOSSARY + 09-OBSERVABILITY + 10-TESTING + 11-EVOLUTION），全部带 `file:line`、Mermaid、编号/术语一致。
 - **事实表 SSOT**：`docs/tech/.facts/T1-T8`（路由 65/配置 178/LLM 23 调用/AgentState/工具/存储/异步/可观测），多子代理并行抽取。
