@@ -8,6 +8,13 @@
 
 ## 2026-09-09
 
+### 深度代码重构（WP5：记忆压缩加锁 + 恢复压缩 + 配置语义）
+- **P2-15**：`ShortTermMemory.compress_if_needed` 增加按 conv_id 粒度的 `asyncio.Lock`（抽 `_compress_impl`），并发压缩串行化。
+- **NEW-D**：API `_run_chat` 与 CLI `_restore_history_to_memory` 在历史恢复后调用一次压缩，避免超大历史堆积。
+- **P2-13**：`model_switch_threshold` 补 description + critic.py 语义注释（`task_complexity >= 阈值 → reasoner`）。
+- **Q-4.3 复核**：JSONStorage 已有 `self._lock`（json_storage.py:77/356），跟踪项过期。
+- 全量 587 passed；ruff 全绿、mypy 299≤310。
+
 ### 深度代码重构（WP4：LLM 统一入口收口 + 限流接线）
 - **LLM 统一入口**：9 处绕过统一入口的裸调用（news×4 / job×2 / classifier / upload_service / share 流式）改为 `ainvoke_with_stats`/`astream_with_stats`（带统计/重试/降级记录）；删除 share.py 死代码 `_extract_stream_text`。
 - **RateLimitMiddleware 重开（D4）**：由注释死代码改为 `config.api.rate_limit.enabled` 驱动的条件挂载，阈值取 config（`requests_per_minute` / `rate_limit_login_per_minute`）；默认仍关闭，开启前需验证 SSE。
