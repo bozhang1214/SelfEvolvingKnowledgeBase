@@ -67,6 +67,7 @@ related: [01-ARCHITECTURE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 09-OBSERVABI
 
 | 缺口 | 说明 | 关联 |
 |------|------|------|
+| 求职意图识别（graph 层） | 画像偏好抽取（profile_service 方案 B）随 skill 删除而解耦，待新增「求职」意图识别后按意图触发；可复用原 `_build_job_analysis_context` 的职位分析上下文注入 | WP3 / 03 |
 | 混合检索 + Rerank + Query Rewrite | 当前纯向量检索 | 03/04 |
 | 反思 NEEDS_REWRITE 分支/checkpointer | 状态图部分能力未全用 | 02 |
 | PromptRegistry（版本/热加载） | 提示词硬编码于模板 | 03 |

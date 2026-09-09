@@ -8,6 +8,11 @@
 
 ## 2026-09-09
 
+### 深度代码重构（WP2 收尾 + WP3：画像下沉 profile_service 并删除 skill）
+- **新增 `services/profile_service.py`**：画像偏好抽取（方案 A `<PREF>` 提取 + 方案 B 记录员 LLM 后台抽取）从 chat.py 下沉；共享 `_build_pref_patch`/`_upsert_profile` 消除原 `_extract_and_update_profile` 与 `_apply_pref_to_profile` 的重复逻辑。
+- **删除 skill（D2）**：移除 `ChatRequest.skill`、`_build_skill_context`、`_build_job_analysis_context` 及 `_run_chat` 的 skill 注入；反馈闭环 A 保留（无 `<PREF>` 时 no-op），闭环 B 随 skill 解耦（函数保留，待「求职意图」识别后按意图触发）。
+- chat.py 828→538 行；非 skill 路径行为一致。新增 test_profile_service 7 例；全量 592 passed；ruff 全绿、mypy 300≤310。
+
 ### 深度代码重构（WP2：job 路由文件导入解析下沉）
 - **新增 `services/job_service.py`**：`parse_job_files(files)` 提取 import_jobs 的 55 行文件解析循环（FileProcessor + 临时文件 + 编码回退），job.py 净减 ~50 行并移除不再使用的 os 导入。
 - 新增 test_job_service 3 例；全量 585 passed；ruff 全绿、mypy 301≤310。

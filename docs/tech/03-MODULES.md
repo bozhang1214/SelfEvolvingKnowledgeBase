@@ -218,6 +218,7 @@ flowchart TB
 | upload_service.py | 文件上传入库领域服务 | WP2 从 upload.py 提取：MD5 去重/原文件持久化/入库流水线/分类/LLM 概览；返回 IngestResult |
 | share_service.py | 分享域公共助手 | WP2 从 share/chat_share 去重：get_valid_share / owner_display_name（fallback 参数化） |
 | job_service.py | 招聘文件导入解析 | WP2 从 job.py import_jobs 提取：parse_job_files（FileProcessor + 编码回退） |
+| profile_service.py | 用户画像偏好抽取 | WP2/WP3 从 chat.py 画像子系统解耦：方案 A/B 抽取 + 共享 patch 构建/upsert |
 
 ---
 
