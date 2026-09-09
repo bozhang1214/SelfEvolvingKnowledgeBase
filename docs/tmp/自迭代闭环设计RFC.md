@@ -28,6 +28,9 @@ related: [docs/tech/00-README, docs/ops/00-README]
 | D-05 | 闭环触发 | **事件驱动 + 定期巡检** 两者结合 |
 | D-06 | 首批实施范围 | **M0 安全/治理地基** + **M4 BugFix 半自动循环** |
 | D-07 | 讨论稿位置 | `docs/tmp/`，后续整理为正式文档 |
+| D-08 | 域名/入口 | A+C：子域名 staging./git.bos-studio.tech（无需新域名，加 DNS A + 证书扩 SAN）+ Tailscale 兜底 |
+| D-09 | Gitea 部署 | Docker compose（monitoring 栈模式新增服务，数据卷持久化） |
+| D-10 | 流水线载体 | 自建 bash/脚本流水线（bundle+scp 升级版，门禁+staging+HIL） |
 
 ---
 
@@ -155,7 +158,12 @@ flowchart LR
 - 优点：安全第一，符合 M0；缺点：外出无 Tailscale 时不可访问。
 - 可与 A 结合：staging 走 Tailscale，正式流水线由服务器内部触发即可。
 
-**Owner 待定**：选 A / B / C / A+C？
+**已确认：A+C（子域名 + Tailscale 兜底）**——git.bos-studio.tech → Gitea、staging.bos-studio.tech → staging；正式流水线全内网；可先 C 后 A（先 Tailscale 内网，公网子域名后置）。
+
+**关于"是否要新域名"的澄清**：
+- 子域名属于已有域名 `bos-studio.tech`，**无需新申请**；
+- 实际成本 = ① 域名服务商 DNS 加 2 条 A 记录指向服务器 IP；② 证书扩 SAN（certbot 同命令加 `-d`）或签通配 `*.bos-studio.tech`（DNS challenge）；
+- 也可先纯 C（Tailscale 自带 TLS，零 DNS/证书），公网子域名后置。
 
 ---
 
