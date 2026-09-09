@@ -19,7 +19,7 @@ repos:
       # ---------- 后端：ruff（全部后端文件，快速必过）----------
       - id: ruff-check-backend
         name: ruff check (backend app+tests)
-        entry: docker run --rm -v "$PWD/backend:/bt" -w /bt sekb-toolbox:latest python -m ruff check app/ tests/
+        entry: docker run --rm -v "./backend:/bt" -w /bt sekb-toolbox:latest python -m ruff check app/ tests/
         language: system
         files: ^backend/.*\.py$
         pass_filenames: false
@@ -27,7 +27,7 @@ repos:
       # ---------- 后端：mypy 回归门禁（存量债基线对比）----------
       - id: mypy-regression-gate
         name: mypy regression gate (backend)
-        entry: docker run --rm -v "$PWD/backend:/bt" -w /bt sekb-toolbox:latest bash scripts/mypy_gate.sh
+        entry: docker run --rm -v "./backend:/bt" -w /bt sekb-toolbox:latest bash scripts/mypy_gate.sh
         language: system
         files: ^backend/.*\.py$
         pass_filenames: false

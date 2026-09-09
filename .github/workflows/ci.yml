@@ -43,7 +43,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install linters
-        run: pip install ruff "mypy==2.3.1"
+        run: pip install "ruff==0.16.6" "mypy==2.3.1"
       # ruff 在 backend 目录执行，确保读取 backend/pyproject.toml 配置；
       # 覆盖面含 app/ 与 tests/（Batch 1：门禁扩到测试代码）
       - name: Ruff check (app + tests)
@@ -55,6 +55,29 @@ jobs:
       - name: Mypy regression gate
         working-directory: backend
         run: bash scripts/mypy_gate.sh
+
+  # ============ 依赖与密钥安全扫描（Batch 2）============
+  security-scan:
+    name: Security (gitleaks + pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # 密钥泄漏扫描：全提交历史（仓库存有历史遗留项如 D1 明文 PAT，
+      # 先用非阻断上报收敛，修复遗留项后改回阻断门禁）
+      - name: Gitleaks secret scan (non-blocking)
+        continue-on-error: true
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            zricethezav/gitleaks:latest detect \
+            --source /repo --no-banner --log-opts="--all" -v
+      - name: pip-audit backend deps
+        working-directory: backend
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --progress-spinner off
 
   # ============ 前端构建检查 ============
   frontend-build:
@@ -77,7 +100,7 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
       - name: npm audit (all deps, non-blocking)
         working-directory: frontend
-        run: npm audit || echo "WARN: devDeps 存在漏洞（非阻断，见 npm audit 输出）"
+        run: 'npm audit || echo "WARN: devDeps 存在漏洞（非阻断，见 npm audit 输出）"'
       - name: ESLint
         working-directory: frontend
         run: npm run lint
