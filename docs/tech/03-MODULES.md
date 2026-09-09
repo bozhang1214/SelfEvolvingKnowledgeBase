@@ -47,12 +47,12 @@ flowchart TB
     end
     subgraph 工具 app/tools
       TR[registry]
-      RD[rag/retriever]
+      RD[rag/retriever+format]
       VS[direct/vector_store]
       FP[file/image_processor]
     end
     subgraph 核心 app/core
-      CFG[config] LF[llm_factory] AUTH[auth] LOG[logging] MET[metrics] BOOT[bootstrap] TOK[token_sink] TRC[tracing]
+      CFG[config] LF[llm_factory] AUTH[auth] LOG[logging] MET[metrics] BOOT[bootstrap] TOK[token_sink] TRC[tracing] UTIL[utils]
     end
     FE --> R
     R --> G
@@ -135,6 +135,7 @@ flowchart TB
 | 组件 | 位置 | 职责 |
 |------|------|------|
 | RAGRetriever | app/tools/rag/retriever.py | 意图→模式(strict/prefer/auxiliary/disabled)；检索参数封装 |
+| format.py | app/tools/rag/format.py | 三处 RAG 上下文格式化归一（WP1）：format_rag_reference / executor / share |
 | DirectVectorStore | app/tools/direct/vector_store.py | ChromaDB 直连（绕 MCP），返回 dict |
 | rag_retrieval 节点 | graph/builder.py:194-241 | 图内预检索，写 pre_retrieval_results |
 
@@ -185,10 +186,11 @@ flowchart TB
 
 ---
 
-## 9. 可观测性模块（app/core：metrics/logging/tracing）
+## 9. 横切与可观测性模块（app/core：utils/metrics/logging/tracing）
 
 | 组件 | 说明 |
 |------|------|
+| utils.py | 通用工具（WP1 收敛单实现）：now_iso / fmt_dt / safe_float / to_state_dict |
 | metrics.py | 23 Prometheus 指标 + record_chat_metrics/error/client_event |
 | logging.py | structlog JSON + 脱敏 + contextvars |
 | tracing.py | 设 env 走 LangSmith SDK；LocalTraceCollector 未接线 |

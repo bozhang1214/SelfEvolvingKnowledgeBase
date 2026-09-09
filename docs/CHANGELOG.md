@@ -8,6 +8,13 @@
 
 ## 2026-09-09
 
+### 深度代码重构（WP1：公共工具收敛重复清零）
+- **新增 `core/utils.py`**：收敛 `now_iso`（原 graph/state + storage/base 双份）、`fmt_dt`（原 share/knowledge/chat_share 三份）、`safe_float`（原 critic/scribe 双份）、`to_state_dict`（原 chat/cli/eval 三份）为单一实现。
+- **新增 `tools/rag/format.py`**：三处 RAG 上下文格式化归一（retriever「知识库参考」/ executor「相关度」/ share「来源编号」三种风格集中维护）。
+- **重复清零**：registry `except (MCPError, Exception)` 冗余简化为 `except Exception`。
+- **测试**：新增 test_core_utils + test_rag_format 共 39 例；全量 567 passed（528+39）；ruff 全绿、mypy 307≤310。
+- 覆盖跟踪项：P2-14 / Q-4.5 / Q-4.6 / Q-4.11 / P2-P2-03 / NEW-E。
+
 ### 文档工程重构（按 1-6 工程逆向分析提示词，完整版 12 篇）
 - **备份**：原 `docs/` 历史内容清理：旧技术文档/问题记录/测试用例文档已删（git 历史可查），codeReview 迁移至 `docs/codeReview/`，运维手册至 `docs/ops/`，活文档至 docs 根。
 - **保留**：运维/部署手册副本 → `docs/ops/`（10 篇，真实环境操作）；CHANGELOG/BACKLOG 活文档副本 → `docs/` 根继续维护。
