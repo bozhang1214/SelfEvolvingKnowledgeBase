@@ -8,6 +8,11 @@
 
 ## 2026-09-09
 
+### 深度代码重构（WP2：服务层下沉 · 首个子提取）
+- **新增 `services/browser_client.py`**：从 `api/routes/job.py` 内联的 `_call_browser` + 硬编码 `_BROWSER_BASE` 提取为 `BrowserClient`（可配置 base_url、可注入/单测）。
+- **job.py 路由瘦身**：BOSS 扫码两处调用点改走 `_browser.post(...)`，行为不变。
+- 新增 test_browser_client.py 2 例；全量 569 passed；ruff 全绿、mypy 306≤310。
+
 ### 深度代码重构（WP1：公共工具收敛重复清零）
 - **新增 `core/utils.py`**：收敛 `now_iso`（原 graph/state + storage/base 双份）、`fmt_dt`（原 share/knowledge/chat_share 三份）、`safe_float`（原 critic/scribe 双份）、`to_state_dict`（原 chat/cli/eval 三份）为单一实现。
 - **新增 `tools/rag/format.py`**：三处 RAG 上下文格式化归一（retriever「知识库参考」/ executor「相关度」/ share「来源编号」三种风格集中维护）。
