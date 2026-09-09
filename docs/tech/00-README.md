@@ -57,7 +57,7 @@ related: [01-ARCHITECTURE, 02-RUNTIME-FLOWS, 03-MODULES, 04-DATA-MODEL, 05-API-R
 | **新成员 onboarding** | 00 → 01 → 08 → 03（后端 API 层 + 前端两节）→ 快速开始 |
 | **后端开发者** | 02 → 03 → 05（自己负责的模块与端点）→ 04（涉及的数据）→ 07 |
 | **前端开发者** | 05（后端契约）→ 03 §前端状态管理/页面路由 → 09（SSE 事件流） |
-| **运维 / SRE** | 09 → 06 → 02 §部署拓扑 → `docs/ops/` |
+| **运维 / SRE** | 09 → 06 → 02 §部署拓扑 → `docs/ops/00-README.md` |
 | **决策者 / 架构师** | 01 → 07 → 11 → 04 §隔离与安全边界 → 09 §告警 |
 
 ---
@@ -84,7 +84,7 @@ related: [01-ARCHITECTURE, 02-RUNTIME-FLOWS, 03-MODULES, 04-DATA-MODEL, 05-API-R
 | 宪法层 | 01、08 | 架构师 | 架构变更时 |
 | 设计层 | 02、03、04 | 对应模块 owner | 模块/流程变更时 |
 | 参考层 | 05、06 | 后端 owner | 接口/配置变更时 |
-| 运维层 | 09、docs/ops | 运维 | 部署/监控变更时 |
+| 运维层 | 09、docs/ops/00-README | 运维 | 部署/监控变更时 |
 | 评价层 | 07、11 | 架构师 | 定期评审时 |
 
 ### 4.2 文档-代码自动联动
@@ -112,7 +112,7 @@ related: [01-ARCHITECTURE, 02-RUNTIME-FLOWS, 03-MODULES, 04-DATA-MODEL, 05-API-R
 
 | 位置 | 关系 |
 |------|------|
-| `docs/ops/` | 部署运维手册（真实环境操作），09 讲技术口径，具体命令看 ops |
+| `docs/ops/` | 部署运维手册（编号 00-10，入口 00-README），09 讲技术口径 |
 | `docs/CHANGELOG.md` | 变更历史（按日期倒序），技术文档描述「现在」，CHANGELOG 描述「何时改了什么」 |
 | `docs/BACKLOG.md` | 待办与代码审计跟踪 |
 | `docs/backup_20260909/` | 旧文档归档，仅追溯，不引用 |
