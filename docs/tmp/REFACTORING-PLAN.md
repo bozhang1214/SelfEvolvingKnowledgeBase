@@ -1,6 +1,6 @@
-# SEKB 深度代码重构方案与实施计划（v0.9 待确认）
+# SEKB 深度代码重构方案与实施计划（v1.0 已确认）
 
-> 状态：**草稿，等待确认**。确认后拆解为 BACKLOG / 11-EVOLUTION 的正式任务项。
+> 状态：**已确认（2026-09-09）**。范围=全量 M1–M4；D2=删除 skill 与硬编码分支；D3=P1-6 占位配置关闭并删配置。执行时拆解为 BACKLOG / 11-EVOLUTION 正式任务项，本文件为总纲（讨论区归档，迁移自 docs/ 根）。
 > 依据：docs/BACKLOG.md、docs/tech/11-EVOLUTION.md（TD-01..14）、docs/tech/待确认项清单.md（Q-01..10）、docs/codeReview/未修复问题跟踪.md（P1/P2/Q/P2-P2）、docs/tech/漂移清单.md。
 > 约定：全部结论基于 `file:line` 代码证据；改动遵循文档工程约定（活文档联动 + 每提交过门禁）。
 
@@ -233,20 +233,22 @@ storage/    （数据访问：JSONStorage + 各实体 Repository，单一写入�
 
 ---
 
-## 7. 需要你拍板的决策项（D1–D10）
+## 7. 决策记录（已确认 + 默认项）
 
-| # | 决策 | 选项 | 我的建议 |
-|---|------|------|----------|
-| D1 | 跟踪项过期复核 | ①并入 WP0 ②跳过 | ①（有证据的已解决项直接标记，如 P1-7） |
-| D2 | 聊天 `skill`/技能上下文与画像闭环 A/B 处置 | ①全删（前端已无入口）②保留 API 兼容但内部重构成 profile_service | **①删除**（技能功能已从产品移除，保留即死代码）；画像抽取如需保留仅跑在检测到求职意图时 |
-| D3 | P1-6 占位配置（kb_strict/adaptive/cost_control 等） | ①本轮实现 ②直接关闭删配置 | **②关闭删配置**，实现项列入 11-EVOLUTION 短期路线（避免重构与功能混批） |
-| D4 | `RateLimitMiddleware` 是否本轮重开 | ①重开（默认阈值可配）②继续注释留 BACKLOG | ①重开（实现已 90%，风险低） |
-| D5 | JSONStorage 写一致性 | ①保持单写 + per-conv asyncio.Lock + 文档化约束 ②迁移 SQLite | **①**（SQLite 迁移是独立大项，见 Q-07/Q-09，不建议混入本轮） |
-| D6 | `LocalTraceCollector`/tracing | ①打通（进 AppContext + 本地 trace 查看端点）②裁剪 local_json 仅留 LangSmith | ②裁剪更省；若你常用本地 trace 则① |
-| D7 | 脚本/残留目录处置 | 逐项：verify_phase3.py 删；boss_qr_login.sh ①留 docs/ops ②删；start_backend/start_frontend.sh ①留 ②删；resume/ 与根 RAG 常见问题汇总.md ①归档 ②删 | verify_phase3 删、boss_qr_login 移 docs/ops 或删、start_*.sh 留作本地开发入口、resume/ 与汇总 md 归档到 docs/ 或删除（请确认用途） |
-| D8 | Q-4.7 LLM stats 并发 | ①加 asyncio.Lock ②维持现状（单线程） | ①顺手做，成本低 |
-| D9 | mypy 310 存量债 | ①维持回归门禁不追债 ②本轮把 310 提到更高基线 | ①（追债另立专项） |
-| D10 | 范围裁剪 | 全量 vs 先做 M1–M3（后端）后停，M4 视情况 | 先确认全量 13–23d；或先 M1+M2（结构主战场，约 5.5–10d）交付再评 |
+> ✅=Owner 已拍板；默认=采用"我的建议"，执行中若与事实冲突会先停下回报再改。
+
+| # | 决策 | 结论 |
+|---|------|------|
+| D1 | 跟踪项过期复核并入 WP0 | ✅ ①并入（已解决项如实标记，如 P1-7 主聊天真流式已落地） |
+| D2 | 聊天 `skill`/技能上下文与画像闭环 A/B | ✅ **①删除** skill 字段、`_build_skill_context` 及硬编码分支；画像抽取仅当检测到求职意图时触发，逻辑重构入 profile 域 |
+| D3 | P1-6 占位配置（kb_strict/adaptive/cost_control 等） | ✅ **②直接关闭删配置**；实现项列入 11-EVOLUTION 短期路线 |
+| D4 | `RateLimitMiddleware` 本轮重开 | 默认①重开（挂载 + 默认阈值可配 + 429 与 X-RateLimit-Remaining） |
+| D5 | JSONStorage 写一致性 | 默认①保持单写 + per-conv asyncio.Lock + 文档化约束（SQLite 迁移独立立项） |
+| D6 | `LocalTraceCollector`/tracing | 默认②裁剪 local_json 分支仅留 LangSmith——**前提**：WP0 复核确认 collector 无任何消费方；若日常依赖本地 trace 请改①（collector 进 AppContext） |
+| D7 | 脚本/残留目录处置 | 默认：`verify_phase3.py` 删；`boss_qr_login.sh` 留（运维工具，文档标注于 docs/ops）；`start_backend.sh`/`start_frontend.sh` 留（本地开发入口）；`resume/`、根 `RAG常见问题汇总.md` 用途不明 → 归档 docs/tmp 待 owner 说明后定 |
+| D8 | Q-4.7 LLM stats 并发 | 默认①加 asyncio.Lock（成本低） |
+| D9 | mypy 310 存量债 | 默认①维持回归门禁不追债（追债另立专项） |
+| D10 | 范围 | ✅ **全量 M1–M4**，按里程碑分批交付 |
 
 ---
 
@@ -257,4 +259,4 @@ storage/    （数据访问：JSONStorage + 各实体 Repository，单一写入�
 
 ---
 
-*起草：2026-09 ｜ 依据提交 bf0f90e ｜ 待确认后拆解 BACKLOG*
+*起草：2026-09 ｜ 依据提交 bf0f90e ｜ v1.0 已确认（2026-09-09），执行时逐 WP 拆解 BACKLOG*
