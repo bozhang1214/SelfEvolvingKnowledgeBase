@@ -26,6 +26,7 @@ from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
 from app.core.logging import get_logger
 from app.core.utils import fmt_dt as _fmt_dt
+from app.services.share_service import get_valid_share, owner_display_name
 
 logger = get_logger(__name__)
 
@@ -50,27 +51,13 @@ def _require_share_storage(ctx: AppContext) -> Any:
 
 
 async def _get_valid_share(ctx: AppContext, share_id: str):
-    """获取并校验分享有效性，返回 share。"""
-    share_storage = _require_share_storage(ctx)
-    share = await share_storage.get_share(share_id)
-    if share is None:
-        raise HTTPException(404, "分享不存在或已撤销")
-    if not share.is_valid():
-        raise HTTPException(403, "分享已失效或过期")
-    return share
+    """获取并校验分享有效性（实现收敛至 share_service.get_valid_share）。"""
+    return await get_valid_share(_require_share_storage(ctx), share_id)
 
 
 def _owner_display_name(ctx: AppContext, owner_user_id: str) -> str:
-    """获取所有者展示名（脱敏，仅 name 或邮箱前缀）。"""
-    if ctx.user_storage is None:
-        return "对话所有者"
-    try:
-        user = ctx.user_storage.find_by_id(owner_user_id)
-    except Exception:
-        user = None
-    if user is None:
-        return "对话所有者"
-    return user.name or (user.email.split("@")[0] if user.email else "对话所有者")
+    """获取所有者展示名（实现收敛至 share_service.owner_display_name）。"""
+    return owner_display_name(ctx, owner_user_id, "对话所有者")
 
 
 # ============================================================
