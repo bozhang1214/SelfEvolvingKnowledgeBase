@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Conversation, Message, ChatMeta } from '@/types/chat';
 import * as chatService from '@/services/chat';
+import type { SetState, GetState } from 'zustand';
 
 interface ChatState {
   conversations: Conversation[];
@@ -9,8 +10,8 @@ interface ChatState {
   isStreaming: boolean;
   streamingContent: string;
   thinkingContent: string;
-  /** 排队待发送的消息（回复进行中时新输入进入队列，结束后自动发送；各自携带技能模式） */
-  pendingQueue: { content: string; skill: string }[];
+  /** 排队待发送的消息（回复进行中时新输入进入队列，结束后自动发送） */
+  pendingQueue: { content: string }[];
   /** 是否正在从队列里逐条发送（用于显示「已排队 N 条」） */
   queueSending: boolean;
 
@@ -20,11 +21,146 @@ interface ChatState {
   deleteConversation: (convId: string) => Promise<void>;
   renameConversation: (convId: string, title: string) => Promise<void>;
   togglePin: (convId: string, pinned: boolean) => Promise<void>;
-  sendMessage: (content: string, skill?: string) => Promise<void>;
+  sendMessage: (content: string) => Promise<void>;
+  /** 重生成：删除指定用户消息之后的 assistant 消息，重新生成并替换 */
+  regenerateAssistant: (convId: string, userMessageId: string, userContent: string) => Promise<void>;
+  /** 编辑用户消息：替换内容，删除其后消息，重新生成 */
+  editUserMessage: (convId: string, messageId: string, newContent: string) => Promise<void>;
   cancelStream: () => void;
   flushQueue: () => void;
   clearQueue: () => void;
   addMessage: (convId: string, message: Message) => void;
+}
+
+/** 找到 conv 下某条 user 消息的数组下标（按 message_id 匹配） */
+function findUserIndex(messages: Message[], messageId?: string, content?: string): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    if (messageId && m.message_id === messageId) return i;
+    if (!messageId && content && m.content === content) return i;
+  }
+  return -1;
+}
+
+/**
+ * 核心流式请求：负责发起 SSE + 事件回调持久化。
+ *
+ * 不负责添加用户消息（由 sendMessage / regenerate / edit 各自决定），
+ * 仅负责：
+ *   - 置 isStreaming / 清空 streamingContent
+ *   - onToken 累加内容、onThinking 更新思考提示
+ *   - onDone 追加 assistant 消息到 displayConvId；isTemp 时做 temp→real 迁移
+ *   - onError 追加错误消息
+ *
+ * @param cfg.sendConvId    传给后端的 conv_id（'' 表示后端新建会话）
+ * @param cfg.displayConvId 前端展示/持久化的会话 key
+ * @param cfg.isTemp        是否为新会话（需要 temp→real 迁移并以 real 重命名会话）
+ */
+async function runStream(
+  get: GetState<ChatState>,
+  set: SetState<ChatState>,
+  cfg: {
+    sendConvId: string;
+    displayConvId: string;
+    content: string;
+    isTemp: boolean;
+  },
+): Promise<void> {
+  const { sendConvId, displayConvId, content, isTemp } = cfg;
+  let fullContent = '';
+  const controller = chatService.streamChat(
+    sendConvId,
+    content,
+    // onToken
+    (token) => {
+      fullContent += token;
+      // 收到第一个 token 时清除思考提示，切换为正常输出模式
+      set({ streamingContent: fullContent, thinkingContent: '' });
+    },
+    // onDone
+    (meta: ChatMeta) => {
+      const realConvId = meta.conversation_id || '';
+      if (!realConvId) {
+        // 无效 conversation_id，不迁移消息，仅结束 streaming 状态
+        set({ isStreaming: false, streamingContent: '', thinkingContent: '' });
+        get().flushQueue();
+        return;
+      }
+      const finalConvId = isTemp ? realConvId : displayConvId;
+      const assistantMsg: Message = {
+        message_id: `msg_${Date.now()}`,
+        conv_id: finalConvId,
+        role: 'assistant',
+        content: fullContent,
+        created_at: new Date().toISOString(),
+        metadata: {
+          intent: meta.intent || undefined,
+          latency_ms: meta.latency_ms,
+        },
+      };
+      set((state) => {
+        const oldMsgs = state.messages[displayConvId] || [];
+        const newMsgs = [...oldMsgs, assistantMsg];
+        const messages = { ...state.messages };
+        if (isTemp && displayConvId !== realConvId) {
+          delete messages[displayConvId];
+        }
+        messages[finalConvId] = newMsgs;
+        const conversations = isTemp
+          ? state.conversations.map((c) =>
+              c.conv_id === displayConvId
+                ? { ...c, conv_id: realConvId, message_count: newMsgs.length }
+                : c
+            )
+          : state.conversations.map((c) =>
+              c.conv_id === displayConvId
+                ? { ...c, message_count: newMsgs.length }
+                : c
+            );
+        return {
+          messages,
+          conversations,
+          isStreaming: false,
+          streamingContent: '',
+          thinkingContent: '',
+          currentConvId: finalConvId,
+        };
+      });
+
+      // 刷新会话列表（首次发消息时后端自动创建会话，列表里还没有这条记录）
+      void get().loadConversations();
+      // 当前回复结束，自动发送排队的下一条
+      get().flushQueue();
+    },
+    // onError
+    (error) => {
+      const errMsg: Message = {
+        message_id: `err_${Date.now()}`,
+        conv_id: displayConvId,
+        role: 'assistant',
+        content: `**错误**: ${error}`,
+        created_at: new Date().toISOString(),
+      };
+      set((state) => {
+        const convMsgs = [...(state.messages[displayConvId] || []), errMsg];
+        return {
+          messages: { ...state.messages, [displayConvId]: convMsgs },
+          isStreaming: false,
+          streamingContent: '',
+          thinkingContent: '',
+        };
+      });
+      get().flushQueue();
+    },
+    // onThinking
+    (content2) => {
+      set({ thinkingContent: content2 });
+    },
+  );
+
+  // 保存 controller 供取消
+  (window as any).__stream_controller = controller;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -129,21 +265,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (content: string, skill: string = '') => {
+  sendMessage: async (content: string) => {
     const { currentConvId, isStreaming } = get();
 
     // 回复进行中：新输入进入队列，结束后自动发送，避免误打断
     if (isStreaming) {
       set((state) => ({
-        pendingQueue: [...state.pendingQueue, { content, skill }],
+        pendingQueue: [...state.pendingQueue, { content }],
         queueSending: true,
       }));
       return;
     }
 
-    let convId = currentConvId || '';
-
-    // 如果没有当前会话，使用临时 ID 让 UI 立即显示用户消息
+    const convId = currentConvId || '';
     const tempConvId = convId || `temp_${Date.now()}`;
     const isNewConv = !convId;
     if (isNewConv) {
@@ -180,102 +314,70 @@ export const useChatStore = create<ChatState>((set, get) => ({
       };
     });
 
-    // SSE 流式聊天：首次发消息时 convId 为空串，后端收到 null 会自动创建新会话
-    // （不能传 tempConvId，否则后端会校验 temp_xxx 不存在而 404）
-    let fullContent = '';
-    const controller = chatService.streamChat(
-      convId,
+    // SSE 流式聊天：首次发消息时 sendConvId 为空串，后端收到 null 会自动创建新会话
+    await runStream(get, set, {
+      sendConvId: convId,
+      displayConvId: tempConvId,
       content,
-      // onToken
-      (token) => {
-        fullContent += token;
-        // 收到第一个 token 时清除思考提示，切换为正常输出模式
-        set({ streamingContent: fullContent, thinkingContent: '' });
-      },
-      // onDone
-      (meta: ChatMeta) => {
-        // 后端 done 事件必须返回 conversation_id；为空说明异常，保持 tempConvId 不持久化
-        const realConvId = meta.conversation_id || '';
-        if (!realConvId) {
-          // 无效 conversation_id，不迁移消息，仅结束 streaming 状态
-          set({ isStreaming: false, streamingContent: '', thinkingContent: '' });
-          // 仍有排队消息时继续发送，避免队列永久卡死
-          get().flushQueue();
-          return;
-        }
-        const assistantMsg: Message = {
-          message_id: `msg_${Date.now()}`,
-          conv_id: realConvId,
-          role: 'assistant',
-          content: fullContent,
-          created_at: new Date().toISOString(),
-          metadata: {
-            intent: meta.intent || undefined,
-            latency_ms: meta.latency_ms,
-          },
-        };
-        set((state) => {
-          // 将临时会话的消息迁移到真实会话 ID
-          const oldMsgs = state.messages[tempConvId] || [];
-          const newMsgs = [...oldMsgs, assistantMsg];
-          const messages = { ...state.messages };
-          if (tempConvId !== realConvId) {
-            delete messages[tempConvId];
-          }
-          messages[realConvId] = newMsgs;
-          // 同步更新 conversations 列表中的临时会话 ID
-          const conversations = state.conversations.map((c) =>
-            c.conv_id === tempConvId
-              ? { ...c, conv_id: realConvId, message_count: newMsgs.length }
-              : c
-          );
-          return {
-            messages,
-            conversations,
-            isStreaming: false,
-            streamingContent: '',
-            thinkingContent: '',
-            currentConvId: realConvId,
-          };
-        });
+      isTemp: isNewConv,
+    });
+  },
 
-        // 刷新会话列表，让新对话出现在侧边栏
-        // （首次发消息时后端自动创建会话，列表里还没有这条记录）
-        void get().loadConversations();
-        // 当前回复结束，自动发送排队的下一条
-        get().flushQueue();
-      },
-      // onError
-      (error) => {
-        const errMsg: Message = {
-          message_id: `err_${Date.now()}`,
-          conv_id: convId,
-          role: 'assistant',
-          content: `**错误**: ${error}`,
-          created_at: new Date().toISOString(),
-        };
-        set((state) => {
-          const convMsgs = [...(state.messages[convId] || []), errMsg];
-          return {
-            messages: { ...state.messages, [convId]: convMsgs },
-            isStreaming: false,
-            streamingContent: '',
-            thinkingContent: '',
-          };
-        });
-        // 错误后若还有排队消息，继续发送
-        get().flushQueue();
-      },
-      // onThinking
-      (content) => {
-        set({ thinkingContent: content });
-      },
-      // skill 模式：应聘助手 / 科技资讯助手 / 通用助手（空）
-      skill,
-    );
+  regenerateAssistant: async (convId: string, userMessageId: string, userContent: string) => {
+    const { isStreaming } = get();
+    if (isStreaming) return;
+    if (!convId || !get().messages[convId]) return;
 
-    // 保存 controller 供取消
-    (window as any).__stream_controller = controller;
+    set((state) => {
+      const convMsgs = state.messages[convId] || [];
+      const userIdx = findUserIndex(convMsgs, userMessageId, userContent);
+      // 截断到该用户消息（含），删除其后的 assistant 消息
+      const truncated = userIdx >= 0 ? convMsgs.slice(0, userIdx + 1) : convMsgs;
+      return {
+        messages: { ...state.messages, [convId]: truncated },
+        isStreaming: true,
+        streamingContent: '',
+        thinkingContent: '',
+        currentConvId: convId,
+      };
+    });
+
+    await runStream(get, set, {
+      sendConvId: convId,
+      displayConvId: convId,
+      content: userContent,
+      isTemp: false,
+    });
+  },
+
+  editUserMessage: async (convId: string, messageId: string, newContent: string) => {
+    const { isStreaming } = get();
+    if (isStreaming) return;
+    if (!convId || !get().messages[convId]) return;
+
+    set((state) => {
+      const convMsgs = state.messages[convId] || [];
+      const userIdx = convMsgs.findIndex((m) => m.message_id === messageId && m.role === 'user');
+      if (userIdx < 0) return {};
+      // 替换内容，并删除该用户消息之后的所有消息
+      const updated = [...convMsgs];
+      updated[userIdx] = { ...updated[userIdx], content: newContent };
+      const truncated = updated.slice(0, userIdx + 1);
+      return {
+        messages: { ...state.messages, [convId]: truncated },
+        isStreaming: true,
+        streamingContent: '',
+        thinkingContent: '',
+        currentConvId: convId,
+      };
+    });
+
+    await runStream(get, set, {
+      sendConvId: convId,
+      displayConvId: convId,
+      content: newContent,
+      isTemp: false,
+    });
   },
 
   flushQueue: () => {
@@ -288,7 +390,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     const next = pendingQueue[0];
     set((state) => ({ pendingQueue: state.pendingQueue.slice(1) }));
-    void get().sendMessage(next.content, next.skill);
+    void get().sendMessage(next.content);
   },
 
   clearQueue: () => {

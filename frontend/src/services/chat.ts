@@ -39,7 +39,6 @@ export function streamChat(
   onDone: (meta: ChatMeta) => void,
   onError: (error: string) => void,
   onThinking?: (content: string) => void,
-  skill: string = '',
 ): AbortController {
   const controller = new AbortController();
   const token = getToken();
@@ -53,7 +52,7 @@ export function streamChat(
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ conversation_id: convId || null, message, skill }),
+    body: JSON.stringify({ conversation_id: convId || null, message }),
     signal: controller.signal,
   })
     .then(async (response) => {

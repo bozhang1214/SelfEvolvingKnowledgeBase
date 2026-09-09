@@ -236,15 +236,15 @@ describe('chat store', () => {
       // 捕获 onDone 回调
       let onDoneCb: ((meta: any) => void) | null = null;
       vi.mocked(chatService.streamChat).mockImplementation(
-        (_convId, _msg, _onToken, onDone, _onError, _onThinking, _skill) => {
+        (_convId, _msg, _onToken, onDone, _onError, _onThinking) => {
           onDoneCb = onDone;
           return new AbortController();
         }
       );
 
       await useChatStore.getState().sendMessage('hello');
-      // 首次发消息时 convId 为空串，skill 默认为空串
-      expect(chatService.streamChat).toHaveBeenCalledWith('', 'hello', expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), '');
+      // 首次发消息时 convId 为空串，无 skill 参数
+      expect(chatService.streamChat).toHaveBeenCalledWith('', 'hello', expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function));
 
       // 模拟后端返回真实 conversation_id
       onDoneCb!({ conversation_id: 'real-conv-1' } as any);
@@ -260,7 +260,7 @@ describe('chat store', () => {
     it('onDone 返回空 conversation_id → 不更新 currentConvId，仅结束 streaming', async () => {
       let onDoneCb: ((meta: any) => void) | null = null;
       vi.mocked(chatService.streamChat).mockImplementation(
-        (_convId, _msg, _onToken, onDone, _onError, _onThinking, _skill) => {
+        (_convId, _msg, _onToken, onDone, _onError, _onThinking) => {
           onDoneCb = onDone;
           return new AbortController();
         }
@@ -279,6 +279,60 @@ describe('chat store', () => {
       expect(state.currentConvId).toBe(tempIdBefore);
       // 消息仍留在 temp 会话下，不迁移
       expect(state.messages[tempIdBefore]).toHaveLength(1);
+    });
+  });
+
+  describe('regenerateAssistant', () => {
+    it('截断到用户消息并重发同内容', async () => {
+      const convId = 'c1';
+      useChatStore.setState({
+        currentConvId: convId,
+        messages: {
+          [convId]: [
+            makeMsg('u1', convId, 'user', '问题1'),
+            makeMsg('a1', convId, 'assistant', '回答1'),
+          ],
+        },
+        isStreaming: false,
+      });
+
+      await useChatStore.getState().regenerateAssistant(convId, 'u1', '问题1');
+
+      // 发送到后端的 convId 为真实会话（非 temp），content 为用户内容
+      expect(chatService.streamChat).toHaveBeenCalledWith(
+        convId, '问题1', expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function)
+      );
+      // 旧 assistant 消息已从本地截断，只保留 user
+      const msgs = useChatStore.getState().messages[convId];
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].role).toBe('user');
+      expect(useChatStore.getState().isStreaming).toBe(true);
+    });
+  });
+
+  describe('editUserMessage', () => {
+    it('替换用户消息内容并删除其后 assistant 消息', async () => {
+      const convId = 'c1';
+      useChatStore.setState({
+        currentConvId: convId,
+        messages: {
+          [convId]: [
+            makeMsg('u1', convId, 'user', '原问题'),
+            makeMsg('a1', convId, 'assistant', '旧回答'),
+          ],
+        },
+        isStreaming: false,
+      });
+
+      await useChatStore.getState().editUserMessage(convId, 'u1', '新问题');
+
+      expect(chatService.streamChat).toHaveBeenCalledWith(
+        convId, '新问题', expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function)
+      );
+      const msgs = useChatStore.getState().messages[convId];
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].content).toBe('新问题'); // 内容已替换，其后 assistant 已删除
+      expect(useChatStore.getState().isStreaming).toBe(true);
     });
   });
 });

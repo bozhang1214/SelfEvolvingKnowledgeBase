@@ -5,8 +5,8 @@ import {
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, SendOutlined, StopOutlined,
-  PushpinOutlined, PushpinFilled, CopyOutlined, CheckOutlined,
-  ShareAltOutlined, DownloadOutlined, CheckSquareOutlined, HistoryOutlined,
+  PushpinOutlined, PushpinFilled, CopyOutlined, CheckOutlined, RedoOutlined,
+  ShareAltOutlined, DownloadOutlined, CheckSquareOutlined, HistoryOutlined, ArrowDownOutlined,
 } from '@ant-design/icons';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
@@ -21,13 +21,6 @@ import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 const { Text } = Typography;
 const { Sider, Content } = Layout;
-
-/** 技能列表（聊天框下功能按钮，参考豆包）：点击切换技能模式，注入对应模块知识 */
-const SKILLS: { value: string; label: string; icon: string; tip: string }[] = [
-  { value: '通用助手', label: '通用助手', icon: '💬', tip: '普通知识库问答' },
-  { value: '应聘助手', label: '应聘助手', icon: '💼', tip: '结合求职画像与招聘分析深度沟通' },
-  { value: '科技资讯助手', label: '科技资讯助手', icon: '📰', tip: '结合关注大类与资讯日报问答' },
-];
 
 /** 代码块组件：带语言标签 + 复制按钮 */
 const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, code }) => {
@@ -107,6 +100,7 @@ const Chat: React.FC = () => {
     pendingQueue,
     loadConversations, selectConversation, createConversation,
     deleteConversation, renameConversation, togglePin, sendMessage, cancelStream, clearQueue,
+    regenerateAssistant, editUserMessage,
   } = useChatStore();
   const { user } = useUserStore();
   const sendKey = user?.settings?.send_key || 'enter';
@@ -121,8 +115,13 @@ const Chat: React.FC = () => {
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [sharing, setSharing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [currentSkill, setCurrentSkill] = useState<string>('通用助手');
+  // 编辑用户消息的索引 + 内容
+  const [editMsgId, setEditMsgId] = useState<string | null>(null);
+  const [editMsgContent, setEditMsgContent] = useState('');
+  // 滚动跟踪：是否靠近底部（用户上滚则停止自动跟随）
+  const [atBottom, setAtBottom] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [searchParams] = useSearchParams();
 
@@ -140,10 +139,27 @@ const Chat: React.FC = () => {
     }
   }, [searchParams, selectConversation]);
 
-  // 自动滚动到底部
+  // 自动滚动到底部：仅在用户靠近底部时跟随（task 3 上滚则停止跟踪）
   useEffect(() => {
+    if (atBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, streamingContent, thinkingContent, atBottom]);
+
+  // 监听消息容器的滚动：判断是否靠近底部，决定是否停止自动跟随
+  const handleScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // 距底部 < 80px 视为「在底部」，否则视为上滚
+    setAtBottom(distanceToBottom < 80);
+  };
+
+  // 点击「回到底部」悬浮按钮：滚到最底并恢复自动跟随
+  const scrollToBottomManual = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent, thinkingContent]);
+    setAtBottom(true);
+  };
 
   const handleSend = async () => {
     const content = inputValue.trim();
@@ -156,7 +172,7 @@ const Chat: React.FC = () => {
     });
     const done = logger.perf('chat_send_message', { conv_id: currentConvId || null });
     try {
-      await sendMessage(content, currentSkill);
+      await sendMessage(content);
       done({ result: 'success' });
     } catch (err: any) {
       done({ result: 'error', msg: err?.message });
@@ -260,6 +276,65 @@ const Chat: React.FC = () => {
     } else {
       antMsg.error('复制失败');
     }
+  };
+
+  // ============ 重生成 / 编辑（task 2）============
+
+  // 重生成某条 AI 回复：找到其前的用户消息，删除该用户消息之后的 assistant 消息并重新生成
+  const handleRegenerate = async (_assistantMsg: { role: string; content: string }, idx: number) => {
+    if (!currentConvId) return;
+    // 该 assistant 消息之前最近的一条用户消息
+    let userIdx = -1;
+    for (let i = idx - 1; i >= 0; i -= 1) {
+      if ((currentMessages[i].role) === 'user') {
+        userIdx = i;
+        break;
+      }
+    }
+    if (userIdx < 0) {
+      antMsg.warning('找不到对应的用户提问，无法重生成');
+      return;
+    }
+    const userMsg = currentMessages[userIdx];
+    logger.info('chat_regenerate', { conv_id: currentConvId, user_msg_idx: userIdx });
+    try {
+      await regenerateAssistant(currentConvId, userMsg.message_id, userMsg.content);
+    } catch (err: any) {
+      logger.error('chat_regenerate_failed', { msg: err?.message });
+      antMsg.error('重生成失败');
+    }
+  };
+
+  // 开始编辑用户消息：把内容填入编辑态
+  const startEditMessage = (msg: Message) => {
+    setEditMsgId(msg.message_id);
+    setEditMsgContent(msg.content);
+  };
+
+  // 提交编辑：替换内容并重新生成其后回复
+  const commitEditMessage = async (msg: Message) => {
+    const content = editMsgContent.trim();
+    if (!content) {
+      setEditMsgId(null);
+      return;
+    }
+    if (!currentConvId) {
+      setEditMsgId(null);
+      return;
+    }
+    setEditMsgId(null);
+    logger.info('chat_edit_message', { conv_id: currentConvId, message_id: msg.message_id });
+    try {
+      await editUserMessage(currentConvId, msg.message_id, content);
+    } catch (err: any) {
+      logger.error('chat_edit_message_failed', { msg: err?.message });
+      antMsg.error('编辑失败');
+    }
+  };
+
+  const cancelEditMessage = () => {
+    setEditMsgId(null);
+    setEditMsgContent('');
   };
 
   const enterMultiSelect = () => {
@@ -463,7 +538,11 @@ const Chat: React.FC = () => {
           </div>
         )}
         {/* 消息列表 */}
-        <div style={{ flex: 1, overflow: 'auto', padding: '24px 40px' }}>
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          style={{ flex: 1, overflow: 'auto', padding: '24px 40px' }}
+        >
           {allContent.length === 0 && !isStreaming && (
             <div style={{ textAlign: 'center', marginTop: 120, color: '#999' }}>
               <Text style={{ fontSize: 16 }}>开始一个新对话</Text>
@@ -512,7 +591,36 @@ const Chat: React.FC = () => {
                     }}
                   >
                     {msg.role === 'user' ? (
-                      <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                      // 用户消息：编辑态则显示输入框
+                      isPersisted && editMsgId === msg.message_id ? (
+                        <div>
+                          <Input.TextArea
+                            autoFocus
+                            value={editMsgContent}
+                            onChange={(e) => setEditMsgContent(e.target.value)}
+                            autoSize={{ minRows: 2, maxRows: 6 }}
+                            onPressEnter={(e) => {
+                              if (!e.shiftKey) {
+                                e.preventDefault();
+                                commitEditMessage(msg);
+                              }
+                            }}
+                            style={{ color: '#000', background: '#fff' }}
+                          />
+                          <Space size={4} style={{ marginTop: 8 }}>
+                            <Button
+                              size="small"
+                              type="primary"
+                              onClick={() => commitEditMessage(msg)}
+                            >
+                              保存
+                            </Button>
+                            <Button size="small" onClick={cancelEditMessage}>取消</Button>
+                          </Space>
+                        </div>
+                      ) : (
+                        <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                      )
                     ) : (
                       <div className="markdown-content">
                         <ReactMarkdown
@@ -539,14 +647,59 @@ const Chat: React.FC = () => {
                     )}
                   </div>
                   {isPersisted && (
-                    <Button
-                      size="small"
-                      type="text"
-                      className="msg-copy-btn"
-                      icon={isCopied ? <CheckOutlined style={{ color: '#52c41a' }} /> : <CopyOutlined />}
-                      onClick={() => handleCopyMessage(msg, idx)}
-                      title="复制"
-                    />
+                    <div
+                      className="msg-actions"
+                      style={{ display: 'flex', gap: 4, alignItems: 'center' }}
+                    >
+                      {/* 复制（所有消息） */}
+                      <Button
+                        size="small"
+                        type="text"
+                        className="msg-action-btn"
+                        icon={isCopied ? <CheckOutlined style={{ color: '#52c41a' }} /> : <CopyOutlined />}
+                        onClick={() => handleCopyMessage(msg, idx)}
+                        title="复制"
+                      />
+                      {msg.role === 'user' ? (
+                        editMsgId !== msg.message_id && (
+                          <Button
+                            size="small"
+                            type="text"
+                            className="msg-action-btn"
+                            icon={<EditOutlined />}
+                            onClick={() => startEditMessage(msg)}
+                            title="编辑"
+                          />
+                        )
+                      ) : (
+                        <>
+                          {/* 重生成 */}
+                          <Button
+                            size="small"
+                            type="text"
+                            className="msg-action-btn"
+                            icon={<RedoOutlined />}
+                            onClick={() => handleRegenerate(msg, idx)}
+                            disabled={isStreaming}
+                            title="重生成"
+                          />
+                          {/* 转发 */}
+                          <Button
+                            size="small"
+                            type="text"
+                            className="msg-action-btn"
+                            icon={<ShareAltOutlined />}
+                            onClick={async () => {
+                              const ok = await copyText(msg.content);
+                              if (ok) {
+                                antMsg.success('内容已复制，可转发');
+                              }
+                            }}
+                            title="转发"
+                          />
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
                 {/* 消息时间戳 */}
@@ -588,6 +741,17 @@ const Chat: React.FC = () => {
           )}
           <div ref={messagesEndRef} />
         </div>
+
+        {/* 悬浮「回到底部」按钮：仅当用户上滚（不在底部）时显示 */}
+        {!atBottom && (
+          <button
+            className="scroll-bottom-fab"
+            onClick={scrollToBottomManual}
+            title="回到底部"
+          >
+            <ArrowDownOutlined />
+          </button>
+        )}
 
         {/* 输入区域 */}
         <div style={{ padding: '16px 40px 24px', borderTop: '1px solid #f0f0f0' }}>
@@ -644,26 +808,6 @@ const Chat: React.FC = () => {
               <Button size="small" type="link" onClick={clearQueue}>清空队列</Button>
             </div>
           )}
-          {/* 技能按钮（参考豆包）：切换技能模式，注入对应模块知识 */}
-          <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {SKILLS.map((s) => (
-              <Button
-                key={s.value}
-                size="small"
-                type={currentSkill === s.value ? 'primary' : 'default'}
-                title={s.tip}
-                onClick={() => setCurrentSkill(s.value)}
-                style={{ borderRadius: 16 }}
-              >
-                <span style={{ marginRight: 4 }}>{s.icon}</span>{s.label}
-              </Button>
-            ))}
-            {currentSkill !== '通用助手' && (
-              <Text type="secondary" style={{ fontSize: 12, alignSelf: 'center' }}>
-                {SKILLS.find((s) => s.value === currentSkill)?.tip || ''}
-              </Text>
-            )}
-          </div>
         </div>
 
         {/* 历史提问右侧导航（当前对话内用户提问）：右侧 Drawer */}
@@ -709,12 +853,18 @@ const Chat: React.FC = () => {
           0%, 100% { opacity: 1; }
           50% { opacity: 0; }
         }
-        .msg-copy-btn {
+        .msg-actions {
           opacity: 0;
           transition: opacity 0.15s;
         }
-        .msg-row:hover .msg-copy-btn {
+        .msg-row:hover .msg-actions {
           opacity: 1;
+        }
+        .msg-action-btn {
+          color: #999;
+        }
+        .msg-action-btn:hover {
+          color: #1677ff;
         }
         .thinking-dots {
           display: inline-flex;
@@ -754,6 +904,30 @@ const Chat: React.FC = () => {
         .history-nav-trigger:hover {
           color: #1677ff;
           background: #e6f4ff;
+        }
+        /* 悬浮「回到底部」按钮 */
+        .scroll-bottom-fab {
+          position: absolute;
+          right: 24px;
+          bottom: 96px;
+          width: 40px;
+          height: 40px;
+          border-radius: 50%;
+          border: 1px solid #e6e6e6;
+          background: #fff;
+          color: #666;
+          font-size: 16px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+          transition: color 0.2s, transform 0.2s;
+          z-index: 10;
+        }
+        .scroll-bottom-fab:hover {
+          color: #1677ff;
+          transform: translateY(-2px);
         }
       `}</style>
     </Layout>
