@@ -56,7 +56,7 @@ version: v0.1.0
 - 日报幂等链：`refresh(force=False)`：今日 `daily_{date}.md` 已存在 → 跳过（news/service.py:59-62）；否则 O_EXCL 锁 `_dir/.lock_daily`（service.py:78-97，600s 超时），拿锁后二次检查（service.py:70-73）；锁在 finally 释放（service.py:75-76）。
 - 周报/月报 `generate_periodic` 无 skip、无锁，直接 `_generate_report`（service.py:178-187,108-160）→ 每次执行必重跑（单 worker 下无重复风险）。
 - 可观测：仅结构化日志——启动日志（scheduler.py:56-61）、跳过/锁超时 warning（service.py:61,67,72）、完成日志含 fetched/filtered/path（service.py:148-152）。**无 Prometheus 指标、无调度成功/失败计数、无执行历史落盘**。
-- 下游内容链路（A7/A8/A9）：RSS 全源 gather+return_exceptions（rss_fetcher.py:57-67，单源超时 15s rss_fetcher.py:47）；正文抓取 Semaphore(10)（service.py:25,216-231）；大类生成 LLM 最多 3 次重试、指数退避 sleep(2*attempt)（generator.py:255,267-303）；web 采集与 job 侧大量 `asyncio.gather`（web_fetcher.py:37,37 等）属任务内并发而非调度。
+- 下游内容链路（A7/A8/A9）：RSS 全源 gather+return_exceptions（rss_fetcher.py:57-67，单源超时 15s rss_fetcher.py:47）；正文抓取 Semaphore(10)（service.py:25,216-231）；大类生成 LLM 最多 3 次重试、指数退避 sleep(2*attempt)（generator.py:255,267-303）；web 采集与 job 侧大量 `asyncio.gather`（web_fetcher.py:37 等）属任务内并发而非调度。
 
 ### A4 偏好抽取后台任务
 - 触发：仅当 `skill == "应聘助手"`（chat.py:546-547）。`_schedule_preference_extraction` 用 `asyncio.create_task` 启动 `_record_preferences_task`，task 句柄入模块级 set `_background_extract_tasks` 防 GC、done 回调 discard（chat.py:91,398-404）。
@@ -77,7 +77,7 @@ version: v0.1.0
 ### A11 知识自迭代入库（现状为请求内同步，非后台）
 - 触发：每次聊天 `_run_chat` 内联 await（chat.py:586-611），条件 `knowledge_ingester is not None and knowledge_base is not None`（L3 启用时装配，bootstrap.py:192-203）。
 - 代码注释称「不阻塞主回复」，但实现为**响应返回前的同步 await**（chat.py:591-599）→ 非流式下增加首包延迟；流式下 token 已推送但 done 事件延迟【推断·待验证】。**注释与实现不一致（drift D-T7-4）**。
-- ingest_conversation 内部：唯一追踪 id、importance 阈值（config.py:112 `importance_threshold=0.3`）、LLM 事实提取、冲突检测→新增/合并/并存（knowledge_ingestor.py:126-199 起）；失败仅返回 IngestResult + 日志，不抛（chat.py:608-611）。
+- ingest_conversation 内部：唯一追踪 id、importance 阈值（config.py:111 `importance_threshold=0.3`）、LLM 事实提取、冲突检测→新增/合并/并存（knowledge_ingestor.py:126-199 起）；失败仅返回 IngestResult + 日志，不抛（chat.py:608-611）。
 
 ### A12 手动触发 API（news 路由）
 - `POST /api/v1/news/refresh`：body `force`（默认 true=重新生成；false=今日已存在则跳过），鉴权 `require_full_access`（news.py:34-47）→ 全功能白名单用户才可重新生成日报（docker-compose.prod.yml:70-72 注释说明预览账号只读）。
@@ -102,8 +102,8 @@ version: v0.1.0
 
 ### A17 监控栈周期行为（docker-compose.monitoring.yml）
 - Prometheus scrape_interval 15s / evaluation_interval 15s（deploy/prometheus.yml:8-10）；tsdb 保留 30d/10GB（monitoring compose command，docker-compose.monitoring.yml:33-34）。
-- Grafana provisioning 看板刷新 updateIntervalSeconds 30（deploy/grafana/provisioning/dashboards/dashboards.yml:17）；GF_DASHBOARDS_DEFAULT_REFRESH 15s（monitoring.yml:71）。
-- Promtail docker_sd refresh_interval 5s（deploy/promtail-config.yml:29,58）。
+- Grafana provisioning 看板刷新 updateIntervalSeconds 30（deploy/grafana/provisioning/dashboards/dashboards.yml:16）；GF_DASHBOARDS_DEFAULT_REFRESH 15s（docker-compose.monitoring.yml:71）。
+- Promtail docker_sd refresh_interval 5s（deploy/promtail-config.yml:28,67）。
 - 无“容器内 crontab/定时器”，告警触发是 Prometheus 周期评估（详见 T8）。
 
 ## 4. 生命周期钩子（bootstrap）

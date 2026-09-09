@@ -68,7 +68,7 @@ version: v0.1.0
 
 - `GET /metrics`（metrics.py 路由 23-37）：无鉴权、无 /api/v1 前缀，Prometheus 默认约定；返回 text/plain version=0.0.4。
 - `GET /api/v1/health/`（health.py:28-96）：综合检查 llm/tools/storage/graph → 更新 service_health 与 service_subsystem_health（health.py:79-86）；返回 ok/degraded。
-- `GET /api/v1/health/live`（health.py:99-109）：仅进程存活，无依赖检查；docker healthcheck 用（docker-compose.prod.yml:91-95；Dockerfile:123-127）。
+- `GET /api/v1/health/live`（health.py:99-109）：仅进程存活，无依赖检查；docker healthcheck 用（docker-compose.prod.yml:90-95；backend/Dockerfile:124-125）。
 - `GET /api/v1/health/ready`（health.py:112-135）：llm + graph，任一不可用 503。
 
 ## 3. 客户端事件上报链路（backend/app/api/routes/monitoring.py）
@@ -100,7 +100,7 @@ version: v0.1.0
 - 生效机制：`setup_tracing`（tracing.py:91-139）——provider=langsmith 且 api_key 非空时写环境变量 LANGSMITH_API_KEY/LANGSMITH_PROJECT/LANGSMITH_ENDPOINT/LANGCHAIN_TRACING_V2=true（tracing.py:110-117），**依赖 LangChain/LangGraph SDK 自动上报**（langsmith 0.11.0 已在 venv，requirements.txt 未直接声明，为传递依赖【推断·待验证】）。
 - 降级路径：api_key 缺失/异常 → LocalTraceCollector 写 `data/traces/{date}.jsonl`（tracing.py:132-136,27-88）；`fallback_to_local_on_failure=true`（config.py:233）。**但 LocalTraceCollector 的 start_trace/add_event/end_trace 全仓库无调用方**，且 bootstrap.py:143 调用 setup_tracing 时丢弃返回值（bootstrap.py:141-145）→ 本地 JSON trace 从未被写入【推断：需验证 data/traces 是否为空】。
 - 配置现状：config.yaml:187-192 tracing.provider=langsmith、api_key=${LANGSMITH_API_KEY}；.env.prod 含 LANGSMITH_API_KEY（值已脱敏）→ 生产走 LangSmith 环境变量路径。
-- trace_id 业务化：chat.py:473 生成 uuid → 存入 graph state（create_initial_state，chat.py:475-481）、写入会话消息 user/assistant 记录的 trace_id 字段（chat.py:555-576）、返回响应 meta；CLI 同（cli/chat.py:177）。Promtail 提取 trace_id 标签（promtail-config.yml:43-46）。
+- trace_id 业务化：chat.py:473 生成 uuid → 存入 graph state（create_initial_state，chat.py:475-481）、写入会话消息 user/assistant 记录的 trace_id 字段（chat.py:555-576）、返回响应 meta；CLI 同（cli/chat.py:177）。Promtail json 提取 trace_id（deploy/promtail-config.yml:53）。
 - 结论：**trace 现状 = LangSmith 经 env 隐式接入（SDK 级），应用层无显式 span/OTel；本地 JSON 兜底为“已定义未接线”**。
 
 ## 6. 监控栈与告警（docker-compose.monitoring.yml + deploy/）
@@ -114,8 +114,8 @@ version: v0.1.0
   - job `prometheus`：localhost:9090。
 - 存储：tsdb 保留 30d/10GB（monitoring.yml:33-34）；evaluation_interval 15s（prometheus.yml:10）。
 - Loki：单节点，文件存储；**retention 336h=14 天**（deploy/loki-config.yml limits_config.retention_period: 336h）；ruler 配置无本地规则（alertmanager_url 空）。
-- Promtail：docker_sd 采集 label `sekb-logs=backend/frontend` 容器日志（docker-compose.prod.yml:50-51,113-114 打标；promtail-config.yml:27-75）；backend 管道 json 提取 level/event/trace_id/user_id/error 并转标签（promtail-config.yml:41-52）；frontend 管道 regex 解析 nginx 日志。
-- Grafana：数据源 Prometheus + Loki（datasources.yml）；自动 provisioning 看板 sekb-overview.json（dashboards.yml:10-21）；看板默认刷新 15s（monitoring.yml:71）。
+- Promtail：docker_sd 采集 label `sekb-logs=backend/frontend` 容器日志（docker-compose.prod.yml:50-51,114-115 打标；deploy/promtail-config.yml:25-61 backend job / 63-82 frontend job）；backend 管道 json 提取 level/event/trace_id/user_id/error 并转标签（promtail-config.yml:49-61）；frontend 管道 regex 解析 nginx 日志。
+- Grafana：数据源 Prometheus + Loki（datasources.yml）；自动 provisioning 看板 sekb-overview.json（dashboards.yml:10-21）；看板默认刷新 15s（docker-compose.monitoring.yml:71）。
 
 ### 6.2 Grafana 看板面板（deploy/grafana/provisioning/dashboards/sekb-overview.json，12 面板 + 1 行标题）
 
@@ -159,7 +159,7 @@ version: v0.1.0
 
 - D-T8-1：4 个指标定义后从未写入：`sekb_conversations_total`、`sekb_reflection_pass_rate`、`sekb_tool_call_latency_seconds`；`sekb_llm_call_latency_seconds` 只在无调用方的 record_llm_call 中被 observe（metrics.py:31,113,144,56/360）。
 - D-T8-2：`record_llm_call` 整体无调用方（metrics.py:328-372）——LLM 单次延迟/角色维度指标未接入；LLM 成本/token 由 LLMFactory 内存统计快照（llm_factory.py:427+ snapshot_stats，scribe 算 delta）经 record_chat_metrics 反推（metrics.py:261-280）。
-- D-T8-3：`messages_total` 的 user_id 标签硬编码 "default"（metrics.py:258,323），与真实 JWT 用户体系不符 → 用户维度标签失真（当前系统多用户，metrics.py:13 注释承认此限制）。conversations_total 未接 → 会话数不可从指标观测。
+- D-T8-3：`messages_total` 的 user_id 标签硬编码 "default"（metrics.py:258,323），与真实 JWT 用户体系不符 → 用户维度标签失真（metrics.py:13 注释只说明 user_id 仅用于计数避免高基数，未实现按真实用户区分）。conversations_total 未接 → 会话数不可从指标观测。
 - D-T8-4：`tool_call_total` 的 tool 标签固定 "web_search"（metrics.py:296-300），仅用单次工具成功率反推，不反映真实工具分布/延迟。
 - D-T8-5：`daily_cost_usd` 只增不减（metrics.py:307-308），无每日重置代码（metrics.py:102 注释寄望“外部任务”，仓库内未见）→ 告警 BudgetExceeded（>5）长期会被当日累计历史抬高（需靠 30d tsdb 保留手工重置）。
 - D-T8-6：`answer_groundedness` 每次 `.clear()` 后只留最近一次会话单序列（metrics.py:288-289）——持续低于 0.6 才会触发 LowGroundedness，中间态无历史分布。
