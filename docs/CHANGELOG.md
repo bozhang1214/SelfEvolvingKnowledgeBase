@@ -8,6 +8,10 @@
 
 ## 2026-09-09
 
+### 深度代码重构（WP7：Job.tsx 上帝组件拆分）
+- `pages/Job.tsx`（1635→907 行）的内联展示组件 + 纯函数下沉到 `features/job/render.tsx`：SectionRenderer/MarketSection/KnowledgeSection/JobTitle/JobDetailPopover/JsonBlock + classifyRole/isEmptyValue/getMatchScore/matchScoreColor + SectionKey/SECTION_LABELS 等。
+- 验证：tsc --noEmit 0 错、eslint 0 错误、vitest 64 passed。
+
 ### 深度代码重构（WP6：死配置/死代码/占位配置关删）
 - **死代码清理**：删除 `scheduler.trigger_now`（无调用方）、`verify_phase3.py`（阶段性验证脚本）。
 - **死配置删除**：`TracingConfig.sample_rate`（无消费，P2-12）、`VectorStoreConfig.enabled`（bootstrap 只查 l3_knowledge.enabled，P2-P2-05）。
