@@ -215,6 +215,7 @@ flowchart TB
 | classifier.py | LLM 分类 | 复用 supervisor 角色；**绕过统一统计入口**（T3） |
 | series.py | 系列识别 | 文件名启发式 + 数值/语义 |
 | browser_client.py | 通用浏览器服务客户端（sekb-browser） | WP2 从 job.py 内联 `_call_browser` 提取；可配置 base_url |
+| upload_service.py | 文件上传入库领域服务 | WP2 从 upload.py 提取：MD5 去重/原文件持久化/入库流水线/分类/LLM 概览；返回 IngestResult |
 
 ---
 

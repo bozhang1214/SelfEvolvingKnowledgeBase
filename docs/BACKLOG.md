@@ -86,7 +86,7 @@
 |----|------|------------------------|------|
 | WP0 | 复核表 + 特性测试垫底 + 任务拆解 | 全部跟踪项（复核表已提交 `2124973`） | ✅ 完成（复核表 2124973 + 拆解 c0b1494） |
 | WP1 | 公共工具收敛重复清零（core/utils + rag/format） | P2-14/Q-4.5/Q-4.6/Q-4.11/P2-P2-03/NEW-E | ✅ 完成（`fc1e084`，全量 567 passed） |
-| WP2 | 服务层下沉拆上帝路由（upload/chat/share/job） | Q-4.13（垫底测试随 WP0/1 补） | 🔄 进行中（browser_client 已提取 `50d7d0e`） |
+| WP2 | 服务层下沉拆上帝路由（upload/chat/share/job） | Q-4.13（垫底测试随 WP0/1 补） | 🔄 进行中（browser_client `50d7d0e` + upload_service `e542830`） |
 | WP3 | 聊天瘦身 + 画像解耦 | **D2**、收尾项「skill 注入面/画像锁」、P1-7 状态回填 | 待开始 |
 | WP4 | LLM 统一入口收口 + RateLimit 重开 + stats 并发 + 指标复核 | P0「限流重开/统一 LLM 入口/降级可见化」、P1「指标补齐」、Q-4.7、NEW-G、SHARE-1（启用后复核）、死指标复核 | 待开始 |
 | WP5 | Agent/记忆锁/配置语义/state 清理/tracing 处置 | P2-15、NEW-D、Q-4.3/SHARE-3、P2-12/13、Q-4.12、P2-11（D6） | 待开始 |

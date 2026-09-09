@@ -8,6 +8,11 @@
 
 ## 2026-09-09
 
+### 深度代码重构（WP2：upload 路由入库流水线下沉）
+- **新增 `services/upload_service.py`**：从 `api/routes/upload.py`（1006→618 行）提取 MD5 去重索引、图片/文档原文件持久化、入库流水线（process_and_ingest/ingest_chunks/background_ingest/classify_document）、LLM 概览。
+- **领域类型 IngestResult**：服务返回领域结果，路由转换为 UploadResponse，消除「服务→路由模型」反向依赖。
+- 行为不变；test_image_processor 改从 upload_service 导入；新增 test_upload_service 6 例；全量 575 passed；ruff 全绿、mypy 301≤310。
+
 ### 深度代码重构（WP2：服务层下沉 · 首个子提取）
 - **新增 `services/browser_client.py`**：从 `api/routes/job.py` 内联的 `_call_browser` + 硬编码 `_BROWSER_BASE` 提取为 `BrowserClient`（可配置 base_url、可注入/单测）。
 - **job.py 路由瘦身**：BOSS 扫码两处调用点改走 `_browser.post(...)`，行为不变。
