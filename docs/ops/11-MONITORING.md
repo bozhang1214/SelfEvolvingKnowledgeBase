@@ -219,6 +219,13 @@ groups:
 
 ---
 
+
+### 历史修复记录（2026-09-09）
+- **看板报表空白根因修复**：provisioning 生成的 Prometheus/Loki 数据源 uid 是随机的，而 `sekb-overview.json` 面板固定引用 `uid: prometheus` → 面板查无数据源 → 报表空白。修复：在 `datasources.yml` 给两个数据源固定 `uid: prometheus` / `uid: loki`（先经 API 删除旧源再重建，避免 provisioning 与存量数据源冲突导致 grafana 启动失败——若直接改 uid 重启会报 `data source not found`）。
+- **移除无效抓取**：旧版 prometheus.yml 含 `backend-health` job（抓 JSON 健康端点，Prometheus 无法解析恒 DOWN），已移除；健康看 `up{job="backend"}` 与 `sekb_service_health`。
+
+> 改数据源 uid 的注意：若 grafana_data 卷里已有同名数据源，请先 `editable: true` 重启 → 用 Grafana API 删除旧源 → 再切回带固定 uid 的配置重启，避免 provisioning 冲突（见上）。
+
 ## 8. 术语速查
 
 | 术语 | 含义 |
