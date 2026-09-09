@@ -11,7 +11,7 @@ import { useUserStore } from '@/stores/user';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-const { Title, Text, Paragraph } = Typography;
+const { Text, Paragraph } = Typography;
 const { Sider, Content, Header } = Layout;
 
 interface ShareInfo {

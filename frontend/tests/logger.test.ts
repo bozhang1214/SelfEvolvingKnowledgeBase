@@ -8,7 +8,7 @@
  * - TC-013-U：VITE_LOG_REPORT_ENABLED 关闭后不上报
  * - TC-014-U：连续失败退避（5 次失败后 60s 暂停）
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { logger, maskEmail, maskToken } from '@/utils/logger';
 
 describe('logger', () => {
@@ -50,8 +50,7 @@ describe('logger', () => {
     it('done 回调应在 perf 事件中包含 duration_ms', () => {
       const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
       // Mock performance.now 第一次返回 1000，第二次返回 1500
-      const perfSpy = vi
-        .spyOn(performance, 'now')
+      vi.spyOn(performance, 'now')
         .mockReturnValueOnce(1000)
         .mockReturnValueOnce(1500);
 

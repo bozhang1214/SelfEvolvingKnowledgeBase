@@ -43,12 +43,18 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install linters
-        run: pip install ruff mypy
-      - name: Ruff check
-        run: ruff check backend/app/
-      - name: Mypy type check
-        run: mypy backend/app/ --ignore-missing-imports || true
-        # mypy 设为非阻断：项目仍在迭代，类型标注尚不完整
+        run: pip install ruff "mypy==2.3.1"
+      # ruff 在 backend 目录执行，确保读取 backend/pyproject.toml 配置；
+      # 覆盖面含 app/ 与 tests/（Batch 1：门禁扩到测试代码）
+      - name: Ruff check (app + tests)
+        working-directory: backend
+        run: ruff check app/ tests/
+      # mypy 从 backend 目录执行使 [tool.mypy] strict 生效。
+      # 存量类型债较大（基线见 backend/mypy-baseline.txt），
+      # 用回归门禁：不允许新增错误；存量债清理后逐步下调基线直至 0。
+      - name: Mypy regression gate
+        working-directory: backend
+        run: bash scripts/mypy_gate.sh
 
   # ============ 前端构建检查 ============
   frontend-build:
@@ -64,6 +70,17 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci --no-audit --no-fund
+      # npm audit：生产依赖存在 high/critical 即失败（阻断门禁）；
+      # 全量 audit（含 devDeps）仅上报不阻断——devDeps 多为构建/测试工具
+      - name: npm audit (production deps)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+      - name: npm audit (all deps, non-blocking)
+        working-directory: frontend
+        run: npm audit || echo "WARN: devDeps 存在漏洞（非阻断，见 npm audit 输出）"
+      - name: ESLint
+        working-directory: frontend
+        run: npm run lint
       - name: Type check
         working-directory: frontend
         run: npx tsc --noEmit
@@ -100,7 +117,8 @@ jobs:
           JWT_SECRET: test-secret
         # 包含增量测试：test_auth_metrics.py（登录/注册失败原因细分指标）
         # 与 test_monitoring_endpoint.py（客户端事件上报与 Prometheus 指标写入）
-        run: pytest tests/unit -x --cov=app --cov-report=xml --cov-report=term -q
+        # --cov-fail-under=40：覆盖率门禁（基线 44%，随测试扩充逐步上调）
+        run: pytest tests/unit -x --cov=app --cov-report=xml --cov-report=term --cov-fail-under=40 -q
       - name: Upload coverage
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: codecov/codecov-action@v4

@@ -3,7 +3,6 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useUserStore } from '@/stores/user';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
-import Chat from '@/pages/Chat';
 import AppLayout from '@/components/Layout/AppLayout';
 import SharedKnowledge from '@/pages/SharedKnowledge';
 import SharedChat from '@/pages/SharedChat';

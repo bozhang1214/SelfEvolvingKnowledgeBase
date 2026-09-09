@@ -128,7 +128,7 @@ function _uploadFileXHR(
         } else {
           onError('响应数据格式不正确', httpStatus);
         }
-      } catch (err) {
+      } catch {
         logger.error('upload_parse_response_failed', {
           file_name: file.name,
           http_status: httpStatus,

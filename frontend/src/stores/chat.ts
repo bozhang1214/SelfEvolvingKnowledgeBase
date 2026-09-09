@@ -111,7 +111,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   togglePin: async (convId: string, pinned: boolean) => {
     try {
-      const updated = await chatService.updateConversation(convId, { pinned });
+      await chatService.updateConversation(convId, { pinned });
       // 更新后重新排序：pinned 优先
       set((state) => {
         const convs = state.conversations.map((c) =>
@@ -130,7 +130,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content: string, skill: string = '') => {
-    const { currentConvId, conversations, isStreaming } = get();
+    const { currentConvId, isStreaming } = get();
 
     // 回复进行中：新输入进入队列，结束后自动发送，避免误打断
     if (isStreaming) {
