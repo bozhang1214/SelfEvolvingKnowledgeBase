@@ -17,6 +17,27 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+def _keyword_classify_sync(
+    items: list[dict], categories: list[Any]
+) -> dict[str, list[dict]]:
+    """纯关键词分类（单归属：每条归第一个命中的大类；无命中丢弃）。
+
+    供 LLM 语义分类失败时兜底，也是可独立单测的纯函数。
+    """
+    classified: dict[str, list[dict]] = {c.name: [] for c in categories}
+    for it in items:
+        text = (
+            f"{it.get('title', '')} {it.get('summary', '')} "
+            f"{(it.get('content') or '')[:500]}"
+        ).lower()
+        for c in categories:
+            if any(k.lower() in text for k in c.keywords):
+                classified[c.name].append(it)
+                break  # 单归属
+    return classified
+
+
 # 兜底提示词（当 prompt 文件缺失时使用，保证不崩溃）
 _FALLBACK_PROMPT = """你是技术资讯编辑，针对「{{category}}」大类生成总结预测+精选条目。
 输出严格 JSON：{"category":"...","summary":"≤600字总结+预测","items":[{"title","source","link","abstract","attention","importance"}]}
@@ -171,13 +192,6 @@ class DailyReportGenerator:
         if not items:
             return classified
 
-        def _keyword_fallback(it: dict) -> str:
-            text = f"{it.get('title', '')} {it.get('summary', '')} {(it.get('content') or '')[:500]}".lower()
-            for c in categories:
-                if any(k.lower() in text for k in c.keywords):
-                    return c.name
-            return ""
-
         cat_list = "\n".join(f"{i + 1}. {c.name}" for i, c in enumerate(categories))
         item_list = [
             {
@@ -217,13 +231,10 @@ class DailyReportGenerator:
                 classified[cat].append(items[idx])
                 done_ids.add(idx)
 
-        # 兜底：LLM 未分类（失败或漏）的条目用关键词
-        for i, it in enumerate(items):
-            if i in done_ids:
-                continue
-            cat = _keyword_fallback(it)
-            if cat:
-                classified[cat].append(it)
+        # 兜底：LLM 未分类（失败或漏）的条目用关键词（单归属）
+        remaining = [it for i, it in enumerate(items) if i not in done_ids]
+        for cat, its in _keyword_classify_sync(remaining, categories).items():
+            classified[cat].extend(its)
 
         return classified
 

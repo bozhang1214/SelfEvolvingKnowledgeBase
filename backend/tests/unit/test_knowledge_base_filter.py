@@ -86,19 +86,21 @@ class TestListEntriesFiltering:
         kb = _make_kb()
         kb._collection.get = MagicMock(return_value={"ids": [], "documents": [], "metadatas": []})
         await kb.list_entries(user_id="u1", source="document", limit=20, offset=40)
+        # 原生 offset/limit 透传（避免 limit+offset 再手动 skip 的 O(n²)）
         kb._collection.get.assert_called_once_with(
             where={"$and": [{"user_id": "u1"}, {"source": "document"}]},
-            limit=60,  # limit + offset
+            limit=20,
+            offset=40,
+            include=["documents", "metadatas"],
         )
 
     @pytest.mark.asyncio
-    async def test_offset_skips_records(self):
+    async def test_offset_uses_native_chroma(self):
         kb = _make_kb()
-        # 模拟真实 chromadb：按 limit+offset(=3) 返回记录，再由 offset 跳过
-        ids = ["e1", "e2", "e3"]
-        docs = ["c1", "c2", "c3"]
+        # 模拟 chroma 原生 offset：get(limit=2, offset=1) 直接返回该窗口的记录
+        ids = ["e2", "e3"]
+        docs = ["c2", "c3"]
         metas = [
-            {"user_id": "u1", "source": "document"},
             {"user_id": "u1", "source": "document"},
             {"user_id": "u1", "source": "document"},
         ]
@@ -106,6 +108,12 @@ class TestListEntriesFiltering:
 
         entries = await kb.list_entries(user_id="u1", limit=2, offset=1)
         assert [e.entry_id for e in entries] == ["e2", "e3"]
+        kb._collection.get.assert_called_once_with(
+            where={"user_id": "u1"},
+            limit=2,
+            offset=1,
+            include=["documents", "metadatas"],
+        )
 
     @pytest.mark.asyncio
     async def test_category_filter_passed(self):
@@ -115,4 +123,6 @@ class TestListEntriesFiltering:
         kb._collection.get.assert_called_once_with(
             where={"$and": [{"user_id": "u1"}, {"category_l3": "Python"}]},
             limit=100,
+            offset=0,
+            include=["documents", "metadatas"],
         )

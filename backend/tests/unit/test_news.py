@@ -75,10 +75,16 @@ class TestParseJson:
 
 
 class TestNewsGeneratorClassify:
+    """测试关键词兜底分类（_keyword_classify_sync，单归属）。"""
+
+    def _classify(self, items, cats):
+        from app.agents.news.generator import _keyword_classify_sync
+
+        return _keyword_classify_sync(items, cats)
+
     def test_classify_by_keyword(self):
         from app.core.config import CategoryConfig
 
-        gen = object.__new__(DailyReportGenerator)
         cats = [
             CategoryConfig(name="Android", keywords=["android", "安卓"]),
             CategoryConfig(name="前端", keywords=["react", "vue", "前端"]),
@@ -88,38 +94,34 @@ class TestNewsGeneratorClassify:
             {"title": "React 19 特性", "summary": "前端框架更新"},
             {"title": "安卓性能优化", "summary": ""},
         ]
-        classified = DailyReportGenerator._classify(gen, items, cats)
+        classified = self._classify(items, cats)
         assert [it["title"] for it in classified["Android"]] == [
             "Android 15 发布",
             "安卓性能优化",
         ]
         assert [it["title"] for it in classified["前端"]] == ["React 19 特性"]
 
-    def test_classify_multi_assign(self):
-        # 一条资讯同时命中多个大类时，应同时归入多个大类（多归属）
+    def test_classify_single_assign_first_match(self):
+        # 严格单归属：一条资讯命中多个大类时，只归第一个命中的类（D7 决策）
         from app.core.config import CategoryConfig
 
-        gen = object.__new__(DailyReportGenerator)
         cats = [
             CategoryConfig(name="大模型", keywords=["大模型", "模型"]),
             CategoryConfig(name="前端", keywords=["react", "前端"]),
         ]
         items = [{"title": "React 19 驱动大模型前端应用", "summary": ""}]
-        classified = DailyReportGenerator._classify(gen, items, cats)
+        classified = self._classify(items, cats)
         assert [it["title"] for it in classified["大模型"]] == [
             "React 19 驱动大模型前端应用"
         ]
-        assert [it["title"] for it in classified["前端"]] == [
-            "React 19 驱动大模型前端应用"
-        ]
+        assert classified["前端"] == []
 
     def test_classify_unmatched_dropped(self):
         from app.core.config import CategoryConfig
 
-        gen = object.__new__(DailyReportGenerator)
         cats = [CategoryConfig(name="鸿蒙", keywords=["harmony", "鸿蒙"])]
         items = [{"title": "无关资讯", "summary": ""}]
-        classified = DailyReportGenerator._classify(gen, items, cats)
+        classified = self._classify(items, cats)
         assert classified["鸿蒙"] == []
 
 
