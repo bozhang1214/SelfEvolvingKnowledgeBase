@@ -186,7 +186,6 @@ cost_control:
 tracing:
   provider: langsmith                    # 首选 LangSmith，失败降级本地 JSON
   fallback_to_local_on_failure: true     # LangSmith 不可用时自动降级
-  sample_rate: 1.0                       # 采样率：1.0 表示全量采集
   # LangSmith 配置（在线可视化）
   langsmith:
     api_key: ${LANGSMITH_API_KEY}        # API Key，从环境变量读取
@@ -213,7 +212,6 @@ tools:
     allowed_paths: []
   # 向量存储：ChromaDB 本地持久化
   vector_store:
-    enabled: true
     provider: chroma                     # 向量库提供商
     persist_path: data/chroma_db         # 持久化目录
   # 文档解析器：PDF/Word/TXT 解析

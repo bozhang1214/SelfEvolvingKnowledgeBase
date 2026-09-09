@@ -231,7 +231,6 @@ class TracingConfig(BaseModel):
     """链路追踪配置"""
     provider: str = "langsmith"
     fallback_to_local_on_failure: bool = True
-    sample_rate: float = Field(1.0, ge=0.0, le=1.0)
     langsmith: LangSmithConfig = LangSmithConfig()
     local_json: LocalJSONTraceConfig = LocalJSONTraceConfig()
 
@@ -254,7 +253,6 @@ class FilesystemToolConfig(BaseModel):
 
 class VectorStoreConfig(BaseModel):
     """向量库配置"""
-    enabled: bool = False
     provider: str = "chroma"
     persist_path: str = "data/chroma_db"
 

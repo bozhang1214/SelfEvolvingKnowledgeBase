@@ -65,12 +65,3 @@ class NewsScheduler:
         if self._scheduler.running:
             self._scheduler.shutdown(wait=False)
             logger.info("科技资讯调度已关闭")
-
-    def trigger_now(self) -> None:
-        """立即触发一次日报任务（用于手动触发，不走 cron）。"""
-        self._scheduler.add_job(
-            self._agent.refresh,
-            id="news_daily_manual",
-            name="科技资讯（手动）",
-            replace_existing=True,
-        )
