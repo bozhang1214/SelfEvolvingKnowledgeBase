@@ -342,11 +342,17 @@ class TestWorkflowExceptionFallback:
 
     @pytest.mark.asyncio
     async def test_api_run_chat_fallback_on_workflow_error(self):
-        """mock graph.ainvoke 抛异常，_run_chat 返回降级回复"""
+        """mock graph.astream 抛异常，_run_chat 返回降级回复"""
         from app.api.routes.chat import ChatRequest, _run_chat
 
         ctx = MagicMock()
-        ctx.graph.ainvoke = AsyncMock(side_effect=RuntimeError("workflow boom"))
+
+        async def boom_astream(state, stream_mode="updates"):
+            # 模拟 LangGraph 流式执行中途抛异常
+            raise RuntimeError("workflow boom")
+            yield  # pragma: no cover
+
+        ctx.graph.astream = boom_astream
         ctx.storage.create_conversation = AsyncMock(return_value="conv-123")
         ctx.storage.get_messages = AsyncMock(return_value=[])
         ctx.storage.append_message = AsyncMock()
@@ -354,6 +360,9 @@ class TestWorkflowExceptionFallback:
         ctx.memory.add_message = AsyncMock()
         ctx.memory.compress_if_needed = AsyncMock()
         ctx.llm_factory.snapshot_stats = MagicMock(return_value=MagicMock())
+        # 关闭知识自迭代，避免 MagicMock 被 await 的噪音
+        ctx.knowledge_ingester = None
+        ctx.knowledge_base = None
 
         request = ChatRequest(message="你好")
         result = await _run_chat(ctx, request, "test-user")
@@ -401,12 +410,13 @@ class TestE2ELatencyBackfill:
 
         ctx = MagicMock()
 
-        async def slow_invoke(state):
+        async def slow_stream(state, stream_mode="updates"):
             # 引入微小延迟，确保 latency_ms > 0
             await asyncio.sleep(0.005)
-            return {"final_answer": "hello", "metrics": {}}
+            # stream_mode="updates" 下 astream 按节点产出 {node_name: update}
+            yield {"executor": {"final_answer": "hello", "metrics": {}}}
 
-        ctx.graph.ainvoke = slow_invoke
+        ctx.graph.astream = slow_stream
         ctx.storage.create_conversation = AsyncMock(return_value="conv-1")
         ctx.storage.get_messages = AsyncMock(return_value=[])
         ctx.storage.append_message = AsyncMock()
@@ -414,6 +424,9 @@ class TestE2ELatencyBackfill:
         ctx.memory.add_message = AsyncMock()
         ctx.memory.compress_if_needed = AsyncMock()
         ctx.llm_factory.snapshot_stats = MagicMock(return_value=MagicMock())
+        # 关闭知识自迭代，避免 MagicMock 被 await 的噪音
+        ctx.knowledge_ingester = None
+        ctx.knowledge_base = None
 
         request = ChatRequest(message="你好")
         result = await _run_chat(ctx, request, "test-user")

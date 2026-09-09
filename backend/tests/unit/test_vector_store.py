@@ -136,6 +136,9 @@ class TestDirectVectorStoreSearch:
             user_id="user-99",
             top_k=10,
             min_score=0.5,
+            category_l1=None,
+            category_l2=None,
+            category_l3=None,
         )
 
     async def test_search_default_parameters(self):
