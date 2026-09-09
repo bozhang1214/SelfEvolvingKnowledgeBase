@@ -2,9 +2,24 @@
 
 > 记录所有功能迭代与问题修复。按时间倒序，最新在前。
 > 维护约定：**每次功能开发或问题修复完成后，必须同步在本文件追加一条记录**，并更新文档头部「最后更新」日期。
-> 最后更新：2026-09-08
+> 最后更新：2026-09-09
 
 ---
+
+## 2026-09-09
+
+### 测试工具链整合（代码审查批次 1+2，含精简去重）
+- **约定确立**：每次提交前跑改动范围**增量测试**（`scripts/incremental_test.sh`，支持 `--staged` 提交前对比）；每两周/每月跑一次**全量测试**（`scripts/full_test.sh`）。
+- **增量/全量脚本**：`scripts/incremental_test.sh`（改动映射：后端 ruff+mypy 回归门禁+相关 pytest，前端 tsc+eslint+vitest）+ `scripts/full_test.sh`（后端全量单测/集成/门禁 + 前端全量/构建）；后端测试跑在自动构建的 `sekb-toolbox` 镜像（backend 镜像 + ruff/mypy/pytest/feedparser）。
+- **后端门禁**：ruff 覆盖面扩到 `tests/` 并清零存量 139 处违规（`86443f9`，行宽 100→120，适配存量中文/SSE 长行）；mypy 改从 backend 目录执行使 `[tool.mypy] strict` 真正生效，存量 310 条类型债转为**回归门禁**（`scripts/mypy_gate.sh` + `backend/mypy-baseline.txt`，超基线才失败，防新增不阻塞迭代）。
+- **测试补强**：修复 2 个 API 聊天测试的 mock（`_run_chat` 已改 `astream` 流式执行，`ba79b75`），后端 521→528 passed；新增 TestClient 路由级 API 测试 7 例（知识列表/搜索参数透传、kb 未启用降级、401/403 门禁）；前端接入 @testing-library/react + jest-dom（组件测试 3 例，58 passed）。
+- **前端门禁**：ESLint 9 flat config（typescript-eslint + react-hooks）接入 CI 并清零存量 error（`c431ada`），`no-explicit-any` 存量 114 条降 warning 逐轮收窄；tsc --noEmit 保留。
+- **pre-commit**：`.pre-commit-config.yaml`（ruff + mypy 回归门禁走 docker，tsc/eslint 走本机 node）。
+- **安全扫描**：CI 新增 security-scan job——gitleaks（密钥扫描）+ pip-audit（Python 依赖漏洞）；frontend-build 增加 `npm audit --omit=dev --audit-level=high` 阻断门禁（生产依赖当前仅 5 条 moderate，react-router 链）+ 全量 audit 上报（devDeps 漏洞非阻断）。
+- **覆盖率门禁**：CI `--cov-fail-under=40`（当前 43%，逐轮上调）。
+- **工具清单精简去重**：safety 并入 pip-audit、hadolint 并入 Trivy；文档守卫类（lychee/OpenAPI/清单）推迟到文档轮次（D15）；node_exporter/cAdvisor 属监控运维轮次。详见 `docs/BACKLOG.md`「五、测试工具链清单与状态」。
+
+
 
 ## 2026-09-08
 
