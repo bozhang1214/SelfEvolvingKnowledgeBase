@@ -16,8 +16,11 @@ from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import get_app_context
 from app.core.logging import get_logger
+from app.services.browser_client import BrowserClient
 
 logger = get_logger(__name__)
+
+_browser = BrowserClient()
 
 router = APIRouter(prefix="/api/v1/job", tags=["job"],
     dependencies=[Depends(require_full_access)],
@@ -140,19 +143,6 @@ async def fetch_jobs(body: JobFetchRequest, user_id: str = Depends(get_current_u
     }
 
 
-_BROWSER_BASE = "http://browser:1300"
-
-
-async def _call_browser(path: str, payload: dict, timeout: float = 30.0) -> dict:
-    """调用通用浏览器服务（sekb-browser）。"""
-    import httpx
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(f"{_BROWSER_BASE}{path}", json=payload)
-        resp.raise_for_status()
-        return resp.json()
-
-
 class BossQrStatusReq(BaseModel):
     qr_id: str = Field(..., min_length=1, description="start 返回的 qr_id")
 
@@ -162,7 +152,7 @@ async def boss_qr_start(user_id: str = Depends(get_current_user)):
     """启动 BOSS 扫码登录，返回第一张二维码（data URL）+ qr_id。"""
     _require_job_agent()
     try:
-        return await _call_browser("/login/qr/start", {"site": "boss"}, timeout=30)
+        return await _browser.post("/login/qr/start", {"site": "boss"}, timeout=30)
     except Exception as e:
         logger.error("BOSS 扫码启动失败", error=str(e), exc_info=True)
         raise HTTPException(500, f"BOSS 扫码启动失败: {e}")
@@ -173,7 +163,7 @@ async def boss_qr_status(body: BossQrStatusReq, user_id: str = Depends(get_curre
     """轮询 BOSS 扫码状态机，返回 phase（及第二张码 / 登录 Cookie）。"""
     _require_job_agent()
     try:
-        return await _call_browser(
+        return await _browser.post(
             "/login/qr/status", {"site": "boss", "qr_id": body.qr_id}, timeout=15
         )
     except Exception as e:
