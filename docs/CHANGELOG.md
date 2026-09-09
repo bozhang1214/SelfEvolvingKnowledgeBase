@@ -8,6 +8,12 @@
 
 ## 2026-09-09
 
+### 深度代码重构（WP4：LLM 统一入口收口 + 限流接线）
+- **LLM 统一入口**：9 处绕过统一入口的裸调用（news×4 / job×2 / classifier / upload_service / share 流式）改为 `ainvoke_with_stats`/`astream_with_stats`（带统计/重试/降级记录）；删除 share.py 死代码 `_extract_stream_text`。
+- **RateLimitMiddleware 重开（D4）**：由注释死代码改为 `config.api.rate_limit.enabled` 驱动的条件挂载，阈值取 config（`requests_per_minute` / `rate_limit_login_per_minute`）；默认仍关闭，开启前需验证 SSE。
+- **Q-4.7 复核**：`_record_call` 已有 `async with self._lock`（llm_factory.py:150/538），跟踪项过期，无需改动。
+- 全量 587 passed（-5 移除 `_extract_stream_text` 测试）；ruff 全绿、mypy 299≤310。
+
 ### 深度代码重构（WP2 收尾 + WP3：画像下沉 profile_service 并删除 skill）
 - **新增 `services/profile_service.py`**：画像偏好抽取（方案 A `<PREF>` 提取 + 方案 B 记录员 LLM 后台抽取）从 chat.py 下沉；共享 `_build_pref_patch`/`_upsert_profile` 消除原 `_extract_and_update_profile` 与 `_apply_pref_to_profile` 的重复逻辑。
 - **删除 skill（D2）**：移除 `ChatRequest.skill`、`_build_skill_context`、`_build_job_analysis_context` 及 `_run_chat` 的 skill 注入；反馈闭环 A 保留（无 `<PREF>` 时 no-op），闭环 B 随 skill 解耦（函数保留，待「求职意图」识别后按意图触发）。
