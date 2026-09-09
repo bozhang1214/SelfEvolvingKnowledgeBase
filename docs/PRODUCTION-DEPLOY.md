@@ -201,7 +201,7 @@ DEEPSEEK_API_KEY=sk-your-real-deepseek-key
 BOCHA_API_KEY=sk-your-real-bocha-key
 
 # JWT 签名密钥（用上面 openssl 生成的值替换）
-JWT_SECRET=a3f4b8c9d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8
+JWT_SECRET=<替换为 openssl 生成的 64 位十六进制值>
 
 # ============ 可选项 ============
 

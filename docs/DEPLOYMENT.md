@@ -290,7 +290,7 @@ curl -X POST http://localhost:8000/api/v1/auth/register \
     "settings": {},
     "created_at": "2026-08-19T10:00:00"
   },
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "token": "<JWT 示例已省略，仅展示结构>"
 }
 ```
 
