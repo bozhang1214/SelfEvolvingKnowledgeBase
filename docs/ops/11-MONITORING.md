@@ -121,6 +121,19 @@ curl -s "http://localhost:9091/api/v1/query" \
 
 ---
 
+
+### 3.1 Prometheus 自带页面能做什么（不是报表平台）
+Prometheus 网页（`http://<IP>:9091`）**不能建报表/看板**，它只提供：
+- **Graph 页**：顶部输入一条 PromQL，点 Execute → 可画**单个表达式**的临时折线图（适合“查这条指标有没有数据”）。数据临时，不保存为看板。
+- **Table 页**：同一表达式以表格形式返回当前值。
+- **Status → Targets**：查看各抓取目标是否 UP（排查“没数据”首选）。
+- **Status → Rules / Alerts**：查看告警规则加载情况与当前告警状态。
+- **Status → Service Discovery / Command-Line Flags**：排障用。
+
+要做**组合多图表的正式报表/看板**，一律到 Grafana（数据源已接好）：Dashboards → SEKB → SEKB 系统总览，或自行新增（见 §4）。
+
+> 常用自查：先在 Prometheus Graph 页 `Execute` 一条指标（见 §3 PromQL 速查），确认有数后，再到 Grafana 看板里加/改对应面板。
+
 ## 4. 修改 / 新建报表的正确姿势（重要）
 
 ### 4.1 规则：改「provisioning JSON」，不要只靠 UI
