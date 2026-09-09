@@ -1,3 +1,14 @@
+---
+title: 腾讯云轻量服务器部署手册
+layer: 运维层
+owner: SEKB Team
+status: active
+version: v1.0.0
+last-updated: 2026-09-09
+based-on-commit: f6eea56
+related: [docs/tech/09-OBSERVABILITY]
+---
+
 # SEKB 腾讯云轻量服务器部署手册
 
 > 平台：腾讯云轻量应用服务器 Lighthouse
@@ -705,9 +716,9 @@ lsof -i :3001
 
 ### 8.6 更多问题
 
-- [PRE-DEPLOY-CHECKLIST.md](./PRE-DEPLOY-CHECKLIST.md) - 部署前检查清单
-- [ALERTING-TROUBLESHOOTING.md](./ALERTING-TROUBLESHOOTING.md) - 告警故障排查
-- [PRODUCTION-DEPLOY.md](./PRODUCTION-DEPLOY.md) - 完整线上部署手册
+- [PRE-DEPLOY-CHECKLIST.md](./06-PRE-DEPLOY-CHECKLIST.md) - 部署前检查清单
+- [ALERTING-TROUBLESHOOTING.md](./07-ALERTING-TROUBLESHOOTING.md) - 告警故障排查
+- [PRODUCTION-DEPLOY.md](./02-PRODUCTION-DEPLOY.md) - 完整线上部署手册
 
 ---
 

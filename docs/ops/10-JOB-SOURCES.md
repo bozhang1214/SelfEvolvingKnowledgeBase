@@ -1,3 +1,14 @@
+---
+title: 招聘渠道采集状态跟踪
+layer: 运维层
+owner: SEKB Team
+status: active
+version: v1.0.0
+last-updated: 2026-09-09
+based-on-commit: f6eea56
+related: [docs/tech/09-OBSERVABILITY]
+---
+
 # 招聘渠道采集状态跟踪
 
 > 用途：记录各招聘渠道的采集接口可用性与登录需求，便于后续接入职位采集。

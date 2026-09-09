@@ -1,3 +1,14 @@
+---
+title: BOSS 直聘 / 京东社招 Cookie 获取手册
+layer: 运维层
+owner: SEKB Team
+status: active
+version: v1.0.0
+last-updated: 2026-09-09
+based-on-commit: f6eea56
+related: [docs/tech/09-OBSERVABILITY]
+---
+
 # BOSS 直聘 / 京东社招 · Cookie 获取与操作手册
 
 > 用途：给用户（张博）提供「如何提供登录信息」的逐步操作指引，便于我们接入 BOSS 直聘采集。

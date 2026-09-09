@@ -1,3 +1,14 @@
+---
+title: Python 3.11 环境升级与依赖安装执行计划
+layer: 运维层
+owner: SEKB Team
+status: active
+version: v1.0.0
+last-updated: 2026-09-09
+based-on-commit: f6eea56
+related: [docs/tech/09-OBSERVABILITY]
+---
+
 # Python 3.11 环境升级与依赖安装执行计划
 
 > 文档版本：v1.0

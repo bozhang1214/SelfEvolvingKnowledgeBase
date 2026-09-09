@@ -1,3 +1,14 @@
+---
+title: 国内云平台低成本部署手册
+layer: 运维层
+owner: SEKB Team
+status: active
+version: v1.0.0
+last-updated: 2026-09-09
+based-on-commit: f6eea56
+related: [docs/tech/09-OBSERVABILITY]
+---
+
 # 国内云平台低成本部署手册（轻量应用服务器）
 
 > 适用场景：个人 / 小团队使用 SEKB，追求最低成本上线
@@ -648,6 +659,6 @@ dig bos-studio.tech
 
 ### 更多问题
 
-- [PRODUCTION-DEPLOY.md](./PRODUCTION-DEPLOY.md) - 完整线上部署手册
-- [PRE-DEPLOY-CHECKLIST.md](./PRE-DEPLOY-CHECKLIST.md) - 部署前检查清单
-- [ALERTING-TROUBLESHOOTING.md](./ALERTING-TROUBLESHOOTING.md) - 告警故障排查
+- [PRODUCTION-DEPLOY.md](./02-PRODUCTION-DEPLOY.md) - 完整线上部署手册
+- [PRE-DEPLOY-CHECKLIST.md](./06-PRE-DEPLOY-CHECKLIST.md) - 部署前检查清单
+- [ALERTING-TROUBLESHOOTING.md](./07-ALERTING-TROUBLESHOOTING.md) - 告警故障排查

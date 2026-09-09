@@ -1,3 +1,14 @@
+---
+title: SEKB 操作手册（总览/部署/运维）
+layer: 运维层
+owner: SEKB Team
+status: active
+version: v1.0.0
+last-updated: 2026-09-09
+based-on-commit: f6eea56
+related: [docs/tech/09-OBSERVABILITY]
+---
+
 # SEKB 操作手册
 
 > SelfEvolvingKnowledgeBase（SEKB）——从零到上线完整操作手册。

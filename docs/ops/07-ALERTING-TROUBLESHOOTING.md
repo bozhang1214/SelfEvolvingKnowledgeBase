@@ -1,3 +1,14 @@
+---
+title: 告警模块故障排查指南
+layer: 运维层
+owner: SEKB Team
+status: active
+version: v1.0.0
+last-updated: 2026-09-09
+based-on-commit: f6eea56
+related: [docs/tech/09-OBSERVABILITY]
+---
+
 # 告警模块故障排查指南
 
 > 适用范围：Phase 4 告警通知链路（Prometheus 告警规则 → Alertmanager 路由 → feishu-webhook 中转 → 飞书/邮件）

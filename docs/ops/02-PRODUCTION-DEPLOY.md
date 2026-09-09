@@ -1,3 +1,14 @@
+---
+title: SEKB 线上部署手册
+layer: 运维层
+owner: SEKB Team
+status: active
+version: v1.0.0
+last-updated: 2026-09-09
+based-on-commit: f6eea56
+related: [docs/tech/09-OBSERVABILITY]
+---
+
 # SEKB 线上部署手册
 
 > 适用场景：将 SelfEvolvingKnowledgeBase 部署到公网服务器，对外提供生产服务
@@ -572,7 +583,7 @@ curl -X POST http://localhost:5001/webhook \
 | BudgetExceeded | warning | 日成本 > $5 持续 5 分钟 | 飞书 |
 | LowGroundedness | warning | 答案锚定度 < 0.6 持续 15 分钟 | 飞书 |
 
-> 告警故障排查请参考：[ALERTING-TROUBLESHOOTING.md](./ALERTING-TROUBLESHOOTING.md)
+> 告警故障排查请参考：[ALERTING-TROUBLESHOOTING.md](./07-ALERTING-TROUBLESHOOTING.md)
 
 ---
 
@@ -741,7 +752,7 @@ docker exec sekb-alertmanager amtool check-config /etc/alertmanager/alertmanager
 # 确保 webhook URL 使用服务名：http://feishu-webhook:5001/webhook
 ```
 
-> 更详细的告警模块排查请参考：[ALERTING-TROUBLESHOOTING.md](./ALERTING-TROUBLESHOOTING.md)
+> 更详细的告警模块排查请参考：[ALERTING-TROUBLESHOOTING.md](./07-ALERTING-TROUBLESHOOTING.md)
 
 ### 11.6 CI/CD 部署失败
 

@@ -1,3 +1,14 @@
+---
+title: 线上部署前最终检查清单
+layer: 运维层
+owner: SEKB Team
+status: active
+version: v1.0.0
+last-updated: 2026-09-09
+based-on-commit: f6eea56
+related: [docs/tech/09-OBSERVABILITY]
+---
+
 # 线上部署前最终检查清单
 
 > 适用场景：执行 `docker compose up -d` 之前的最终核对，确保所有前置条件已满足
@@ -366,7 +377,7 @@ bash deploy/pre-deploy-check.sh
 bash deploy/deploy.sh
 ```
 
-或手动分步执行（详见 [PRODUCTION-DEPLOY.md](./PRODUCTION-DEPLOY.md)）：
+或手动分步执行（详见 [PRODUCTION-DEPLOY.md](./02-PRODUCTION-DEPLOY.md)）：
 
 ```bash
 # 1. 构建并启动应用栈
