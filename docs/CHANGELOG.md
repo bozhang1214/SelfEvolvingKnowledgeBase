@@ -8,8 +8,10 @@
 
 ## 2026-09-09
 
-### 深度代码重构（WP7：Job.tsx 上帝组件拆分）
-- `pages/Job.tsx`（1635→907 行）的内联展示组件 + 纯函数下沉到 `features/job/render.tsx`：SectionRenderer/MarketSection/KnowledgeSection/JobTitle/JobDetailPopover/JsonBlock + classifyRole/isEmptyValue/getMatchScore/matchScoreColor + SectionKey/SECTION_LABELS 等。
+### 深度代码重构（WP7：前端上帝组件拆分 Job/Chat/Files）
+- **Job.tsx**（1635→907 行）：展示组件 + 纯函数下沉到 `features/job/render.tsx`（SectionRenderer/MarketSection/KnowledgeSection/JobTitle/JsonBlock + classifyRole/isEmptyValue/getMatchScore 等）。
+- **Chat.tsx**（970→899 行）：CodeBlock 组件 + buildConversationMarkdown/joinSelectedMessages 下沉到 `features/chat/markdown.tsx`。
+- **Files.tsx**（890→781 行）：SUPPORTED_EXTENSIONS/filterSupportedFiles/flattenItems/readEntry/buildSeriesTree 下沉到 `features/files/helpers.tsx`。
 - 验证：tsc --noEmit 0 错、eslint 0 错误、vitest 64 passed。
 
 ### 深度代码重构（WP6：死配置/死代码/占位配置关删）
