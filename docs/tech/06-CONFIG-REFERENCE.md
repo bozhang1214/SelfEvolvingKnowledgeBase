@@ -123,6 +123,8 @@ pii_masking / prompt_injection_guard / max_input_length / blocked_patterns 均�
 
 ## 3. 死配置清单（49 个，汇总）
 
+> **重构后状态（2026-09-09，WP6）**：已删除 11 个死键——`reflection.adaptive.*(2)`/`sampling.rate`（D3）、`cost_control` 预算 4 项（D3）、`tracing.sample_rate`/`local_json.*(2)`（P2-12/D6）、`tools.vector_store.enabled`（P2-P2-05）。剩余多为「Phase 2 预留」（memory.l2/eviction、tools.filesystem/image_analysis、storage postgres）或低价值死键（evaluation 5 项、app.debug、intent_routing.enable_pre_retrieval、vector_store.provider、document_parser.enabled、news/job 2 项），待后续清理或在 11-EVOLUTION 归口。
+
 | 域 | 死配置 | 建议（归 11-EVOLUTION） |
 |----|--------|------------------------|
 | app | debug | 删除或接 logger |

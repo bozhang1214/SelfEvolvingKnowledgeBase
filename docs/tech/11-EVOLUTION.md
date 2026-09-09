@@ -43,10 +43,13 @@ related: [01-ARCHITECTURE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 09-OBSERVABI
 ## 2. 架构演进路线
 
 ### 2.1 短期（1-2 月）——止血与收口
-- 修 `${VAR:-default}` 展开缺陷（T2 §4），清理死配置（先删明显无用的，其余转真实配置或删）。
-- 接通预算控制/限流：cost_control 预算接线或明确删除；挂载 RateLimitMiddleware（或网关统一）。
+
+> **2026-09 重构已落地**：死配置已删 11 键（D3/P2-12/P2-P2-05/D6）；cost_control 预算占位已删、RateLimitMiddleware 已配置驱动接线（`enabled` 待启用）；LLM 统一入口 9 处已收口（`ainvoke_with_stats`/`astream_with_stats`，仅剩 image_processor 独立视觉模型 T3 漂移）；画像偏好抽取（方案 B）随 skill 删除而解耦，待「求职意图」识别后按意图触发。以下为未完成项：
+
+- 修 `${VAR:-default}` 展开缺陷（T2 §4），清理剩余死配置（evaluation 5 项 / app.debug / vector_store.provider 等）。
+- 启用 RateLimitMiddleware（`rate_limit.enabled=true`，需先验证 SSE 流式不受影响）。
 - 补齐观测：4 指标埋点、record_llm_call 接线或删除、标签失真修复。
-- LLM 统一入口：把 10 个绕过点收敛到 factory（先 image_processor/share，后 news/job）。
+- 画像偏好抽取（方案 B）按「求职意图」重新触发 + 复用原 `_build_job_analysis_context` 职位分析上下文注入。
 - 知识入库改后台执行（对齐注释）或改注释。
 
 ### 2.2 中期（3-6 月）——数据与并发地基
