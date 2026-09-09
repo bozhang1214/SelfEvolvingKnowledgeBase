@@ -271,36 +271,36 @@ class TestFileProcessorImageRouting:
 
 
 # ============================================================
-# upload.py 辅助函数测试
+# upload_service 图片辅助函数测试
 # ============================================================
 
 class TestUploadHelpers:
-    """测试 upload.py 中的图片辅助函数。"""
+    """测试 upload_service 中的图片辅助函数。"""
 
     def test_is_image_file_jpg(self):
         """检测 .jpg 文件。"""
-        from app.api.routes.upload import _is_image_file
-        assert _is_image_file("photo.jpg") is True
+        from app.services.upload_service import is_image_file
+        assert is_image_file("photo.jpg") is True
 
     def test_is_image_file_png(self):
         """检测 .png 文件。"""
-        from app.api.routes.upload import _is_image_file
-        assert _is_image_file("screenshot.PNG") is True  # 大小写不敏感
+        from app.services.upload_service import is_image_file
+        assert is_image_file("screenshot.PNG") is True  # 大小写不敏感
 
     def test_is_image_file_pdf(self):
         """PDF 不是图片。"""
-        from app.api.routes.upload import _is_image_file
-        assert _is_image_file("doc.pdf") is False
+        from app.services.upload_service import is_image_file
+        assert is_image_file("doc.pdf") is False
 
     def test_is_image_file_txt(self):
         """TXT 不是图片。"""
-        from app.api.routes.upload import _is_image_file
-        assert _is_image_file("notes.txt") is False
+        from app.services.upload_service import is_image_file
+        assert is_image_file("notes.txt") is False
 
     def test_get_image_config_defaults(self):
         """获取默认图片配置。"""
-        from app.api.routes.upload import _get_image_config
-        config = _get_image_config()
+        from app.services.upload_service import get_image_config
+        config = get_image_config()
         assert "enabled" in config
         assert "vision_llm" in config
         assert "ocr" in config
