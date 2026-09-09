@@ -1,0 +1,48 @@
+# ============================================================
+# SEKB pre-commit 配置（Batch 1/2 质量工具集成）
+# ============================================================
+# 依赖：
+#   - pre-commit 本体（pip install pre-commit / brew install pre-commit）
+#   - docker + 本地已构建测试镜像 sekb-toolbox（见 scripts/full_test.sh，
+#     会基于 self-evolving-kb-backend 自动补齐 ruff/mypy/pytest）
+#   - frontend 目录已 npm ci（eslint/tsc 用本机 node_modules）
+#
+# 安装：pre-commit install          # 每次 git commit 自动执行
+# 手动：pre-commit run --all-files
+#
+# 说明：完整增量测试（含 pytest/vitest）走 scripts/incremental_test.sh，
+#       此处为提交前的轻量静态门禁（ruff + mypy 回归 + tsc + eslint）。
+# ============================================================
+repos:
+  - repo: local
+    hooks:
+      # ---------- 后端：ruff（全部后端文件，快速必过）----------
+      - id: ruff-check-backend
+        name: ruff check (backend app+tests)
+        entry: docker run --rm -v "$PWD/backend:/bt" -w /bt sekb-toolbox:latest python -m ruff check app/ tests/
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
+      # ---------- 后端：mypy 回归门禁（存量债基线对比）----------
+      - id: mypy-regression-gate
+        name: mypy regression gate (backend)
+        entry: docker run --rm -v "$PWD/backend:/bt" -w /bt sekb-toolbox:latest bash scripts/mypy_gate.sh
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
+      # ---------- 前端：tsc 类型检查 ----------
+      - id: tsc-frontend
+        name: tsc --noEmit (frontend)
+        entry: frontend/node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json
+        language: system
+        files: ^frontend/.*\.(ts|tsx)$
+        pass_filenames: false
+
+      # ---------- 前端：eslint（改动文件；--config 指向 flat config）----------
+      - id: eslint-frontend
+        name: eslint (frontend changed files)
+        entry: frontend/node_modules/.bin/eslint --config frontend/eslint.config.js
+        language: system
+        files: ^frontend/.*\.(ts|tsx)$
