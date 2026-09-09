@@ -34,6 +34,7 @@ related: [docs/tech/00-README]
 | 08 | [08-PYTHON311-UPGRADE.md](./08-PYTHON311-UPGRADE.md) | Python 3.11 升级与依赖安装计划 | 环境重建/升级 |
 | 09 | [09-BOSS-JD-COOKIE.md](./09-BOSS-JD-COOKIE.md) | BOSS 直聘/京东社招 Cookie 获取 | 职位采集渠道失效时 |
 | 10 | [10-JOB-SOURCES.md](./10-JOB-SOURCES.md) | 招聘渠道采集状态跟踪 | 采集源维护 |
+| 11 | [11-MONITORING.md](./11-MONITORING.md) | Prometheus/Grafana 监控配置与使用手册（看报表/改报表/查数） | 首次看监控、自己改报表时 |
 
 ## 关联
 

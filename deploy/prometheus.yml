@@ -36,15 +36,9 @@ scrape_configs:
     # 采集超时（后端首次启动加载 embedding 模型较慢，给予宽松超时）
     scrape_timeout: 10s
 
-  # ---------- 后端健康检查（独立 job，更短间隔） ----------
-  - job_name: "backend-health"
-    metrics_path: /api/v1/health
-    scrape_interval: 30s
-    scrape_timeout: 5s
-    static_configs:
-      - targets: ["backend:8000"]
-        labels:
-          service: "backend-health"
+  # （注：健康探活不使用独立 JSON job——/api/v1/health 返回 JSON，Prometheus 无法解析，
+  #   会恒为 down 且无意义。健康状态由 /metrics 内的 sekb_service_health /
+  #   sekb_service_subsystem_health 指标 + 告警 up{job="backend"}==0 覆盖。）
 
   # ---------- Prometheus 自身 ----------
   - job_name: "prometheus"
