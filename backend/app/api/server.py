@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.middleware import setup_cors
+from app.api.middleware import RateLimitMiddleware, setup_cors
 from app.core.bootstrap import AppContext, initialize_app, shutdown_app
 from app.core.config import AppConfig, get_config
 from app.core.exceptions import (
@@ -192,13 +192,18 @@ def create_app() -> FastAPI:
     # ---------- CORS 中间件 ----------
     setup_cors(app)
 
-    # NOTE: 限流中间件临时禁用（排查 SSE 流式问题）
-    # app.add_middleware(
-    #     RateLimitMiddleware,
-    #     default_limit=60,
-    #     default_window_seconds=60,
-    #     route_limits={"/api/v1/auth/login": 5, "/api/v1/auth/register": 3},
-    # )
+    # ---------- 限流中间件（纯 ASGI 实现，不缓冲 SSE 流式响应） ----------
+    # 由 config.api.rate_limit.enabled 控制开关；默认关闭，开启前需验证 SSE 流式不受影响。
+    if config.api.rate_limit.enabled:
+        app.add_middleware(
+            RateLimitMiddleware,
+            default_limit=config.api.rate_limit.requests_per_minute,
+            default_window_seconds=60,
+            route_limits={
+                "/api/v1/auth/login": config.api.auth.rate_limit_login_per_minute,
+                "/api/v1/auth/register": config.api.auth.rate_limit_login_per_minute,
+            },
+        )
 
 
     # ---------- 全局异常处理器：SEKBError ----------
