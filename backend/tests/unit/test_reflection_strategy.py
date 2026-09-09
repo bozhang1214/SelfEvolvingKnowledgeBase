@@ -166,17 +166,13 @@ class TestCreateReflectionStrategy:
         assert isinstance(strategy, AlwaysReflectStrategy)
         assert isinstance(strategy, ReflectionStrategy)
 
-    def test_adaptive_falls_back_to_always(self, sample_config):
-        """测试 'adaptive' 策略降级为 AlwaysReflectStrategy"""
-        sample_config.reflection.policy = "adaptive"
-        strategy = create_reflection_strategy(sample_config)
-        assert isinstance(strategy, AlwaysReflectStrategy)
-
-    def test_sampling_falls_back_to_always(self, sample_config):
-        """测试 'sampling' 策略降级为 AlwaysReflectStrategy"""
-        sample_config.reflection.policy = "sampling"
-        strategy = create_reflection_strategy(sample_config)
-        assert isinstance(strategy, AlwaysReflectStrategy)
+    def test_placeholder_policies_raise_config_error(self):
+        """D3：adaptive/sampling 占位已删除，均抛 ConfigError"""
+        for policy in ("adaptive", "sampling"):
+            mock_config = MagicMock()
+            mock_config.reflection.policy = policy
+            with pytest.raises(ConfigError, match="未知的反思策略"):
+                create_reflection_strategy(mock_config)
 
     def test_unknown_policy_raises_config_error(self):
         """测试未知策略名抛出 ConfigError"""

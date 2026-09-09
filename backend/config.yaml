@@ -122,14 +122,9 @@ memory:
 
 # ============ 反思策略 ============
 reflection:
-  policy: always                        # 默认每次必反思；可选：adaptive / sampling
+  policy: always                        # Phase 1 仅实现 always（adaptive/sampling 占位已按 D3 删除）
   max_replan: 2                         # 最大重规划次数，超限则标记低置信度直通
   model_switch_threshold: 0.7           # 任务复杂度超过此阈值时切换 reasoner 做 Critic
-  adaptive:                             # 自适应策略配置（policy=adaptive 时生效）
-    skip_if_rag_hit_above: 0.95          # RAG 命中率 > 95% 时跳过反思
-    skip_if_intent_in: [chitchat]       # 闲聊意图跳过反思
-  sampling:                             # 采样策略配置（policy=sampling 时生效）
-    rate: 0.5                           # 50% 的对话随机采样反思
 
 # ============ 评估指标阈值 ============
 evaluation:
@@ -169,10 +164,6 @@ evaluation:
 
 # ============ 成本控制 ============
 cost_control:
-  per_conversation_token_limit: 20000   # 单对话 token 上限，超过强制结束
-  daily_budget_usd: 1.0                 # 每日总预算（美元），超过自动降级
-  reasoner_ratio_alert_above: 0.3       # reasoner 调用占比超过 30% 时告警
-  auto_downgrade_on_budget: true        # 预算超限时自动全链路降级到 chat
   # DeepSeek 定价（美元/1K tokens）：用于成本归因
   pricing:
     deepseek-chat:                      # 快思考模型定价

@@ -29,13 +29,4 @@ def create_reflection_strategy(config: AppConfig) -> ReflectionStrategy:
 
     if policy == "always":
         return AlwaysReflectStrategy(config)
-    elif policy == "adaptive":
-        # Phase 2 扩展：AdaptiveReflectStrategy
-        # 暂时降级为 always
-        return AlwaysReflectStrategy(config)
-    elif policy == "sampling":
-        # Phase 2 扩展：SamplingReflectStrategy
-        # 暂时降级为 always
-        return AlwaysReflectStrategy(config)
-    else:
-        raise ConfigError(f"未知的反思策略: {policy}")
+    raise ConfigError(f"未知的反思策略: {policy}")

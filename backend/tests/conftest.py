@@ -118,10 +118,6 @@ def sample_config() -> AppConfig:
             "model_switch_threshold": 0.7,
         },
         "cost_control": {
-            "per_conversation_token_limit": 20000,
-            "daily_budget_usd": 1.0,
-            "reasoner_ratio_alert_above": 0.3,
-            "auto_downgrade_on_budget": True,
             "pricing": {
                 "deepseek-chat": {"input": 0.00014, "output": 0.00028},
                 "deepseek-reasoner": {"input": 0.00055, "output": 0.00219},

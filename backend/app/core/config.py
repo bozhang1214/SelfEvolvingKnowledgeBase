@@ -138,29 +138,16 @@ class MemoryConfig(BaseModel):
         return v
 
 
-class AdaptiveReflectionConfig(BaseModel):
-    """Adaptive 反思策略参数"""
-    skip_if_rag_hit_above: float = 0.95
-    skip_if_intent_in: list[str] = ["chitchat"]
-
-
-class SamplingReflectionConfig(BaseModel):
-    """Sampling 反思策略参数"""
-    rate: float = Field(0.5, ge=0.0, le=1.0)
-
-
 class ReflectionConfig(BaseModel):
-    """反思策略配置"""
-    policy: str = "always"  # always | adaptive | sampling
+    """反思策略配置（Phase 1 仅实现 always；adaptive/sampling 占位已按 D3 删除，见 11-EVOLUTION）"""
+    policy: str = "always"
     max_replan: int = Field(2, ge=0)
     model_switch_threshold: float = Field(0.7, ge=0.0, le=1.0, description="复杂度>=阈值时 Critic 用 reasoner")
-    adaptive: AdaptiveReflectionConfig = AdaptiveReflectionConfig()
-    sampling: SamplingReflectionConfig = SamplingReflectionConfig()
 
     @field_validator("policy")
     @classmethod
     def policy_must_be_valid(cls, v: str) -> str:
-        valid = {"always", "adaptive", "sampling"}
+        valid = {"always"}
         if v not in valid:
             raise ConfigError(f"reflection.policy 必须是 {valid} 之一，当前为 {v}")
         return v
@@ -206,11 +193,7 @@ class PricingConfig(BaseModel):
 
 
 class CostControlConfig(BaseModel):
-    """成本控制配置"""
-    per_conversation_token_limit: int = 20000
-    daily_budget_usd: float = 1.0
-    reasoner_ratio_alert_above: float = 0.3
-    auto_downgrade_on_budget: bool = True
+    """成本控制配置（预算检查/熔断字段原为占位，按 D3 删除，仅保留定价表）"""
     pricing: dict[str, PricingConfig] = {}
 
 
