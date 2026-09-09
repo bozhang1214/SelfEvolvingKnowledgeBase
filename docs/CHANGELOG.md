@@ -8,6 +8,11 @@
 
 ## 2026-09-09
 
+### 深度代码重构（WP2：share/chat_share 重复助手收敛）
+- **新增 `services/share_service.py`**：`get_valid_share`（404/403 校验）与 `owner_display_name`（脱敏展示名，fallback 参数化）单一实现，消除 share.py 与 chat_share.py 各自复制的两份逻辑。
+- 两路由保留各自 `_require_share_storage`（不同存储后端）与薄委托包装，调用点/行为不变。
+- 新增 test_share_service 7 例；全量 582 passed；ruff 全绿、mypy 301≤310。
+
 ### 深度代码重构（WP2：upload 路由入库流水线下沉）
 - **新增 `services/upload_service.py`**：从 `api/routes/upload.py`（1006→618 行）提取 MD5 去重索引、图片/文档原文件持久化、入库流水线（process_and_ingest/ingest_chunks/background_ingest/classify_document）、LLM 概览。
 - **领域类型 IngestResult**：服务返回领域结果，路由转换为 UploadResponse，消除「服务→路由模型」反向依赖。
