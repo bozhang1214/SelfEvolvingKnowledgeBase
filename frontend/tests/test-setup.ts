@@ -6,6 +6,9 @@
  * - 清理 logger 全局状态
  */
 
+// 引入 jest-dom 匹配器（toBeInTheDocument 等）
+import '@testing-library/jest-dom/vitest';
+
 // jsdom 没有 performance.now，Mock 一个稳定的实现
 if (!('performance' in globalThis)) {
   Object.defineProperty(globalThis, 'performance', {

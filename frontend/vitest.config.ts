@@ -22,7 +22,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./tests/test-setup.ts'],
-    include: ['tests/**/*.test.ts'],
+    include: ['tests/**/*.test.{ts,tsx}'],
     coverage: {
       reporter: ['text', 'html'],
       include: ['src/**/*.ts', 'src/**/*.tsx'],
