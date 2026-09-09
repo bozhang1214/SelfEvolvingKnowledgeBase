@@ -282,6 +282,68 @@ describe('chat store', () => {
     });
   });
 
+  describe('streaming 会话隔离（切走不串台）', () => {
+    it('发送后 streamingConvId 指向当前会话', async () => {
+      useChatStore.setState({ currentConvId: 'c1', messages: { c1: [] } });
+      await useChatStore.getState().sendMessage('hello');
+      expect(useChatStore.getState().streamingConvId).toBe('c1');
+      expect(useChatStore.getState().isStreaming).toBe(true);
+    });
+
+    it('切到其它会话后 done 不把 currentConvId 跳回', async () => {
+      let onDoneCb: ((meta: any) => void) | null = null;
+      vi.mocked(chatService.streamChat).mockImplementation(
+        (_convId, _msg, _onToken, onDone, _onError, _onThinking) => {
+          onDoneCb = onDone;
+          return new AbortController();
+        }
+      );
+
+      // 在 c1 发送（c1 已存在，isTemp=false）
+      useChatStore.setState({
+        currentConvId: 'c1',
+        messages: { c1: [], c2: [] },
+      });
+      await useChatStore.getState().sendMessage('hello');
+
+      // 用户切到 c2
+      await useChatStore.getState().selectConversation('c2');
+      expect(useChatStore.getState().currentConvId).toBe('c2');
+
+      // c1 的流完成，不应把 currentConvId 拉回 c1
+      onDoneCb!({ conversation_id: 'c1', intent: '', metrics: {} } as any);
+
+      expect(useChatStore.getState().currentConvId).toBe('c2');
+      expect(useChatStore.getState().isStreaming).toBe(false);
+      expect(useChatStore.getState().streamingConvId).toBeNull();
+      // 回答仍写入 c1
+      expect(useChatStore.getState().messages['c1'].some((m) => m.role === 'assistant')).toBe(true);
+    });
+
+    it('新会话(temp)切走后 done 不迁移 currentConvId', async () => {
+      let onDoneCb: ((meta: any) => void) | null = null;
+      vi.mocked(chatService.streamChat).mockImplementation(
+        (_convId, _msg, _onToken, onDone, _onError, _onThinking) => {
+          onDoneCb = onDone;
+          return new AbortController();
+        }
+      );
+      useChatStore.setState({ currentConvId: null, messages: {}, conversations: [] });
+
+      await useChatStore.getState().sendMessage('hello');
+      const tempId = useChatStore.getState().currentConvId;
+      expect(tempId).toMatch(/^temp_/);
+
+      // 切到已有会话 c2
+      await useChatStore.getState().selectConversation('c2');
+
+      onDoneCb!({ conversation_id: 'real-1', intent: '', metrics: {} } as any);
+
+      expect(useChatStore.getState().currentConvId).toBe('c2');
+      expect(useChatStore.getState().messages['real-1']).toBeDefined();
+    });
+  });
+
   describe('regenerateAssistant', () => {
     it('截断到用户消息并重发同内容', async () => {
       const convId = 'c1';

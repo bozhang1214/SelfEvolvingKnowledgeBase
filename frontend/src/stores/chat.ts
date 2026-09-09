@@ -10,6 +10,8 @@ interface ChatState {
   isStreaming: boolean;
   streamingContent: string;
   thinkingContent: string;
+  /** 正在流式生成的会话 ID（用于隔离：仅该会话展示思考/流式内容） */
+  streamingConvId: string | null;
   /** 排队待发送的消息（回复进行中时新输入进入队列，结束后自动发送） */
   pendingQueue: { content: string }[];
   /** 是否正在从队列里逐条发送（用于显示「已排队 N 条」） */
@@ -83,7 +85,7 @@ async function runStream(
       const realConvId = meta.conversation_id || '';
       if (!realConvId) {
         // 无效 conversation_id，不迁移消息，仅结束 streaming 状态
-        set({ isStreaming: false, streamingContent: '', thinkingContent: '' });
+        set({ isStreaming: false, streamingContent: '', thinkingContent: '', streamingConvId: null });
         get().flushQueue();
         return;
       }
@@ -124,7 +126,9 @@ async function runStream(
           isStreaming: false,
           streamingContent: '',
           thinkingContent: '',
-          currentConvId: finalConvId,
+          streamingConvId: null,
+          // 仅当用户仍停留在本会话时才跟随迁移后的真实会话 ID（避免切走后又跳回）
+          currentConvId: isTemp && state.currentConvId === displayConvId ? realConvId : state.currentConvId,
         };
       });
 
@@ -149,6 +153,7 @@ async function runStream(
           isStreaming: false,
           streamingContent: '',
           thinkingContent: '',
+          streamingConvId: null,
         };
       });
       get().flushQueue();
@@ -170,6 +175,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isStreaming: false,
   streamingContent: '',
   thinkingContent: '',
+  streamingConvId: null,
   pendingQueue: [],
   queueSending: false,
 
@@ -188,7 +194,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectConversation: async (convId: string) => {
-    set({ currentConvId: convId, streamingContent: '' });
+    set({ currentConvId: convId, streamingContent: '', thinkingContent: '' });
     if (!get().messages[convId]) {
       try {
         const msgs = await chatService.getMessages(convId);
@@ -311,6 +317,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         conversations,
         isStreaming: true,
         streamingContent: '',
+        streamingConvId: tempConvId,
       };
     });
 
@@ -338,6 +345,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isStreaming: true,
         streamingContent: '',
         thinkingContent: '',
+        streamingConvId: convId,
         currentConvId: convId,
       };
     });
@@ -368,6 +376,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isStreaming: true,
         streamingContent: '',
         thinkingContent: '',
+        streamingConvId: convId,
         currentConvId: convId,
       };
     });
@@ -402,7 +411,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (controller) {
       controller.abort();
       // 停止：取消当前流，同时清空排队队列（一次停止，全部停止）
-      set({ isStreaming: false, streamingContent: '', thinkingContent: '', pendingQueue: [], queueSending: false });
+      set({ isStreaming: false, streamingContent: '', thinkingContent: '', streamingConvId: null, pendingQueue: [], queueSending: false });
     }
   },
 

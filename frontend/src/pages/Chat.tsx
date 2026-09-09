@@ -34,7 +34,7 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
   };
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ position: 'relative', maxWidth: '100%', overflowX: 'auto' }}>
       <div
         style={{
           display: 'flex',
@@ -97,7 +97,7 @@ function joinSelectedMessages(msgs: Message[]): string {
 const Chat: React.FC = () => {
   const {
     conversations, currentConvId, messages, isStreaming, streamingContent, thinkingContent,
-    pendingQueue,
+    streamingConvId, pendingQueue,
     loadConversations, selectConversation, createConversation,
     deleteConversation, renameConversation, togglePin, sendMessage, cancelStream, clearQueue,
     regenerateAssistant, editUserMessage,
@@ -139,12 +139,27 @@ const Chat: React.FC = () => {
     }
   }, [searchParams, selectConversation]);
 
-  // 自动滚动到底部：仅在用户靠近底部时跟随（task 3 上滚则停止跟踪）
+  // 切换会话后需要「瞬间到底」（无动画）；标记在下一次滚动时消费
+  const instantScrollRef = useRef(true);
+
+  // 会话切换：标记瞬间到底
   useEffect(() => {
-    if (atBottom) {
+    instantScrollRef.current = true;
+    setAtBottom(true);
+  }, [currentConvId]);
+
+  // 自动滚动到底部：仅在用户靠近底部时跟随
+  useEffect(() => {
+    if (!atBottom) return;
+    if (instantScrollRef.current) {
+      // 进入/切换会话：瞬间定位到底，无动画
+      instantScrollRef.current = false;
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    } else {
+      // 流式新增内容：平滑跟随
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, streamingContent, thinkingContent, atBottom]);
+  }, [messages, streamingContent, thinkingContent, atBottom, currentConvId]);
 
   // 监听消息容器的滚动：判断是否靠近底部，决定是否停止自动跟随
   const handleScroll = () => {
@@ -243,9 +258,11 @@ const Chat: React.FC = () => {
   };
 
   const currentMessages = currentConvId ? (messages[currentConvId] || []) : [];
+  // 流式/思考内容仅属于发起它的会话：当前查看的会话若不是发起者，则不展示（task-issue 1 修复）
+  const isThisConvStreaming = isStreaming && streamingConvId === currentConvId;
   // 思考阶段（有 thinkingContent 但无 streamingContent）不显示 assistant 气泡
   // 正常流式输出阶段（有 streamingContent）才显示 assistant 气泡
-  const showStreamingBubble = isStreaming && streamingContent.length > 0;
+  const showStreamingBubble = isThisConvStreaming && streamingContent.length > 0;
   const allContent = showStreamingBubble
     ? [...currentMessages, { role: 'assistant' as const, content: streamingContent, isStreaming: true }]
     : currentMessages;
@@ -541,9 +558,9 @@ const Chat: React.FC = () => {
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
-          style={{ flex: 1, overflow: 'auto', padding: '24px 40px' }}
+          style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '24px 40px' }}
         >
-          {allContent.length === 0 && !isStreaming && (
+          {allContent.length === 0 && !isThisConvStreaming && (
             <div style={{ textAlign: 'center', marginTop: 120, color: '#999' }}>
               <Text style={{ fontSize: 16 }}>开始一个新对话</Text>
               <br />
@@ -584,10 +601,13 @@ const Chat: React.FC = () => {
                   <div
                     style={{
                       maxWidth: '70%',
+                      minWidth: 0,
                       padding: '12px 16px',
                       borderRadius: 12,
                       background: msg.role === 'user' ? '#1677ff' : '#f5f5f5',
                       color: msg.role === 'user' ? '#fff' : '#000',
+                      overflowWrap: 'anywhere',
+                      wordBreak: 'break-word',
                     }}
                   >
                     {msg.role === 'user' ? (
@@ -716,7 +736,7 @@ const Chat: React.FC = () => {
             );
           })}
           {/* 思考中提示（无气泡、无光标，独立提示卡片） */}
-          {isStreaming && thinkingContent && !streamingContent && (
+          {isThisConvStreaming && thinkingContent && !streamingContent && (
             <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 16 }}>
               <div
                 style={{
@@ -853,6 +873,15 @@ const Chat: React.FC = () => {
         @keyframes blink {
           0%, 100% { opacity: 1; }
           50% { opacity: 0; }
+        }
+        .markdown-content {
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          max-width: 100%;
+        }
+        .markdown-content pre {
+          max-width: 100%;
+          overflow-x: auto;
         }
         .msg-actions {
           opacity: 1;
