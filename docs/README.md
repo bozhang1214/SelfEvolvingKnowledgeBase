@@ -10,6 +10,7 @@
 | `docs/tech/01-ARCHITECTURE.md` … `docs/tech/11-EVOLUTION.md` | 技术文档全集（架构/运行时/模块/数据/API/配置/设计模式/术语/可观测/测试/演进） | 开发者 |
 | [`docs/ops/`](ops/00-README.md) | 运维与部署手册（编号 00-10：部署/排障/采集渠道，先读 00-README 索引） | 运维/后端 |
 | [`docs/CHANGELOG.md`](CHANGELOG.md) | 项目变更日志（活文档，持续更新） | 所有人 |
+| [`docs/codeReview/`](codeReview/) | 历史代码审查存档（Qoder/CodeBuddy/全域评审，仅追溯） | 架构师 |
 | [`docs/BACKLOG.md`](BACKLOG.md) | 需求跟踪 / 待办 / 代码审计跟踪（活文档） | 所有人 |
 | `docs/tech/.validation/` | 文档工程校验脚本（链接/孤儿/编号/新鲜度） | 维护者 |
 | `docs/tech/.facts/` | 事实表 T1–T8（单一事实源 SSOT 工作产物） | 维护者 |
