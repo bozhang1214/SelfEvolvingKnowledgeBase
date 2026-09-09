@@ -23,8 +23,8 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 
 from app.api.routes import knowledge as knowledge_route
-from app.core.auth import get_current_user
 from app.core.access import require_full_access
+from app.core.auth import get_current_user
 from app.memory.knowledge_entry import KnowledgeEntry
 
 
@@ -65,7 +65,9 @@ def _patch_ctx(monkeypatch, kb=None):
 class TestListKnowledge:
     def test_list_returns_entries_and_total(self, client, monkeypatch):
         kb = MagicMock()
-        kb.list_entries = AsyncMock(return_value=[_make_entry(entry_id="e-1"), _make_entry(content="B", entry_id="e-2")])
+        kb.list_entries = AsyncMock(
+            return_value=[_make_entry(entry_id="e-1"), _make_entry(content="B", entry_id="e-2")]
+        )
         kb.count_entries = AsyncMock(return_value=2)
         _patch_ctx(monkeypatch, kb=kb)
 

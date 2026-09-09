@@ -344,12 +344,12 @@ class TestWorkflowExceptionFallback:
 
         ctx = MagicMock()
 
-        async def boom_astream(state, stream_mode="updates"):
+        async def boom_astream_events(state, version="v2"):
             # 模拟 LangGraph 流式执行中途抛异常
             raise RuntimeError("workflow boom")
             yield  # pragma: no cover
 
-        ctx.graph.astream = boom_astream
+        ctx.graph.astream_events = boom_astream_events
         ctx.storage.create_conversation = AsyncMock(return_value="conv-123")
         ctx.storage.get_messages = AsyncMock(return_value=[])
         ctx.storage.append_message = AsyncMock()
@@ -407,13 +407,18 @@ class TestE2ELatencyBackfill:
 
         ctx = MagicMock()
 
-        async def slow_stream(state, stream_mode="updates"):
+        async def slow_stream_events(state, version="v2"):
             # 引入微小延迟，确保 latency_ms > 0
             await asyncio.sleep(0.005)
-            # stream_mode="updates" 下 astream 按节点产出 {node_name: update}
-            yield {"executor": {"final_answer": "hello", "metrics": {}}}
+            # astream_events 下节点结束事件带 data.output（state 更新字典）
+            yield {
+                "event": "on_chain_end",
+                "name": "executor",
+                "metadata": {"langgraph_node": "executor"},
+                "data": {"output": {"final_answer": "hello", "metrics": {}}},
+            }
 
-        ctx.graph.astream = slow_stream
+        ctx.graph.astream_events = slow_stream_events
         ctx.storage.create_conversation = AsyncMock(return_value="conv-1")
         ctx.storage.get_messages = AsyncMock(return_value=[])
         ctx.storage.append_message = AsyncMock()

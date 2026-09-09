@@ -487,13 +487,24 @@ async def _run_chat(
     start_time = time.time()
     try:
         try:
-            # 用 astream 流式执行：按节点完成顺序推送思考进度（B1 真·思考过程可见）
+            # 用 astream_events 流式执行：节点「开始」即推送思考进度（task 4 修复：
+            # 此前仅在节点「完成」后推送，长耗时 LLM 节点（如 planner 15s）期间界面停更）
             acc: dict[str, Any] = {}
-            async for chunk in ctx.graph.astream(state, stream_mode="updates"):
-                for node_name, update in chunk.items():
-                    if on_progress:
-                        await on_progress(node_name)
-                    acc.update(_extract_state_dict(update))
+            async for ev in ctx.graph.astream_events(state, version="v2"):
+                name = ev.get("name")
+                event = ev.get("event")
+                meta = ev.get("metadata", {})
+                is_node_event = (
+                    meta.get("langgraph_node") is not None
+                    and name == meta.get("langgraph_node")
+                )
+                if is_node_event and event == "on_chain_start" and on_progress:
+                    # 节点开始：立即推送「正在…」进度，让长耗时阶段可见
+                    await on_progress(name)
+                if is_node_event and event == "on_chain_end":
+                    out = ev.get("data", {}).get("output")
+                    if isinstance(out, dict):
+                        acc.update(_extract_state_dict(out))
             final_state = {**dict(state), **acc}
         except Exception as e:
             # 工作流整体异常兜底：返回降级回复而非 500 中断
