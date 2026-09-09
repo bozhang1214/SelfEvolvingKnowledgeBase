@@ -258,7 +258,7 @@ user.py / share.py / profile.py / chat_share.py：各域 Pydantic 模型（UserP
 ## 15. 已知问题与扩展点（跨模块）
 
 - **扩展点**：新增 Agent 节点 → graph/builder 注册；新增工具 → ToolRegistry + 配置；新增存储 → storage 抽象。
-- **跨模块陷阱**：绕过 llm_factory 的 10 个调用点（news/job/classifier/image_processor/share）无统一统计/重试；多处无锁 RMW 依赖单 worker。
+- **跨模块陷阱**：LLM 绕过点已收口 9 处（WP4，仅剩 image_processor 独立视觉模型 + health_check 探测）；JSONStorage/ShortTermMemory 已加锁（WP5）。
 
 ---
 

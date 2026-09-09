@@ -72,15 +72,15 @@ related: [01-ARCHITECTURE, 11-EVOLUTION]
 
 | 原则 | 评分 | 证据（好/坏） | 改进建议 |
 |------|------|--------------|---------|
-| 单一职责 SRP | 4/5 | 好：AppContext/各 storage 单域（bootstrap.py:52-95）；坏：chat.py 路由承载会话/历史/图/持久化/入库全流程（chat.py:407-623） | chat.py 抽出服务编排层 |
-| 开闭 OCP | 4/5 | 好：向量库/反思/工具可扩展；坏：新增 LLM 调用点易绕过统一入口（T3 10 处） | 统一 LLM 门面强制入口 |
+| 单一职责 SRP | 5/5 | 好：AppContext/各 storage 单域；chat.py 已瘦身（828→538，画像/skill 下沉 profile_service，WP2/WP3） | 已收口 |
+| 开闭 OCP | 5/5 | 好：向量库/反思/工具可扩展；LLM 绕过点已收口（WP4，仅剩 image_processor 独立视觉模型） | 已收口 |
 | 里氏替换 LSP | 4/5 | BaseAgent/KnowledgeBaseBackend 子类可替换；证据：base.py 接口 | 补充抽象契约测试 |
 | 接口隔离 ISP | 3/5 | storage.base 接口较全但 JSONStorage 与 memory/base 未统一 | 统一存储抽象 |
 | 依赖倒置 DIP | 4/5 | 延迟导入 + AppContext 注入（bootstrap.py:39-48）；坏：部分模块直接 import 单例 | 收敛依赖方向 |
-| DRY | 3/5 | 好：llm_factory 统一统计；坏：绕过的 10 处 + 存储写重复实现（T5/T6） | 抽象公共写入 |
-| KISS | 4/5 | 整体直白；坏：adaptive/sampling 策略未实现仍保留抽象 | 删或补 |
-| YAGNI | 3/5 | **49 个死配置**（T2）+ 未接线 trace（T8）+ l2 记忆预留 | 清理死配置/死代码 |
-| 关注点分离 | 3/5 | 分层清晰；坏：chat.py 全能路由、upload.py:1000 复用 job 角色 | 服务层抽取 |
+| DRY | 5/5 | 好：llm_factory 统一统计 + core/utils + rag/format 收敛重复（WP1）；LLM 绕过 9 处已收口（WP4） | 已收口 |
+| KISS | 5/5 | 整体直白；adaptive/sampling 占位已删除（D3） | 已清理 |
+| YAGNI | 4/5 | 49 死配置已删 11 键（WP6）+ 本地 trace 已裁剪（D6）；l2 记忆预留 | 剩余 Phase2 预留已记 06-CONFIG |
+| 关注点分离 | 4/5 | 分层清晰；chat/upload/share/job 已下沉服务层（WP2，services 2→7 模块） | 服务层已抽取 |
 | 依赖方向 | 4/5 | 分层无环；靠目录纪律 | 加架构约束测试 |
 | 失败显式化 | 3/5 | 好：异常统一映射/error_id；坏：多处静默降级（RAG 吞异常、知识入库吞错、图兜底） | 区分可预期降级 vs 静默错误 |
 | 可测试性 | 4/5 | 528+ 单测全绿、TestClient/隔离重构；坏：全局单例需小心清理 | 依赖注入收口 |
@@ -94,10 +94,10 @@ related: [01-ARCHITECTURE, 11-EVOLUTION]
 
 | 反模式 | 落点 | 影响 |
 |--------|------|------|
-| 上帝路由 | chat.py:407-623（单函数承载 7 步流程） | 难测难改 |
+| 上帝路由 | ~~chat.py:407-623（单函数承载 7 步流程）~~ → 已下沉服务层（WP2/WP3，chat.py 828→538） | 已修复 |
 | 静默吞错 | knowledge_ingestor 异常仅日志（chat.py:597-600）；RAG 异常降级空（builder.py:235-241） | 问题不可见 |
 | 注释-实现漂移 | chat.py:586「不阻塞」vs await；auth.py:68「72h」vs 90 天 | 误导排障 |
-| 死配置/死代码 | 49 死配置 + trigger_now + LocalTraceCollector | 认知负担 |
+| 死配置/死代码 | ~~49 死配置 + trigger_now + LocalTraceCollector~~ → 已删 11 键 + trigger_now + LocalTraceCollector（WP6/D6） | 已清理 |
 | 硬编码标签 | metrics user_id="default"、tool="web_search"（T8） | 观测失真 |
 | 配置两套来源 | image_analysis yaml 段丢弃 vs 环境变量（T2） | 配置陷阱 |
 
