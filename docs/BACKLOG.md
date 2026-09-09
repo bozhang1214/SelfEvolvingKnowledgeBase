@@ -78,6 +78,24 @@
 > 注：`--workers 1` 已一并缓解 Qoder 报告的 CON-01（多进程共享 Chroma）、CON-03（scheduler 重复）、OPS-01（Prometheus 多进程指标失真）等「多 worker 架构」类问题；若未来恢复多 worker，需先外置存储/Redis + Chroma client-server。
 > 详细条目、证据与验收标准见 `docs/codeReview/2026-09-全域评审/` 各报告；批次顺序以 03 号路线图为准。
 
+### 重构专项（REFACTORING v1.0，2026-09-09 已确认 → WP 执行映射）
+
+> 总纲：`docs/tmp/REFACTORING-PLAN.md`（全量 M1–M4；D2 删 skill/硬编码分支；D3 占位配置关闭删配置）。每 WP 独立提交 + 增量测试 + 同步 docs/tech；里程碑末部署。跟踪项逐条复核见 `docs/codeReview/未修复问题跟踪.md`「三、2026-09-09 复核表」。
+
+| WP | 内容 | 覆盖的 BACKLOG/跟踪项 | 状态 |
+|----|------|------------------------|------|
+| WP0 | 复核表 + 特性测试垫底 + 任务拆解 | 全部跟踪项（复核表已提交 `2124973`） | 🔄 进行中（本表即拆解产物） |
+| WP1 | 公共工具收敛重复清零（core/utils + rag/format） | P2-14/Q-4.5/Q-4.6/Q-4.11/P2-P2-03/NEW-E | 待开始 |
+| WP2 | 服务层下沉拆上帝路由（upload/chat/share/job） | Q-4.13（垫底测试随 WP0/1 补） | 待开始 |
+| WP3 | 聊天瘦身 + 画像解耦 | **D2**、收尾项「skill 注入面/画像锁」、P1-7 状态回填 | 待开始 |
+| WP4 | LLM 统一入口收口 + RateLimit 重开 + stats 并发 + 指标复核 | P0「限流重开/统一 LLM 入口/降级可见化」、P1「指标补齐」、Q-4.7、NEW-G、SHARE-1（启用后复核）、死指标复核 | 待开始 |
+| WP5 | Agent/记忆锁/配置语义/state 清理/tracing 处置 | P2-15、NEW-D、Q-4.3/SHARE-3、P2-12/13、Q-4.12、P2-11（D6） | 待开始 |
+| WP6 | 死配置(49键)/死代码/中间脚本清理 | P1-6（**D3**）、P2-P2-05、`sample_rate`、`trigger_now`、Q-4.8/Q-4.10、D7 脚本 | 待开始 |
+| WP7 | 前端组件化（Job/Chat/Files） | P1「前端健壮」部分 | 待开始 |
+| WP8 | 全量验证 + 文档收尾 + 部署 | 红线验收、BACKLOG/EVOLUTION 结项 | 待开始 |
+
+> 未纳入本轮（保留原行）：JWT 收尾、RAG 入库闸门、反思回路、Prompt 工程、步骤执行、RAG 增强、news/job 性能、注入防护等纯功能/设计项（见 11-EVOLUTION 路线）；Tracing「打通」按 D6 改为本地 trace 裁剪（LangSmith 路径保留），全链路打通归平台期（RFC）。
+
 ---
 
 ## 五、测试工具链清单与状态（2026-09-09 精简去重后）
