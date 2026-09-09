@@ -48,12 +48,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from app.agents.critic import CriticAgent
-from app.agents.executor import ExecutorAgent
-from app.agents.planner import PlannerAgent
-from app.agents.scribe import ScribeAgent
 from app.agents.strategies.base import ReflectionStrategy
-from app.agents.supervisor import SupervisorAgent
 from app.core.config import AppConfig
 from app.core.logging import get_logger
 from app.graph.state import GraphState, IntentType
@@ -112,10 +107,8 @@ async def chat_simple_node(
     llm_factory: Any,
 ) -> dict[str, Any]:
     """闲聊直通节点：跳过规划/执行/反思，直接生成回复。"""
-    from langchain_core.messages import HumanMessage
 
     from app.agents.prompts.templates import CHAT_SIMPLE_PROMPT
-    from app.core.exceptions import AgentError
 
     try:
         messages = CHAT_SIMPLE_PROMPT.format_messages(user_input=state["user_input"])

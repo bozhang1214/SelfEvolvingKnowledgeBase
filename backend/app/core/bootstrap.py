@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from app.agents.strategies.base import ReflectionStrategy
 from app.agents.strategies.factory import create_reflection_strategy

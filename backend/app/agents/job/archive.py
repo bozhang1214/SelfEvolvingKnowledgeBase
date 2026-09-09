@@ -86,7 +86,10 @@ def _batch_to_md(title: str, report: dict[str, Any]) -> str:
     jobs = report.get("jobs") or []
     if jobs:
         lines.append(f"## 全部职位（{len(jobs)}）")
-        lines += [f"- {j.get('title', '')} | {j.get('company', '')} | {j.get('salary', '')} | {j.get('city', '')}" for j in jobs]
+        lines += [
+            f"- {j.get('title', '')} | {j.get('company', '')} | {j.get('salary', '')} | {j.get('city', '')}"
+            for j in jobs
+        ]
 
     return "\n".join(lines).strip() + "\n"
 

@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.middleware import setup_cors, RateLimitMiddleware
+from app.api.middleware import setup_cors
 from app.core.bootstrap import AppContext, initialize_app, shutdown_app
 from app.core.config import AppConfig, get_config
 from app.core.exceptions import (
@@ -281,7 +281,10 @@ def create_app() -> FastAPI:
 
     logger.info(
         "FastAPI 路由注册完成",
-        routers=["auth", "chat", "chat-share", "conversations", "health", "job", "knowledge", "metrics", "monitoring", "news", "share", "upload"],
+        routers=[
+            "auth", "chat", "chat-share", "conversations", "health", "job",
+            "knowledge", "metrics", "monitoring", "news", "share", "upload",
+        ],
         cors_origins=config.api.cors_origins or ["*"],
     )
 

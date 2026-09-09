@@ -170,7 +170,6 @@ async def refresh(request: Request, user_id: str = Depends(get_current_user)):
     if not user:
         raise HTTPException(404, "用户不存在")
     token = create_jwt(user.user_id)
-    client_ip = get_client_ip(request)
     logger.info("token 滑动续租", extra={"user_id": user_id})
     return LoginResponse(user=storage.to_public(user), token=token)
 

@@ -13,9 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.eval.assertion import AssertionEngine, AssertionResult
+from app.eval.assertion import AssertionEngine
 from app.graph.state import create_initial_state
-
 
 # ============================================================
 # 测试夹具

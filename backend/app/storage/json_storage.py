@@ -28,11 +28,10 @@ import json
 import os
 import uuid
 from pathlib import Path
-from typing import Any
 
 from app.core.exceptions import StorageError
 from app.core.logging import get_logger
-from app.storage.base import ConversationMeta, MessageRecord, StorageBackend, now_iso
+from app.storage.base import ConversationMeta, StorageBackend, now_iso
 
 logger = get_logger(__name__)
 

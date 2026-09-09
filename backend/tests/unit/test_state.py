@@ -10,16 +10,12 @@ Graph State 的单元测试
 
 from __future__ import annotations
 
-import pytest
-
 from app.graph.state import (
-    GraphState,
     IntentType,
     ReflectionResult,
     TaskStatus,
     create_initial_state,
 )
-
 
 # ============================================================
 # create_initial_state 测试

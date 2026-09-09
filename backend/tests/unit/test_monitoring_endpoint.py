@@ -17,13 +17,12 @@ ISSUE-005 回归测试：客户端事件上报路由
 from __future__ import annotations
 
 import pytest
-
 from prometheus_client import REGISTRY
 
 from app.api.routes.monitoring import (
+    MAX_EVENTS_PER_BATCH,
     ClientEvent,
     ClientEventBatch,
-    MAX_EVENTS_PER_BATCH,
     report_client_events,
 )
 

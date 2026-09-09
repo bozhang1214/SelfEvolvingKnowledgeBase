@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import builtins
 import inspect
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,7 +32,6 @@ from app.agents.supervisor import SupervisorAgent
 from app.cli.chat import ChatSession
 from app.core.config import LLMConfig
 from app.core.exceptions import (
-    ConfigError,
     LLMError,
     SEKBError,
     SEKBMemoError,
@@ -45,7 +43,6 @@ from app.core.llm_factory import (
 )
 from app.graph.state import ConversationMetrics, create_initial_state
 from app.memory.short_term import ShortTermMemory
-
 
 # ============================================================
 # SEKBMemoError 命名隔离

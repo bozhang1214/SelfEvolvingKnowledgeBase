@@ -290,8 +290,8 @@ class ImageProcessor:
     ) -> tuple[list[str], str]:
         """使用多模态 LLM 分析图片内容。"""
         try:
-            from langchain_openai import ChatOpenAI
             from langchain_core.messages import HumanMessage
+            from langchain_openai import ChatOpenAI
         except ImportError as e:
             logger.warning("langchain-openai 未安装，降级为文本分析", error=str(e))
             return await self._analyze_with_text_fallback("")
@@ -437,11 +437,11 @@ class ImageProcessor:
 
             # 构造文本内容
             content_parts = [
-                f"# 图片 OCR 文本\n",
+                "# 图片 OCR 文本\n",
                 f"原图片: {Path(image_path).name}\n",
                 f"标签: {', '.join(tags) if tags else '无'}\n",
                 f"描述: {description}\n",
-                f"\n---\n\n",
+                "\n---\n\n",
                 ocr_text,
             ]
             content = "\n".join(content_parts)

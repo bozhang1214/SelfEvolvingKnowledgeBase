@@ -21,7 +21,6 @@ import pytest
 from app.core.exceptions import StorageError
 from app.storage.json_storage import JSONStorage
 
-
 # ============================================================
 # 测试夹具
 # ============================================================
@@ -175,9 +174,9 @@ class TestListConversations:
     @pytest.mark.asyncio
     async def test_list_pinned_sorts_first(self, storage):
         """置顶会话应排在非置顶会话之前"""
-        conv1 = await storage.create_conversation("alice", "普通会话1")
+        await storage.create_conversation("alice", "普通会话1")
         conv2 = await storage.create_conversation("alice", "置顶会话")
-        conv3 = await storage.create_conversation("alice", "普通会话2")
+        await storage.create_conversation("alice", "普通会话2")
 
         # 置顶 conv2
         await storage.update_conversation(conv2, {"pinned": True})

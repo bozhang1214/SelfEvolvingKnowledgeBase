@@ -6,10 +6,9 @@ API 中间件：CORS、限流（Phase 3）
 """
 from __future__ import annotations
 
-import time
 import json
+import time
 from collections import defaultdict
-from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

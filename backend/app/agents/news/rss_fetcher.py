@@ -22,7 +22,10 @@ logger = get_logger(__name__)
 # 单个源最多取多少条
 _MAX_ENTRIES_PER_SOURCE = 100
 # 抓取时的 User-Agent（部分源拒绝无 UA 的请求）
-_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
 
 
 @dataclass

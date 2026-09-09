@@ -22,7 +22,6 @@ import pytest
 from app.memory.knowledge_entry import KnowledgeEntry
 from app.tools.direct.vector_store import DirectVectorStore
 
-
 # ============================================================
 # 辅助函数
 # ============================================================

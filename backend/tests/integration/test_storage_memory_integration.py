@@ -14,7 +14,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app.memory.short_term import ShortTermMemory
 from app.storage.json_storage import JSONStorage
 
-
 # ============================================================
 # 测试夹具
 # ============================================================

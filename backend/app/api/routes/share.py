@@ -25,7 +25,7 @@ import json
 import time
 from typing import Any, AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -454,7 +454,10 @@ async def shared_chat_stream(
 
     async def event_generator() -> AsyncIterator[bytes]:
         # thinking 提示
-        yield f"data: {json.dumps({'type': 'thinking', 'content': '正在检索知识库...'}, ensure_ascii=False)}\n\n".encode("utf-8")
+        thinking = json.dumps(
+            {"type": "thinking", "content": "正在检索知识库..."}, ensure_ascii=False
+        )
+        yield f"data: {thinking}\n\n".encode("utf-8")
 
         try:
             # 1. RAG 检索（读取所有者知识库；分享限定分类范围时按范围检索）
@@ -486,7 +489,10 @@ async def shared_chat_stream(
             ]
 
             # 检索完成后提示进入生成阶段
-            yield f"data: {json.dumps({'type': 'thinking', 'content': '正在生成回答...'}, ensure_ascii=False)}\n\n".encode("utf-8")
+            generating = json.dumps(
+                {"type": "thinking", "content": "正在生成回答..."}, ensure_ascii=False
+            )
+            yield f"data: {generating}\n\n".encode("utf-8")
 
             t0 = time.time()
             llm = ctx.llm_factory.get(_CHAT_ROLE)
@@ -518,13 +524,16 @@ async def shared_chat_stream(
                 "retrieved_count": len(retrieved),
                 "share_id": share_id,
             }
-            yield f"data: {json.dumps({'type': 'done', 'meta': meta}, ensure_ascii=False)}\n\n".encode("utf-8")
+            done = json.dumps({"type": "done", "meta": meta}, ensure_ascii=False)
+            yield f"data: {done}\n\n".encode("utf-8")
 
         except HTTPException as e:
-            yield f"data: {json.dumps({'type': 'error', 'detail': e.detail}, ensure_ascii=False)}\n\n".encode("utf-8")
+            err = json.dumps({"type": "error", "detail": e.detail}, ensure_ascii=False)
+            yield f"data: {err}\n\n".encode("utf-8")
         except Exception as e:
             logger.error("分享对话失败", share_id=share_id, error=str(e), exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'detail': f'内部错误: {e}'}, ensure_ascii=False)}\n\n".encode("utf-8")
+            inner_err = json.dumps({"type": "error", "detail": f"内部错误: {e}"}, ensure_ascii=False)
+            yield f"data: {inner_err}\n\n".encode("utf-8")
 
     return StreamingResponse(
         event_generator(),

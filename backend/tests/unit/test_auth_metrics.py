@@ -17,8 +17,7 @@ ISSUE-003 + ISSUE-005 回归测试
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-import asyncio
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -58,6 +57,7 @@ def _delta(before: float, after: float) -> float:
 def mock_user_storage():
     """Mock UserStorage 实例。"""
     from datetime import datetime, timezone
+
     from app.models.user import UserPublic
 
     # 构造真实 UserPublic 实例，避免 LoginResponse 类型校验失败

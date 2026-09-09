@@ -13,10 +13,7 @@ from __future__ import annotations
 
 import uuid
 
-import pytest
-
 from app.memory.knowledge_entry import KnowledgeEntry
-
 
 # ============================================================
 # 创建测试

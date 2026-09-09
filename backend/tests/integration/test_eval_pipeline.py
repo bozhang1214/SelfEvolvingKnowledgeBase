@@ -13,9 +13,8 @@ import json
 import pytest
 
 from app.eval.assertion import AssertionEngine
-from app.eval.metrics import MetricsCollector, MetricLevel
-from app.graph.state import IntentType, ReflectionResult, create_initial_state
-
+from app.eval.metrics import MetricLevel, MetricsCollector
+from app.graph.state import ReflectionResult, create_initial_state
 
 # ============================================================
 # 测试夹具

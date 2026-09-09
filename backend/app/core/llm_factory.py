@@ -296,7 +296,9 @@ class LLMFactory:
                     if any(code in error_str for code in ["500", "502", "503", "504", "internal server error"]):
                         raise LLMRetryableError(f"LLM 服务器错误: {e}", model=actual_model) from e
                     # 连接重置 / 连接超时 → 可重试
-                    if "connection" in error_str and ("reset" in error_str or "refused" in error_str or "timeout" in error_str):
+                    if "connection" in error_str and (
+                        "reset" in error_str or "refused" in error_str or "timeout" in error_str
+                    ):
                         raise LLMRetryableError(f"LLM 连接错误: {e}", model=actual_model) from e
                     # 余额不足 402 → 可重试（可能是临时计费延迟）
                     if "402" in error_str or "insufficient" in error_str:
@@ -313,7 +315,7 @@ class LLMFactory:
             # 简单的重试计数：用 try/except 包裹 tenacity
             try:
                 response = await original_call()
-            except (LLMTimeoutError, LLMRateLimitError, LLMRetryableError) as e:
+            except (LLMTimeoutError, LLMRateLimitError, LLMRetryableError):
                 # tenacity 重试耗尽后仍抛出这些异常
                 retry_count = self.config.llm.max_retries
                 raise

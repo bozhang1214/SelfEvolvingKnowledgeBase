@@ -30,7 +30,6 @@ from app.agents.knowledge_ingestor import (
 )
 from app.memory.knowledge_entry import KnowledgeEntry
 
-
 # ============================================================
 # 全局夹具：patch FACT_EXTRACTION_PROMPT
 # ============================================================

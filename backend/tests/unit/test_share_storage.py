@@ -18,7 +18,6 @@ import pytest
 from app.models.share import SharedKnowledge, generate_share_id
 from app.storage.share_storage import ShareStorage
 
-
 # ============================================================
 # SharedKnowledge 数据模型
 # ============================================================

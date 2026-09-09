@@ -298,7 +298,7 @@ async def _process_and_ingest(
     图片文件会额外保存原图到持久化目录。
     overwrite=True 时，先删除同名旧文件的全部条目再入库（覆盖）。
     """
-    vector_store = _require_vector_store(ctx)
+    _require_vector_store(ctx)  # L3 未启用时提前 503（守卫）
 
     # 覆盖上传：删除同名旧文件条目
     if overwrite:

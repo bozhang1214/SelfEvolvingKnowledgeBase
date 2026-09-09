@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from app.agents.news.filter import NewsFilter
 from app.agents.news.generator import DailyReportGenerator
 from app.agents.news.rss_fetcher import NewsItem

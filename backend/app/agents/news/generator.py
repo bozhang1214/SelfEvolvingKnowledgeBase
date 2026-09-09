@@ -40,7 +40,8 @@ def _keyword_classify_sync(
 
 # 兜底提示词（当 prompt 文件缺失时使用，保证不崩溃）
 _FALLBACK_PROMPT = """你是技术资讯编辑，针对「{{category}}」大类生成总结预测+精选条目。
-输出严格 JSON：{"category":"...","summary":"≤600字总结+预测","items":[{"title","source","link","abstract","attention","importance"}]}
+输出严格 JSON：{"category":"...","summary":"≤600字总结+预测",\
+"items":[{"title","source","link","abstract","attention","importance"}]}
 只基于输入，不编造，items 按 importance（0~10 十分制）降序最多 10 条。"""
 
 # 头条分析兜底提示词
@@ -371,7 +372,10 @@ class DailyReportGenerator:
         messages = [
             SystemMessage(content=self._apply_period(self._headline_prompt)),
             HumanMessage(
-                content=f"以下是{self._ctx['period_label']}最重要的一条资讯：\n{json.dumps(payload, ensure_ascii=False)}\n\n请写头条深度分析。"
+                content=(
+                    f"以下是{self._ctx['period_label']}最重要的一条资讯：\n"
+                    f"{json.dumps(payload, ensure_ascii=False)}\n\n请写头条深度分析。"
+                )
             ),
         ]
         try:

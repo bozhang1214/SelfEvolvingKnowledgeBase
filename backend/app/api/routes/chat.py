@@ -33,10 +33,10 @@ from app.api.server import get_app_context
 from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
-from app.core.token_sink import reset_token_sink, set_token_sink
 from app.core.exceptions import SEKBError
 from app.core.logging import bind_context, clear_context, get_logger
 from app.core.metrics import record_chat_error, record_chat_metrics
+from app.core.token_sink import reset_token_sink, set_token_sink
 from app.graph.state import create_initial_state
 
 logger = get_logger(__name__)

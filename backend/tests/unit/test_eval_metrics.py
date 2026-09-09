@@ -15,9 +15,8 @@ import json
 import pytest
 
 from app.core.config import MetricThreshold
-from app.eval.metrics import MetricsCollector, MetricLevel
+from app.eval.metrics import MetricLevel, MetricsCollector
 from app.graph.state import create_initial_state
-
 
 # ============================================================
 # from_state 测试

@@ -163,7 +163,7 @@ def _fetch_jds(jobs: list[dict[str, Any]], cookies: dict[str, str]) -> list[dict
         return jobs
     links = [j.get("job_url") or "" for j in jobs]
     with concurrent.futures.ThreadPoolExecutor(max_workers=_JD_CONCURRENCY) as pool:
-        jds = list(pool.map(lambda l: _fetch_jd(l, cookies) if l else "", links))
+        jds = list(pool.map(lambda link: _fetch_jd(link, cookies) if link else "", links))
     filled = 0
     for j, jd in zip(jobs, jds):
         if jd:

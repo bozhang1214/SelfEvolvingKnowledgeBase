@@ -23,7 +23,6 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.core.exceptions import ConfigError
 
-
 # ============================================================
 # Pydantic 配置模型定义
 # ============================================================

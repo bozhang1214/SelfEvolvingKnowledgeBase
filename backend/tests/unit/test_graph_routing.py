@@ -13,12 +13,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from app.agents.strategies.always import AlwaysReflectStrategy
 from app.graph.builder import route_after_critic, route_after_supervisor
 from app.graph.state import IntentType, ReflectionResult, create_initial_state
-
 
 # ============================================================
 # route_after_supervisor 测试

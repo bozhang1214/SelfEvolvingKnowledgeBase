@@ -20,7 +20,6 @@ import pytest
 from app.core import embedding as embedding_module
 from app.core.embedding import LocalEmbeddingFunction, get_embedding_function
 
-
 # ============================================================
 # 辅助函数
 # ============================================================

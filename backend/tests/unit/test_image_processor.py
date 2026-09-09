@@ -18,13 +18,11 @@ from __future__ import annotations
 
 import pytest
 
+from app.tools.file_processor import FileProcessor
 from app.tools.image_processor import (
     SUPPORTED_IMAGE_EXTENSIONS,
     ImageProcessor,
-    ImageProcessResult,
 )
-from app.tools.file_processor import FileProcessor
-
 
 # ============================================================
 # 图片格式常量测试

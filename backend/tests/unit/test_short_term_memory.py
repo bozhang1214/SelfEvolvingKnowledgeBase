@@ -13,10 +13,9 @@ L1 短期记忆的单元测试
 from __future__ import annotations
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.memory.short_term import ShortTermMemory
-
 
 # ============================================================
 # 添加消息测试
