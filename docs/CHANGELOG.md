@@ -8,6 +8,15 @@
 
 ## 2026-09-09
 
+### 文档工程重构（按 1-6 工程逆向分析提示词，完整版 12 篇）
+- **备份**：原 `docs/` 全部移至 `docs/backup_20260909/`（git mv 保留历史）；codeReview 不进入新工程；testCase 文档留备份作 10-TESTING 素材。
+- **保留**：运维/部署手册副本 → `docs/ops/`（10 篇，真实环境操作）；CHANGELOG/BACKLOG 活文档副本 → `docs/` 根继续维护。
+- **新工程 `docs/tech/`**：完整版 12 篇证据驱动文档（00-README 地图 + 01-ARCHITECTURE C4/ADR + 02-RUNTIME-FLOWS + 03-MODULES + 04-DATA-MODEL + 05-API(65端点/SSE/CLI) + 06-CONFIG + 07-DESIGN-PATTERNS + 08-GLOSSARY + 09-OBSERVABILITY + 10-TESTING + 11-EVOLUTION），全部带 `file:line`、Mermaid、编号/术语一致。
+- **事实表 SSOT**：`docs/tech/.facts/T1-T8`（路由 65/配置 178/LLM 23 调用/AgentState/工具/存储/异步/可观测），多子代理并行抽取。
+- **发现与记录**：49 死配置、10 处绕过 LLM 统一入口、4 死指标、7 无消费 State 字段、`${VAR:-default}` 语法缺陷、多处注释-实现漂移（→ `docs/tech/漂移清单.md` + `待确认项清单.md`）。
+- **代码-文档联动**：`.validation/check-doc-sync.sh`（pre-commit hook：改路由→提示 05、改 config→06、改 graph/agents→02/03、改存储→04、改前端→03、改测试→10）+ `check-freshness.sh`（last-updated/based-on-commit 过期标记）+ `check-links.sh`（链接/孤儿，本地与服务器均全绿）。
+- 根 `README.md` 文档导航更新为新工程结构。
+
 ### AI 对话体验优化（技能按钮移除 + 消息操作 + 滚动跟随 + 真流式确认）
 - **移除技能按钮（任务1）**：删除 AI 对话输入区「通用/应聘/科技资讯助手」技能按钮及 `skill` 参数链路（前端 service/store/Chat + 后端 ChatRequest/`_build_skill_context`/`_schedule_preference_extraction` 调用）。技能模式后续有更具体需求再开发。
 - **消息操作按钮（任务2）**：AI 答复下新增 复制/重生成/转发；用户输入下新增 复制/编辑。store 新增 `regenerateAssistant`（截断到该用户消息后重发）+ `editUserMessage`（替换内容+删除其后消息重发），两者复用 `runStream` 走真流式。
