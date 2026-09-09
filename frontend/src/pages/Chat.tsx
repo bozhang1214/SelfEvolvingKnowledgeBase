@@ -646,10 +646,11 @@ const Chat: React.FC = () => {
                       </div>
                     )}
                   </div>
+                  {/* 消息操作按钮：位于文本框下方，按角色居左(AI)/居右(用户) */}
                   {isPersisted && (
                     <div
                       className="msg-actions"
-                      style={{ display: 'flex', gap: 4, alignItems: 'center' }}
+                      style={{ display: 'flex', gap: 2, alignItems: 'center', marginTop: 4, padding: '0 4px' }}
                     >
                       {/* 复制（所有消息） */}
                       <Button
@@ -854,10 +855,6 @@ const Chat: React.FC = () => {
           50% { opacity: 0; }
         }
         .msg-actions {
-          opacity: 0;
-          transition: opacity 0.15s;
-        }
-        .msg-row:hover .msg-actions {
           opacity: 1;
         }
         .msg-action-btn {
