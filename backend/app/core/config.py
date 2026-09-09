@@ -153,7 +153,7 @@ class ReflectionConfig(BaseModel):
     """反思策略配置"""
     policy: str = "always"  # always | adaptive | sampling
     max_replan: int = Field(2, ge=0)
-    model_switch_threshold: float = Field(0.7, ge=0.0, le=1.0)
+    model_switch_threshold: float = Field(0.7, ge=0.0, le=1.0, description="复杂度>=阈值时 Critic 用 reasoner")
     adaptive: AdaptiveReflectionConfig = AdaptiveReflectionConfig()
     sampling: SamplingReflectionConfig = SamplingReflectionConfig()
 

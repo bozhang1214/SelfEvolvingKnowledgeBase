@@ -161,6 +161,8 @@ async def _run_chat(
                 await ctx.memory.add_message(user_id, conv_id, HumanMessage(content=content))
             elif role == "assistant":
                 await ctx.memory.add_message(user_id, conv_id, AIMessage(content=content))
+        # NEW-D：恢复完成后触发一次压缩，避免超大历史在内存中越积越大
+        await ctx.memory.compress_if_needed(user_id, conv_id)
         history = await ctx.memory.get_messages(user_id, conv_id)
 
     # 3. 创建初始 GraphState

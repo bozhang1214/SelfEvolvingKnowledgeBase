@@ -26,6 +26,8 @@ L1 短期记忆实现模块
 
 from __future__ import annotations
 
+import asyncio
+
 import tiktoken
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
@@ -80,6 +82,8 @@ class ShortTermMemory(ShortTermMemoryBackend):
         self._summaries: dict[str, list[str]] = {}
         # conv_id -> user_id 映射（用于权限校验，Phase 1 默认放行）
         self._conv_users: dict[str, str] = {}
+        # conv_id -> asyncio.Lock（P2-15：compress_if_needed 按会话粒度串行化）
+        self._locks: dict[str, asyncio.Lock] = {}
 
         # tiktoken 编码器（用于 token 计数）
         try:
@@ -181,6 +185,12 @@ class ShortTermMemory(ShortTermMemoryBackend):
         Raises:
             SEKBMemoError: 压缩过程中 LLM 调用失败
         """
+        lock = self._locks.setdefault(conv_id, asyncio.Lock())
+        async with lock:
+            return await self._compress_impl(user_id, conv_id)
+
+    async def _compress_impl(self, user_id: str, conv_id: str) -> bool:
+        """内部实现：在按会话粒度的锁保护下执行压缩（P2-15）。"""
         self._register_user(conv_id, user_id)
         messages = self._messages.get(conv_id, [])
         if not messages:

@@ -564,4 +564,6 @@ class ChatSession:
                 await self.memory.add_message(
                     self.USER_ID, conv_id, AIMessage(content=content)
                 )
+        # NEW-D：恢复完成后触发一次压缩，避免超大历史在内存中越积越大
+        await self.memory.compress_if_needed(self.USER_ID, conv_id)
         logger.info("会话历史已恢复", conv_id=conv_id, count=len(messages))

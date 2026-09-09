@@ -58,7 +58,7 @@ class CriticAgent(BaseAgent):
             task_complexity = float(state.get("task_complexity", 0.0))
             replan_count = int(state.get("replan_count", 0))
 
-            # 根据复杂度选择模型
+            # 根据复杂度选择模型（P2-13 语义：task_complexity >= 阈值 → reasoner 强模型）
             model_switch_threshold = self.config.reflection.model_switch_threshold
             if task_complexity >= model_switch_threshold:
                 critic_role = "critic_complex"
