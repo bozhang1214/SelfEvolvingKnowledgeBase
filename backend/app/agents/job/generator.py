@@ -209,8 +209,7 @@ class JobAnalysisGenerator:
             HumanMessage(content="请严格按输出格式返回 JSON，不要输出任何多余文字。"),
         ]
         try:
-            llm = self._llm_factory.get(role)
-            resp = await llm.ainvoke(messages)
+            resp = await self._llm_factory.ainvoke_with_stats(role, messages)
             raw = resp.content if hasattr(resp, "content") else str(resp)
             return self._parse_json(raw)
         except Exception as e:  # noqa: BLE001

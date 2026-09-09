@@ -88,12 +88,11 @@ class DocumentClassifier:
             return self._fallback()
 
         try:
-            llm = self._llm_factory.get(_CLASSIFY_ROLE)
             messages = [
                 SystemMessage(content=self._system_prompt),
                 HumanMessage(content=f"文件名: {file_name or '(未知)'}\n\n文档内容:\n{sample}"),
             ]
-            response = await llm.ainvoke(messages)
+            response = await self._llm_factory.ainvoke_with_stats(_CLASSIFY_ROLE, messages)
             raw = response.content if hasattr(response, "content") else str(response)
             return self._parse_response(raw)
         except Exception as e:

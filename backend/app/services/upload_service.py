@@ -425,8 +425,7 @@ async def generate_kb_overview(
         f"分类分布（大类 → 条目数）：{json.dumps(dist, ensure_ascii=False)}\n"
         f"已上传文件（前 200 个）：{', '.join(file_names[:200])}"
     )
-    llm = ctx.llm_factory.get("job_analysis")
-    resp = await llm.ainvoke([
+    resp = await ctx.llm_factory.ainvoke_with_stats("job_analysis", [
         SystemMessage(content=prompt),
         HumanMessage(content=payload),
     ])

@@ -113,21 +113,6 @@ def _history_to_messages(history: list[dict[str, Any]]):
     return msgs
 
 
-def _extract_stream_text(chunk: Any) -> str:
-    """从流式 chunk（AIMessageChunk）中提取增量文本。"""
-    content = getattr(chunk, "content", None)
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            b.get("text", "") if isinstance(b, dict) else str(b)
-            for b in content
-        )
-    return str(content)
-
-
 # ============================================================
 # 路由：分享管理
 # ============================================================
@@ -459,10 +444,8 @@ async def shared_chat_stream(
             yield f"data: {generating}\n\n".encode("utf-8")
 
             t0 = time.time()
-            llm = ctx.llm_factory.get(_CHAT_ROLE)
             answer_parts: list[str] = []
-            async for chunk in llm.astream(messages):
-                text = _extract_stream_text(chunk)
+            async for text in ctx.llm_factory.astream_with_stats(_CHAT_ROLE, messages):
                 if not text:
                     continue
                 answer_parts.append(text)

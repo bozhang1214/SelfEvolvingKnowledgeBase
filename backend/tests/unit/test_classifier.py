@@ -24,14 +24,12 @@ from app.services.classifier import DocumentClassifier
 def _make_factory(content: str | None = None, exc: Exception | None = None) -> MagicMock:
     """构造 mock LLM 工厂，返回指定 content 或抛异常。"""
     factory = MagicMock()
-    llm = MagicMock()
     if exc is not None:
-        llm.ainvoke = AsyncMock(side_effect=exc)
+        factory.ainvoke_with_stats = AsyncMock(side_effect=exc)
     else:
         resp = MagicMock()
         resp.content = content
-        llm.ainvoke = AsyncMock(return_value=resp)
-    factory.get = MagicMock(return_value=llm)
+        factory.ainvoke_with_stats = AsyncMock(return_value=resp)
     return factory
 
 
@@ -72,7 +70,7 @@ class TestClassify:
         l1, l2, l3 = DEFAULT_FALLBACK_CATEGORY
         assert (result["l1"], result["l2"], result["l3"]) == (l1, l2, l3)
         # 空内容不应触发 LLM 调用
-        factory.get.assert_not_called()
+        factory.ainvoke_with_stats.assert_not_called()
 
 
 class TestParseResponse:

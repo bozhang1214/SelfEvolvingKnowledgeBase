@@ -213,8 +213,9 @@ class DailyReportGenerator:
 
         parsed: dict = {}
         try:
-            llm = self._llm_factory.get(role)
-            resp = await llm.ainvoke([SystemMessage(content=prompt), HumanMessage(content="请分类。")])
+            resp = await self._llm_factory.ainvoke_with_stats(
+                role, [SystemMessage(content=prompt), HumanMessage(content="请分类。")]
+            )
             raw = resp.content if hasattr(resp, "content") else str(resp)
             parsed = self._parse_json(raw)
         except Exception as e:  # noqa: BLE001
@@ -262,12 +263,11 @@ class DailyReportGenerator:
         items = items[: self._MAX_ITEMS_PER_CATEGORY]
         keywords = keywords or []
 
-        llm = self._llm_factory.get(role)
         last_error = ""
         for attempt in range(1, self._MAX_ATTEMPTS + 1):
             messages = self._build_messages(category_name, items, prompt)
             try:
-                resp = await llm.ainvoke(messages)
+                resp = await self._llm_factory.ainvoke_with_stats(role, messages)
                 raw = resp.content if hasattr(resp, "content") else str(resp)
                 parsed = self._parse_json(raw)
                 if parsed and parsed.get("items"):
@@ -379,8 +379,7 @@ class DailyReportGenerator:
             ),
         ]
         try:
-            llm = self._llm_factory.get(role)
-            resp = await llm.ainvoke(messages)
+            resp = await self._llm_factory.ainvoke_with_stats(role, messages)
             raw = resp.content if hasattr(resp, "content") else str(resp)
             parsed = self._parse_json(raw)
             return (parsed.get("analysis") or "").strip()
@@ -419,8 +418,7 @@ class DailyReportGenerator:
             ),
         ]
         try:
-            llm = self._llm_factory.get(role)
-            resp = await llm.ainvoke(messages)
+            resp = await self._llm_factory.ainvoke_with_stats(role, messages)
             raw = resp.content if hasattr(resp, "content") else str(resp)
             parsed = self._parse_json(raw)
             return {

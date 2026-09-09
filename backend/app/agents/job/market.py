@@ -110,10 +110,9 @@ async def _llm_call(
     if not prompt:
         logger.warning("批量分析提示词缺失，跳过", filename=filename)
         return {}
-    llm = llm_factory.get("job_analysis")
     payload = f"用户画像：\n{user_profile}\n\nJD 摘要列表：\n{job_summaries}"
     try:
-        resp = await llm.ainvoke([
+        resp = await llm_factory.ainvoke_with_stats("job_analysis", [
             SystemMessage(content=prompt),
             HumanMessage(content=payload),
         ])
