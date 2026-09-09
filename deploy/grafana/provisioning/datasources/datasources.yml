@@ -11,8 +11,6 @@ datasources:
   # ---------- Prometheus（指标数据源） ----------
   - name: Prometheus
     type: prometheus
-    # 固定 uid：看板面板以 uid=prometheus 引用（见 sekb-overview.json）
-    uid: prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true
@@ -24,8 +22,6 @@ datasources:
   # ---------- Loki（日志数据源） ----------
   - name: Loki
     type: loki
-    # 固定 uid：供日志看板/Explore 引用
-    uid: loki
     access: proxy
     url: http://loki:3100
     editable: false
