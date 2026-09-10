@@ -129,12 +129,12 @@ async function runStream(
         const conversations = isTemp
           ? state.conversations.map((c) =>
               c.conv_id === displayConvId
-                ? { ...c, conv_id: realConvId, message_count: newMsgs.length }
+                ? { ...c, conv_id: realConvId, title: meta.title || c.title, message_count: newMsgs.length }
                 : c
             )
           : state.conversations.map((c) =>
               c.conv_id === displayConvId
-                ? { ...c, message_count: newMsgs.length }
+                ? { ...c, title: meta.title || c.title, message_count: newMsgs.length }
                 : c
             );
         // 仅当用户仍停留在本会话时才跟随迁移后的真实会话 ID（避免切走后又跳回）

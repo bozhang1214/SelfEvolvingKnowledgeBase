@@ -367,25 +367,35 @@ async def list_series(
             detail=f"查询系列分组失败: {e}",
         ) from e
 
+    def _rel_key(fname: str, series: str) -> str:
+        """系列内相对路径键：截断到系列名「段」之后（跨父目录去重）。"""
+        segs = fname.split("/")
+        if series in segs:
+            i = segs.index(series)
+            return "/".join(segs[i + 1:]) or fname
+        return fname
+
     groups: dict[str, dict[str, Any]] = {}
     for e in entries:
         s = (e.series or "").strip()
         if not s:
             continue
         fname = e.source_id or ""
+        if not fname:
+            continue
         g = groups.setdefault(s, {"series": s, "files": {}, "category": [e.category_l1, e.category_l2, e.category_l3]})
-        if fname and fname not in g["files"]:
-            g["files"][fname] = detect_series(fname)
+        # 同一系列内按「系列名之后的相对路径」去重，避免同一批文件因上传路径不同被重复计数
+        key = _rel_key(fname, s)
+        prev = g["files"].get(key)
+        if prev is None or len(fname) < len(prev):
+            g["files"][key] = fname
 
     result = []
     for g in groups.values():
-        files = [
-            {
-                "file_name": name,
-                "part": info.get("part") or 0,
-            }
-            for name, info in g["files"].items()
-        ]
+        files = []
+        for fname in g["files"].values():
+            info = detect_series(fname)
+            files.append({"file_name": fname, "part": info.get("part") or 0})
         files.sort(key=lambda x: (x["part"], x["file_name"]))
         result.append({
             "series": g["series"],

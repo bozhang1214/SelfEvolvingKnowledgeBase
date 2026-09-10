@@ -75,9 +75,12 @@ export function buildSeriesTree(groups: SeriesGroup[]): any[] {
     const dirMap = new Map<string, any>();
 
     for (const f of g.files) {
-      // 去掉系列名前缀，得到相对路径（可能含子目录）
+      // 定位系列名在路径中的「段」并截断到其后，兼容「父目录/系列名/文件」结构，
+      // 避免出现「系列节点 → 父目录 → 系列名 → 文件」的冗余嵌套。
       let rel = f.file_name;
-      if (rel.startsWith(g.series + '/')) rel = rel.slice(g.series.length + 1);
+      const segs = rel.split('/');
+      const si = segs.indexOf(g.series);
+      if (si >= 0 && si < segs.length - 1) rel = segs.slice(si + 1).join('/');
       const parts = rel.split('/');
       const fileName = parts[parts.length - 1];
       const dirParts = parts.slice(0, -1);

@@ -41,6 +41,8 @@ const Job: React.FC = () => {
 
   // 职位采集（多源）
   const [fetchKeyword, setFetchKeyword] = useState('');
+  // 最近一次「实际采集」使用的关键词：用于默认回填与缓存同步，避免输入框被编辑后污染缓存
+  const [lastFetchKeyword, setLastFetchKeyword] = useState('');
   const [fetchCity, setFetchCity] = useState('不限');
   const [fetchSalary, setFetchSalary] = useState('不限');
   const [fetching, setFetching] = useState(false);
@@ -78,6 +80,7 @@ const Job: React.FC = () => {
         const cache = await getLatestJobCache();
         if (!alive || !cache.cached || !cache.jobs?.length) return;
         setFetchKeyword(cache.keyword || '');
+        setLastFetchKeyword(cache.keyword || '');
         setFetchCity(cache.city || '不限');
         const salaryLabel = cache.min_salary_k > 0 && SALARY_OPTIONS.includes(`${cache.min_salary_k}K+`)
           ? `${cache.min_salary_k}K+`
@@ -97,16 +100,20 @@ const Job: React.FC = () => {
     return () => { alive = false; };
   }, []);
 
-  // 进入「批量分析」tab：仅当缓存报告的职位列表与当前采集列表严格一致时才默认展示（避免展示过时报告引起误解）
+  // 进入「批量分析」tab：默认展示最近一次批量分析报告（关键词一致或职位集合一致即可）。
   useEffect(() => {
     if (analysisMode !== 'batch' || marketReport || !cachedMarketReport) return;
     const rk = (j: FetchedJob) => j.job_id || `${j.title}-${j.company}`;
     const reportKeys = new Set((cachedMarketReport.jobs || []).map(rk));
     const fetchKeys = new Set(fetchedJobs.map(rk));
-    if (reportKeys.size === 0) return;
-    const same = reportKeys.size === fetchKeys.size && [...reportKeys].every((k) => fetchKeys.has(k));
-    if (same) setMarketReport(cachedMarketReport);
-  }, [analysisMode, cachedMarketReport, fetchedJobs, marketReport]);
+    const sameJobs =
+      reportKeys.size > 0 &&
+      reportKeys.size === fetchKeys.size &&
+      [...reportKeys].every((k) => fetchKeys.has(k));
+    const reportKeyword = (cachedMarketReport as { keyword?: string }).keyword || '';
+    const sameKeyword = !!fetchKeyword.trim() && reportKeyword === fetchKeyword.trim();
+    if (sameJobs || sameKeyword || fetchKeys.size === 0) setMarketReport(cachedMarketReport);
+  }, [analysisMode, cachedMarketReport, fetchedJobs, marketReport, fetchKeyword]);
 
   // 进入「历史报告」tab 时加载存档报告
   useEffect(() => {
@@ -199,6 +206,7 @@ const Job: React.FC = () => {
       message.warning('请输入采集关键词');
       return;
     }
+    setLastFetchKeyword(kw);
     // 薪资「不限」→ 0；否则解析「30K+」→ 30
     const salaryK = fetchSalary === '不限' ? 0 : parseInt(fetchSalary, 10) || 0;
     setFetching(true);
@@ -242,7 +250,7 @@ const Job: React.FC = () => {
     const salaryK = fetchSalary === '不限' ? 0 : parseInt(fetchSalary, 10) || 0;
     try {
       await saveJobCache({
-        keyword: fetchKeyword.trim() || 'Agent',
+        keyword: lastFetchKeyword.trim() || 'Agent',
         city: fetchCity === '不限' ? '' : fetchCity,
         min_salary_k: salaryK,
         jobs,
@@ -794,7 +802,7 @@ const Job: React.FC = () => {
                           >
                             <List.Item.Meta
                               title={<Text strong>{r.title}</Text>}
-                              description={<Text type="secondary" style={{ fontSize: 12 }}>{r.created_at?.replace('T', ' ').slice(0, 19)}</Text>}
+                              description={<Text type="secondary" style={{ fontSize: 12 }}>{r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : ''}</Text>}
                             />
                           </List.Item>
                         )}

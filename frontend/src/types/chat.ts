@@ -33,6 +33,7 @@ export interface ChatRequest {
 
 export interface ChatMeta {
   conversation_id: string;
+  title?: string;
   intent: string;
   intent_confidence: number;
   metrics: Record<string, unknown>;

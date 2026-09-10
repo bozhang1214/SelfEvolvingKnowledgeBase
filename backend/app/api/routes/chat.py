@@ -25,7 +25,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from app.api.server import get_app_context
@@ -134,6 +134,8 @@ async def _run_chat(
 
     # 1. 确保会话存在
     conv_id = request.conversation_id
+    is_new_conv = not conv_id
+    title = ""
     if not conv_id:
         title = user_input[:30] if user_input else "新会话"
         conv_id = await ctx.storage.create_conversation(user_id, title)
@@ -303,9 +305,20 @@ async def _run_chat(
             ingest_reason = str(e)
             logger.warning("知识自迭代入库失败", error=str(e), conv_id=conv_id)
 
+    # 新会话：根据「首条提问 + 首条答复」用 LLM 提炼标题并回写（失败回退首条提问前 30 字）
+    if is_new_conv:
+        gen_title = await _generate_conversation_title(ctx, user_input, answer)
+        if gen_title and gen_title != title:
+            try:
+                await ctx.storage.update_conversation(conv_id, {"title": gen_title})
+                title = gen_title
+            except Exception as e:
+                logger.warning("回写会话标题失败", error=str(e), conv_id=conv_id)
+
     return {
         "conversation_id": conv_id,
         "answer": answer,
+        "title": title,
         "intent": intent,
         "intent_confidence": intent_confidence,
         "metrics": metrics,
@@ -314,6 +327,29 @@ async def _run_chat(
         "ingest_status": ingest_status,
         "ingest_reason": ingest_reason,
     }
+
+
+async def _generate_conversation_title(ctx: AppContext, user_input: str, answer: str) -> str:
+    """根据用户首条提问 + 助手首条答复，用 LLM 提炼简短会话标题；失败回退首条提问前 30 字。"""
+    fallback = (user_input or "").strip()[:30] or "新会话"
+    try:
+        prompt = (
+            "你是对话标题生成器。请根据用户的问题与助手回答，输出一个不超过 16 个字的中文标题，"
+            "准确概括本次对话主题。只输出标题本身：不要引号、不要书名号、不要标点结尾、不要任何解释。"
+        )
+        messages = [
+            SystemMessage(content=prompt),
+            HumanMessage(content=f"【用户】{user_input[:500]}\n\n【助手】{answer[:800]}"),
+        ]
+        resp = await ctx.llm_factory.ainvoke_with_stats("chat_simple", messages)
+        text = resp.content if hasattr(resp, "content") else str(resp)
+        title = (text or "").strip().strip('"“”\'《》')
+        title = title.splitlines()[0].strip() if title else ""
+        if title:
+            return title[:30]
+    except Exception as e:
+        logger.warning("生成会话标题失败，回退首条提问", error=str(e))
+    return fallback
 
 
 async def _stream_tokens(text: str) -> AsyncIterator[str]:
@@ -374,6 +410,7 @@ async def chat(
         metrics=result["metrics"],
         trace_id=result["trace_id"],
         meta={
+            "title": result.get("title", ""),
             "ingest_status": result.get("ingest_status", "disabled"),
             "ingest_reason": result.get("ingest_reason", ""),
         },
@@ -505,6 +542,7 @@ async def chat_stream(
 
                 meta = {
                     "conversation_id": result["conversation_id"],
+                    "title": result.get("title", ""),
                     "intent": result["intent"],
                     "intent_confidence": result["intent_confidence"],
                     "metrics": result["metrics"],
