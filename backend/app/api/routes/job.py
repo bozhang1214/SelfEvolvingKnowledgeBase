@@ -104,9 +104,10 @@ async def fetch_jobs(body: JobFetchRequest, user_id: str = Depends(get_current_u
 
     key = cache_key(user_id, keyword, city, body.min_salary_k)
 
-    # 命中缓存直接返回（14 天内）
+    # 命中缓存直接返回（14 天内）；同时刷新 ts，使「最后一次搜索」反映到默认回填
     cached = get_cached_jobs(key)
     if cached is not None:
+        save_cached_jobs(key, cached)
         return {
             "keyword": keyword,
             "city": city,
