@@ -34,6 +34,7 @@ from app.api.server import get_app_context
 from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
+from app.core.exceptions import SecurityError
 from app.core.logging import get_logger
 from app.core.utils import fmt_dt as _fmt_dt
 from app.services.share_service import get_valid_share, owner_display_name
@@ -400,6 +401,22 @@ async def shared_chat_stream(
 
     share_storage = _require_share_storage(ctx)
     user_input = request.message
+
+    # 分享问答为公开访问路径，应用规则层注入防护（长度+正则）；不启用 LLM 层（避免公开成本）
+    sec_cfg = ctx.config.security
+    if sec_cfg.prompt_injection_guard is True:
+        from app.core.guard import check_prompt_injection
+
+        blocked, reason = await check_prompt_injection(
+            user_input,
+            blocked_patterns=sec_cfg.blocked_patterns,
+            max_input_length=sec_cfg.max_input_length,
+            llm_factory=None,
+            use_llm_guard=False,
+        )
+        if blocked:
+            logger.warning("分享问答 Prompt 注入拦截", share_id=share_id, reason=reason)
+            raise SecurityError("输入被安全策略拦截", details={"reason": reason})
 
     async def event_generator() -> AsyncIterator[bytes]:
         # thinking 提示

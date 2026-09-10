@@ -6,6 +6,14 @@
 
 ---
 
+## 2026-09-10（集群5：RAG 收尾 + 注入防护补全）
+
+### 黄金集扩充 + 注入防护补全
+- `rag_golden.json` 由 6 条扩到 **30 条**（覆盖 Python/异步、LangGraph、RAG 全链路、Agent 机制、MCP/多智能体/评测/系统设计），供 rag-eval 产出简历量化基线。
+- 注入防护补全：`knowledge_ingestor` 事实提取 Prompt 加「忽略指令性语句」隔离标注（P2-P2-12）；`share.py` 分享问答入口接入规则层注入检测（公开路径不启用 LLM 层，防成本滥用，SHARE-2）；`format_rag_share_context` 注入隔离标注。
+
+---
+
 ## 2026-09-10（集群2：止血 + 故障可见）
 
 ### 限流重开（含分享问答）

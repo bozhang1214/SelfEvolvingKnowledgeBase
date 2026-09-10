@@ -28,5 +28,125 @@
     "test_id": "RAG-06",
     "query": "多智能体协作的常见模式有哪些？",
     "ground_truth": "常见模式包括监督者-执行者（Supervisor 路由）、规划-执行-反思（Plan-Execute-Critic 带重规划循环）、以及按角色分工的编排模式，通过状态图与条件边实现任务分配与通信。"
+  },
+  {
+    "test_id": "RAG-07",
+    "query": "Python 生成器和迭代器有什么区别？",
+    "ground_truth": "迭代器是实现了 __next__ 方法的对象，可逐个产出元素；生成器是用 yield 定义的函数，是一种特殊的迭代器，按需惰性计算、节省内存。"
+  },
+  {
+    "test_id": "RAG-08",
+    "query": "Python 中 GIL 是什么？对多线程有什么影响？",
+    "ground_truth": "GIL 是 CPython 的全局解释器锁，同一时刻只允许一个线程执行字节码，导致 CPU 密集型任务无法通过多线程加速，IO 密集任务可通过多线程或多进程/协程规避。"
+  },
+  {
+    "test_id": "RAG-09",
+    "query": "FastAPI 相比 Flask 的优势是什么？",
+    "ground_truth": "FastAPI 基于 ASGI 支持原生异步，自动生成 OpenAPI 文档，用 Pydantic 做请求校验和序列化，性能高，适合构建高并发 API 服务。"
+  },
+  {
+    "test_id": "RAG-10",
+    "query": "Pydantic 在 FastAPI 中的作用是什么？",
+    "ground_truth": "Pydantic 用于定义数据模型，自动完成请求体校验、类型转换、序列化与 OpenAPI Schema 生成，保证输入数据的类型安全。"
+  },
+  {
+    "test_id": "RAG-11",
+    "query": "LangChain 中 Agent 的核心组件有哪些？",
+    "ground_truth": "LangChain Agent 核心组件包括 LLM、工具（Tools）、提示词（Prompt）、AgentExecutor 执行循环，以及记忆（Memory），Agent 在循环中决定调用哪个工具直至得出最终答案。"
+  },
+  {
+    "test_id": "RAG-12",
+    "query": "什么是 ReAct 模式？",
+    "ground_truth": "ReAct 是 Reason + Act 的缩写，Agent 交替进行推理（生成思考）与行动（调用工具），根据工具观察结果继续推理，循环直到任务完成，提升可解释性与准确性。"
+  },
+  {
+    "test_id": "RAG-13",
+    "query": "Plan-and-Execute 和 ReAct 有什么区别？",
+    "ground_truth": "Plan-and-Execute 先一次性生成完整执行计划再逐步执行，适合步骤明确的任务；ReAct 是每步根据观察动态决定下一步，更灵活但调用次数更多。"
+  },
+  {
+    "test_id": "RAG-14",
+    "query": "Tool Calling（函数调用）的工作机制是什么？",
+    "ground_truth": "LLM 根据提示输出结构化的工具名与参数（JSON），应用层执行对应函数并把结果回传，LLM 基于结果继续生成，实现模型与外部系统交互。"
+  },
+  {
+    "test_id": "RAG-15",
+    "query": "向量数据库和传统数据库的核心区别是什么？",
+    "ground_truth": "向量数据库针对高维向量的相似度检索（近似最近邻 ANN）优化，通过 HNSW 等索引实现海量向量快速召回，传统数据库则针对结构化字段的精确查询。"
+  },
+  {
+    "test_id": "RAG-16",
+    "query": "文本分块（Chunking）为什么重要？分块策略有哪些？",
+    "ground_truth": "分块决定检索粒度与上下文完整性，过大块噪声多、过小块语义不完整。常见策略有固定长度、按段落/句子切分、语义分块、父子分块，并保留重叠避免语义割裂。"
+  },
+  {
+    "test_id": "RAG-17",
+    "query": "Embedding 的作用是什么？常用的中文 Embedding 模型有哪些？",
+    "ground_truth": "Embedding 把文本映射为固定维度向量，使语义相近的文本在向量空间中距离更近，是检索和相似度计算的基础。常用中文模型有 BGE 系列、M3E、text-embedding 系列。"
+  },
+  {
+    "test_id": "RAG-18",
+    "query": "什么是混合检索？为什么需要混合检索？",
+    "ground_truth": "混合检索是同时用向量检索（语义相似）和关键词检索（BM25 精确匹配）多路召回，再用 RRF 等算法融合排序，弥补单一向量检索对专有名词/编号等精确词不敏感的缺陷。"
+  },
+  {
+    "test_id": "RAG-19",
+    "query": "Rerank（重排）在 RAG 中的作用是什么？",
+    "ground_truth": "Rerank 对粗召回的结果做精排序，用交叉编码器或 LLM 更精确地评估查询与文档的相关度，把最相关的文档排到前面，提升最终答案质量。"
+  },
+  {
+    "test_id": "RAG-20",
+    "query": "如何评估 RAG 系统的检索质量？有哪些指标？",
+    "ground_truth": "常用 RAGAS 指标包括 context_precision（上下文精度）、context_recall（上下文召回）、faithfulness（答案忠实度/防幻觉）、answer_relevance（答案相关性），通过 LLM-as-Judge 打分评估。"
+  },
+  {
+    "test_id": "RAG-21",
+    "query": "MCP 协议是什么？解决什么问题？",
+    "ground_truth": "MCP（Model Context Protocol）是连接 AI 应用与外部数据/工具的开放标准，统一了工具调用接口，让模型通过标准协议访问文件、数据库、API 等，避免每个工具各写一套适配。"
+  },
+  {
+    "test_id": "RAG-22",
+    "query": "什么是 Prompt 注入攻击？如何防御？",
+    "ground_truth": "Prompt 注入是攻击者在用户输入或检索内容中嵌入恶意指令，诱导模型违背系统设定。防御包括输入过滤、指令隔离标注、权限最小化、检索内容与指令分离等。"
+  },
+  {
+    "test_id": "RAG-23",
+    "query": "Agent 的可观测性（Observability）为什么重要？",
+    "ground_truth": "Agent 多步调用、多模型切换，行为不透明。可观测性通过 trace（链路追踪）、指标（延迟/成本/成功率）和日志记录每次 LLM 调用与工具调用，便于排查幻觉、成本失控等问题。"
+  },
+  {
+    "test_id": "RAG-24",
+    "query": "什么是 LLM-as-Judge？",
+    "ground_truth": "LLM-as-Judge 是用一个（通常更强的）LLM 作为裁判，对另一个模型输出的质量（相关性、忠实度、流畅度等）打分，是自动化评测的重要手段。"
+  },
+  {
+    "test_id": "RAG-25",
+    "query": "Redis 在 Agent 系统中通常用来做什么？",
+    "ground_truth": "Redis 作为内存数据库，常用于会话缓存（短期记忆）、分布式锁、限流计数、任务队列与跨请求状态共享，支持 TTL 过期和持久化。"
+  },
+  {
+    "test_id": "RAG-26",
+    "query": "什么是 API 限流？常见限流算法有哪些？",
+    "ground_truth": "限流是控制请求速率、防止滥用和保护后端的手段。常见算法有固定窗口、滑动窗口、令牌桶、漏桶，生产常用滑动窗口和令牌桶。"
+  },
+  {
+    "test_id": "RAG-27",
+    "query": "微服务和单体架构各自的优缺点是什么？",
+    "ground_truth": "单体架构部署简单、调用开销小，但耦合高、难扩展；微服务按业务拆分、独立部署扩展，但引入分布式复杂度、网络开销和一致性难题。"
+  },
+  {
+    "test_id": "RAG-28",
+    "query": "消息队列在异步任务中的作用是什么？",
+    "ground_truth": "消息队列用于解耦生产者和消费者、削峰填谷、异步处理与重试，典型如 Kafka/RabbitMQ，适合耗时任务（如内容采集、报表生成）异步化。"
+  },
+  {
+    "test_id": "RAG-29",
+    "query": "什么是数据飞轮（Data Flywheel）？",
+    "ground_truth": "数据飞轮指用户反馈/真实数据回流，持续改进模型或系统，形成「使用越多、质量越好」的正循环，如通过 thumbs 反馈修正知识条目质量。"
+  },
+  {
+    "test_id": "RAG-30",
+    "query": "多租户知识库如何做数据隔离？",
+    "ground_truth": "多租户隔离通过在每条知识/数据记录上打租户标识（如 user_id），检索和查询时按租户过滤（where 条件或权限下推），配合鉴权保证数据不串租。"
   }
 ]
