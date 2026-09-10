@@ -100,20 +100,17 @@ const Job: React.FC = () => {
     return () => { alive = false; };
   }, []);
 
-  // 进入「批量分析」tab：默认展示最近一次批量分析报告（关键词一致或职位集合一致即可）。
+  // 进入「批量分析」tab：仅当缓存报告的职位列表与当前采集列表严格一致时才默认展示
+  // （保证职位列表信息与批量分析严格一致，避免两份信息错位）
   useEffect(() => {
     if (analysisMode !== 'batch' || marketReport || !cachedMarketReport) return;
     const rk = (j: FetchedJob) => j.job_id || `${j.title}-${j.company}`;
     const reportKeys = new Set((cachedMarketReport.jobs || []).map(rk));
     const fetchKeys = new Set(fetchedJobs.map(rk));
-    const sameJobs =
-      reportKeys.size > 0 &&
-      reportKeys.size === fetchKeys.size &&
-      [...reportKeys].every((k) => fetchKeys.has(k));
-    const reportKeyword = (cachedMarketReport as { keyword?: string }).keyword || '';
-    const sameKeyword = !!fetchKeyword.trim() && reportKeyword === fetchKeyword.trim();
-    if (sameJobs || sameKeyword || fetchKeys.size === 0) setMarketReport(cachedMarketReport);
-  }, [analysisMode, cachedMarketReport, fetchedJobs, marketReport, fetchKeyword]);
+    if (reportKeys.size === 0) return;
+    const same = reportKeys.size === fetchKeys.size && [...reportKeys].every((k) => fetchKeys.has(k));
+    if (same) setMarketReport(cachedMarketReport);
+  }, [analysisMode, cachedMarketReport, fetchedJobs, marketReport]);
 
   // 进入「历史报告」tab 时加载存档报告
   useEffect(() => {
