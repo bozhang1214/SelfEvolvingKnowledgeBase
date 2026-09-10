@@ -111,6 +111,26 @@ def _require_vector_store(ctx: AppContext) -> Any:
 
 
 
+async def _list_all_entries(
+    ctx: AppContext, user_id: str, source: str | None = None
+) -> list[Any]:
+    """分页拉取全部条目，避免单次 limit 截断（知识库块数超过单页上限时）。"""
+    entries: list[Any] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        batch = await ctx.knowledge_base.list_entries(
+            user_id=user_id, source=source, limit=page_size, offset=offset
+        )
+        if not batch:
+            break
+        entries.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return entries
+
+
 # ============================================================
 # 路由
 # ============================================================
@@ -357,9 +377,7 @@ async def list_series(
     _require_vector_store(ctx)
 
     try:
-        entries = await ctx.knowledge_base.list_entries(
-            user_id=user_id, source=upload_service.DOCUMENT_SOURCE, limit=5000
-        )
+        entries = await _list_all_entries(ctx, user_id, upload_service.DOCUMENT_SOURCE)
     except Exception as e:
         logger.error("列出系列分组失败", error=str(e), exc_info=True)
         raise HTTPException(
@@ -419,7 +437,7 @@ async def list_files(user_id: str = Depends(get_current_user)) -> dict[str, Any]
     _require_vector_store(ctx)
 
     try:
-        entries = await ctx.knowledge_base.list_entries(user_id=user_id, limit=5000)
+        entries = await _list_all_entries(ctx, user_id)
     except Exception as e:
         logger.error("列出文件历史失败", error=str(e), exc_info=True)
         raise HTTPException(
@@ -473,9 +491,7 @@ async def reclassify_files(user_id: str = Depends(get_current_user)) -> dict[str
     _require_vector_store(ctx)
 
     try:
-        entries = await ctx.knowledge_base.list_entries(
-            user_id=user_id, source=upload_service.DOCUMENT_SOURCE, limit=5000
-        )
+        entries = await _list_all_entries(ctx, user_id, upload_service.DOCUMENT_SOURCE)
     except Exception as e:
         logger.error("重分类失败：查询条目异常", error=str(e), exc_info=True)
         raise HTTPException(
@@ -589,7 +605,7 @@ async def analyze_knowledge_base(user_id: str = Depends(get_current_user)) -> di
     _require_vector_store(ctx)
 
     try:
-        entries = await ctx.knowledge_base.list_entries(user_id=user_id, limit=5000)
+        entries = await _list_all_entries(ctx, user_id)
     except Exception as e:
         logger.error("知识库分析失败：查询条目异常", error=str(e), exc_info=True)
         raise HTTPException(
