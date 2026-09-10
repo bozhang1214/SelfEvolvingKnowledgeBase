@@ -301,7 +301,7 @@ class TestLLMRetryAndResponseInit:
 
         # 确认已降级
         assert factory.is_degraded("planner")
-        assert factory.get_actual_model("planner") == "deepseek-chat"
+        assert factory.get_actual_model("planner") == "deepseek-flash"
 
         mock_llm = captured["llm"]
         response = MagicMock()
@@ -311,14 +311,14 @@ class TestLLMRetryAndResponseInit:
         await factory.ainvoke_with_stats("planner", [])
         record = factory.stats.records[-1]
 
-        # 实际模型为 chat，配置模型为 reasoner
-        assert record.model == "deepseek-chat"
+        # 实际模型为 flash，配置模型为 reasoner
+        assert record.model == "deepseek-flash"
         assert record.configured_model == "deepseek-reasoner"
         assert record.degraded is True
-        # 成本按 chat 定价计算
-        chat_pricing = sample_config.cost_control.pricing["deepseek-chat"]
+        # 成本按 flash 定价计算
+        flash_pricing = sample_config.cost_control.pricing["deepseek-flash"]
         expected_cost = (
-            (1000 / 1000) * chat_pricing.input + (500 / 1000) * chat_pricing.output
+            (1000 / 1000) * flash_pricing.input + (500 / 1000) * flash_pricing.output
         )
         assert record.cost_usd == pytest.approx(expected_cost)
         # 不应等于 reasoner 定价

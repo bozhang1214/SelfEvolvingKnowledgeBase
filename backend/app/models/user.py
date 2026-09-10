@@ -20,7 +20,7 @@ class User(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_active: bool = True
     settings: dict[str, Any] = Field(default_factory=lambda: {
-        "model": "deepseek-chat",
+        "model": "deepseek-flash",
         "temperature": 0.7,
         "max_tokens": 4096,
     })

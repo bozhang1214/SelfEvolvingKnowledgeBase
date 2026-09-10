@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Typography, Form, Input, Select, InputNumber, Button, Divider, message, Space, Avatar, Tag, Modal, Spin } from 'antd';
+import { Card, Typography, Form, Input, Select, Button, Divider, message, Space, Avatar, Tag, Modal, Spin } from 'antd';
 import { UserOutlined, ApiOutlined, SafetyOutlined, QrcodeOutlined } from '@ant-design/icons';
 import { useUserStore } from '@/stores/user';
 import apiClient from '@/services/api';
@@ -21,9 +21,6 @@ const Settings: React.FC = () => {
     if (user) {
       form.setFieldsValue({
         name: user.name,
-        model: user.settings?.model || 'deepseek-chat',
-        temperature: user.settings?.temperature || 0.7,
-        max_tokens: user.settings?.max_tokens || 4096,
       });
     }
   }, [user, form]);
@@ -37,7 +34,7 @@ const Settings: React.FC = () => {
     }
   };
 
-  const handleSaveModel = async (values: { model: string; temperature: number; max_tokens: number; send_key?: string }) => {
+  const handleSaveModel = async (values: { send_key?: string }) => {
     try {
       await apiClient.patch('/auth/me', {
         settings: { ...user?.settings, ...values },
@@ -158,30 +155,15 @@ const Settings: React.FC = () => {
         </Space>
       </Card>
 
-      {/* 模型偏好 */}
-      <Card title={<Space><ApiOutlined />模型偏好</Space>} style={{ marginBottom: 16 }}>
+      {/* 偏好（模型设置已隐藏，统一由服务端配置指定模型） */}
+      <Card title={<Space><ApiOutlined />偏好</Space>} style={{ marginBottom: 16 }}>
         <Form
           layout="vertical"
           initialValues={{
-            model: user?.settings?.model || 'deepseek-chat',
-            temperature: user?.settings?.temperature || 0.7,
-            max_tokens: user?.settings?.max_tokens || 4096,
             send_key: user?.settings?.send_key || 'enter',
           }}
           onFinish={handleSaveModel}
         >
-          <Form.Item name="model" label="默认模型">
-            <Select>
-              <Select.Option value="deepseek-chat">DeepSeek Chat</Select.Option>
-              <Select.Option value="deepseek-reasoner">DeepSeek Reasoner</Select.Option>
-            </Select>
-          </Form.Item>
-          <Form.Item name="temperature" label="温度 (Temperature)">
-            <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="max_tokens" label="最大 Token 数">
-            <InputNumber min={256} max={8192} step={256} style={{ width: '100%' }} />
-          </Form.Item>
           <Form.Item name="send_key" label="发送快捷键">
             <Select>
               <Select.Option value="enter">Enter 发送（Shift+Enter 换行）</Select.Option>

@@ -519,9 +519,9 @@ class LLMFactory:
     def _get_fallback_config(self, original: LLMRoleConfig) -> LLMRoleConfig | None:
         """获取降级配置"""
         if "reasoner" in original.model:
-            # reasoner → chat
+            # reasoner → 降级到 flash
             return LLMRoleConfig(
-                model="deepseek-chat",
+                model="deepseek-flash",
                 temperature=original.temperature,
                 max_tokens=original.max_tokens,
                 response_format=original.response_format,

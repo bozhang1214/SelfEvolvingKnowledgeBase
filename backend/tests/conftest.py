@@ -57,7 +57,7 @@ def sample_config() -> AppConfig:
             "retry_backoff_seconds": [1, 2],
             "roles": {
                 "supervisor": {
-                    "model": "deepseek-chat",
+                    "model": "deepseek-flash",
                     "temperature": 0.1,
                     "max_tokens": 500,
                     "response_format": "json",
@@ -69,12 +69,12 @@ def sample_config() -> AppConfig:
                     "response_format": "json",
                 },
                 "executor": {
-                    "model": "deepseek-chat",
+                    "model": "deepseek-flash",
                     "temperature": 0.3,
                     "max_tokens": 2000,
                 },
                 "critic": {
-                    "model": "deepseek-chat",
+                    "model": "deepseek-flash",
                     "temperature": 0.0,
                     "max_tokens": 1000,
                     "response_format": "json",
@@ -86,13 +86,13 @@ def sample_config() -> AppConfig:
                     "response_format": "json",
                 },
                 "scribe": {
-                    "model": "deepseek-chat",
+                    "model": "deepseek-flash",
                     "temperature": 0.2,
                     "max_tokens": 800,
                     "response_format": "json",
                 },
                 "chat_simple": {
-                    "model": "deepseek-chat",
+                    "model": "deepseek-flash",
                     "temperature": 0.7,
                     "max_tokens": 1000,
                 },
@@ -119,7 +119,7 @@ def sample_config() -> AppConfig:
         },
         "cost_control": {
             "pricing": {
-                "deepseek-chat": {"input": 0.00014, "output": 0.00028},
+                "deepseek-flash": {"input": 0.00014, "output": 0.00028},
                 "deepseek-reasoner": {"input": 0.00055, "output": 0.00219},
             },
         },

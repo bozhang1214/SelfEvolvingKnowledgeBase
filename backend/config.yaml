@@ -24,55 +24,55 @@ llm:
 
   roles:
     supervisor:                        # 监督者：意图识别 + 路由决策（快思考，强制 JSON 输出）
-      model: deepseek-chat
+      model: deepseek-flash
       temperature: 0.1                 # 低温度保证分类稳定性
       max_tokens: 500                  # 意图分类输出简短
       response_format: json
     planner:                           # 规划者：任务拆解（慢思考，复杂 CoT 推理）
-      model: deepseek-reasoner
+      model: deepseek-flash
       temperature: 0.2                 # 较低温度保证规划可控
       max_tokens: 2000                 # Task List 可能较长
       response_format: json
     executor:                          # 执行器：工具调用 + 草稿生成（快思考）
-      model: deepseek-chat
+      model: deepseek-flash
       temperature: 0.3                 # 适度发散，生成自然答案
       max_tokens: 2000                 # 草稿答案需要足够长度
     critic:                            # 审查者（默认）：简单反思评估（快思考，省钱）
-      model: deepseek-chat
+      model: deepseek-flash
       temperature: 0.0                 # 零温度保证评分一致性
       max_tokens: 1000                 # 评分输出简短
       response_format: json
     critic_complex:                    # 审查者（复杂任务）：深度反思（慢思考，高幻觉检出）
-      model: deepseek-reasoner
+      model: deepseek-flash
       temperature: 0.0
       max_tokens: 2000
       response_format: json
     scribe:                            # 记录员：摘要 + 重要性评分（快思考）
-      model: deepseek-chat
+      model: deepseek-flash
       temperature: 0.2
       max_tokens: 800                  # 摘要控制在 200 字以内
       response_format: json
     chat_simple:                       # 闲聊直通：跳过 Plan/Do 节点
-      model: deepseek-chat
+      model: deepseek-flash
       temperature: 0.7                 # 高温度保证闲聊自然度
       max_tokens: 1000
     news_report:                       # 科技资讯生成：结构化长报告（每条含要点/来源）
-      model: deepseek-chat
+      model: deepseek-flash
       temperature: 0.3
       max_tokens: 8000                 # 日报条目多（每类 10+），需要较大输出上限
       response_format: json
     job_analysis:                      # 招聘分析：JD 深度分析/差距/简历/策略（结构化 JSON）
-      model: deepseek-chat
+      model: deepseek-flash
       temperature: 0.3
       max_tokens: 4000                 # 单步输出为结构化 JSON，4000 token 足够
       response_format: json
     rerank:                            # 检索重排 / 查询改写（低温度 JSON/短文本）
-      model: deepseek-chat
+      model: deepseek-flash
       temperature: 0.0
       max_tokens: 1000
       response_format: json
     ragas:                             # RAG 检索质量裁判（低温度 JSON 打分）
-      model: deepseek-chat
+      model: deepseek-flash
       temperature: 0.0
       max_tokens: 1000
       response_format: json
@@ -192,13 +192,11 @@ evaluation:
 # ============ 成本控制 ============
 cost_control:
   # DeepSeek 定价（美元/1K tokens）：用于成本归因
+  # V4.1 Flash 定价官方已下调并采用峰谷计价，此处用近似值（沿用 chat 档）做成本估算
   pricing:
-    deepseek-chat:                      # 快思考模型定价
+    deepseek-flash:                     # V4.1 Flash 定价（近似，峰谷计价待精确值）
       input: 0.00014                    # 输入 $0.14/1K tokens
       output: 0.00028                   # 输出 $0.28/1K tokens
-    deepseek-reasoner:                  # 慢思考模型定价
-      input: 0.00055                    # 输入 $0.55/1K tokens
-      output: 0.00219                   # 输出 $2.19/1K tokens
 
 # ============ Tracing ============
 tracing:

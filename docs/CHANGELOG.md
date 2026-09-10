@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-09-10（模型切换：全量迁移到 DeepSeek V4.1 Flash）
+
+### 模型统一切换到 deepseek-flash
+- V4.1 Flash 官方 API 模型名为 `deepseek-flash`（性能超 V4 Pro，聊天/推理均可）。
+- `config.yaml` 所有角色（含 planner/critic_complex 原 reasoner）模型统一改为 `deepseek-flash`；定价改 `deepseek-flash` 单档（近似值，峰谷计价待精确）。
+- `llm_factory` 降级链 fallback 目标改 `deepseek-flash`；`User.settings.model` 默认值改 `deepseek-flash`。
+
+### 设置页隐藏模型设置
+- `Settings.tsx` 隐藏「默认模型 / 温度 / 最大 Token」三项（模型统一由服务端配置指定），保留「发送快捷键」；卡片改名「偏好」。
+
+---
+
 ## 2026-09-10（集群3.2/3.3 + 文档回填）
 
 ### JWT jti 黑名单（SEC-02）
