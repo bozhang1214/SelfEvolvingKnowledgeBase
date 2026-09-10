@@ -214,8 +214,9 @@ async def analyze_market(
 ) -> dict[str, Any]:
     """执行批量分析，返回 {cached, report}。
 
-    jobs=None 时自动采集并缓存 7 天；jobs 提供时直接分析传入的职位（不缓存，
-    用于「职位收集 → 批量分析」联动，避免重复采集、保证数据一致）。
+    jobs=None 时自动采集；jobs 提供时直接分析传入的职位（「职位收集 → 批量分析」
+    联动，不重复采集）。无论哪种方式，报告都会缓存，供「批量分析」tab 默认展示
+    最近一次结果。
     """
     from_provided = jobs is not None
     if not from_provided:
@@ -272,10 +273,10 @@ async def analyze_market(
         ],
     }
 
-    if not from_provided:
-        cache = _load_cache()
-        cache[user_id] = report
-        _save_cache(cache)
+    # 无论是否提供 jobs，都缓存报告，供「批量分析」tab 默认展示最近一次结果
+    cache = _load_cache()
+    cache[user_id] = report
+    _save_cache(cache)
     logger.info(
         "市场批量分析完成", user_id=user_id, jobs=len(jobs), from_provided=from_provided
     )

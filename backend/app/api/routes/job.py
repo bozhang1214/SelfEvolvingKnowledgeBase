@@ -188,7 +188,7 @@ async def batch_analyze(body: BatchAnalyzeReq, user_id: str = Depends(get_curren
     """
     一键批量分析职位，生成市场分析报告。
 
-    - ``jobs`` 提供时：直接分析传入的职位（「职位收集 → 批量分析」联动，不重复采集、不缓存）。
+    - ``jobs`` 提供时：直接分析传入的职位（「职位收集 → 批量分析」联动，不重复采集，并缓存供默认展示）。
     - ``jobs`` 为空时：自动采集并生成报告，7 天内命中缓存直接返回。
     """
     ctx = get_app_context()
