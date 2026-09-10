@@ -108,6 +108,7 @@ async function runStream(
         metadata: {
           intent: meta.intent || undefined,
           latency_ms: meta.latency_ms,
+          degraded: meta.degraded || undefined,
         },
       };
       set((state) => {

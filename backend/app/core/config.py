@@ -32,7 +32,6 @@ class AppConfigSection(BaseModel):
     name: str
     version: str
     environment: str = "development"
-    debug: bool = True
 
 
 class LLMRoleConfig(BaseModel):
@@ -249,7 +248,6 @@ class FilesystemToolConfig(BaseModel):
 
 class VectorStoreConfig(BaseModel):
     """向量库配置"""
-    provider: str = "chroma"
     persist_path: str = "data/chroma_db"
 
 
@@ -286,9 +284,13 @@ class SecurityConfig(BaseModel):
 
 
 class RateLimitConfig(BaseModel):
-    """限流配置"""
+    """限流配置（按路由分组，前缀匹配；纯 ASGI 中间件，不缓冲 SSE）"""
     enabled: bool = False
-    requests_per_minute: int = 60
+    requests_per_minute: int = 60      # 默认（chat/knowledge/conversations 等）
+    share_per_minute: int = 20         # 分享问答（公开链接，防滥用）
+    upload_per_minute: int = 30        # 文件上传
+    job_per_minute: int = 30           # 职位采集/批量分析
+    news_per_minute: int = 10          # 资讯刷新（成本高）
 
 
 class AuthConfig(BaseModel):
@@ -387,17 +389,35 @@ class AppConfig(BaseModel):
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
 
+def _resolve_env_ref(expr: str) -> str:
+    """解析单个 ``${...}`` 内的表达式，支持默认值语法。
+
+    支持：
+    - ``${VAR}``                → 未设置返回空串
+    - ``${VAR:-default}``       → 未设置或为空返回 default
+    - ``${VAR:default}``        → 同上（兼容 config.yaml 里的简写）
+    """
+    expr = expr.strip()
+    if ":-" in expr:
+        var_name, default = expr.split(":-", 1)
+    elif ":" in expr:
+        var_name, default = expr.split(":", 1)
+    else:
+        var_name, default = expr, ""
+    value = os.getenv(var_name)
+    if value is None or value == "":
+        return default
+    return value
+
+
 def _expand_env_vars(obj: Any) -> Any:
     """
-    递归展开配置中的 ${ENV_VAR} 引用。
+    递归展开配置中的 ${ENV_VAR} 引用（含默认值语法）。
 
     如果环境变量未设置，替换为空字符串（让 Pydantic 校验报错）。
     """
     if isinstance(obj, str):
-        def replacer(match: re.Match) -> str:
-            var_name = match.group(1)
-            return os.getenv(var_name, "")
-        return _ENV_VAR_PATTERN.sub(replacer, obj)
+        return _ENV_VAR_PATTERN.sub(lambda m: _resolve_env_ref(m.group(1)), obj)
     elif isinstance(obj, dict):
         return {k: _expand_env_vars(v) for k, v in obj.items()}
     elif isinstance(obj, list):

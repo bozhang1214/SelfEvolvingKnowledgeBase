@@ -42,6 +42,8 @@ from app.core.exceptions import (
     LLMTimeoutError,
 )
 from app.core.logging import get_logger
+from app.core.metrics import record_llm_call
+from app.core.tracing import get_trace_config
 
 logger = get_logger(__name__)
 
@@ -284,7 +286,7 @@ class LLMFactory:
             async def _call() -> Any:
                 nonlocal retry_count
                 try:
-                    return await llm.ainvoke(messages, **kwargs)
+                    return await llm.ainvoke(messages, config=get_trace_config(), **kwargs)
                 except TimeoutError as e:
                     raise LLMTimeoutError(f"LLM 调用超时: {e}", model=actual_model) from e
                 except Exception as e:
@@ -382,7 +384,7 @@ class LLMFactory:
         start_time = time.time()
         chunks: list[str] = []
         try:
-            async for chunk in llm.astream(messages, **kwargs):
+            async for chunk in llm.astream(messages, config=get_trace_config(), **kwargs):
                 text = chunk.content if hasattr(chunk, "content") else str(chunk)
                 if text:
                     chunks.append(text)
@@ -590,6 +592,19 @@ class LLMFactory:
                 configured_model=record.configured_model,
                 actual_model=record.model,
             )
+
+        # 指标埋点：把单次调用粒度接入 Prometheus（修复「LLM 指标零埋点」）
+        record_llm_call(
+            role=record.role,
+            model=record.model,
+            latency_ms=record.latency_ms,
+            success=record.success,
+            input_tokens=record.input_tokens,
+            output_tokens=record.output_tokens,
+            cost_usd=record.cost_usd,
+            retried=record.retried,
+            degraded=record.degraded,
+        )
 
     async def health_check(self) -> bool:
         """

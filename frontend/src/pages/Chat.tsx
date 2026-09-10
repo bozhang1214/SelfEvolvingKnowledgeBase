@@ -579,6 +579,23 @@ const Chat: React.FC = () => {
                       )
                     ) : (
                       <div className="markdown-content">
+                        {((msg as any).metadata?.degraded) && (
+                          <div style={{ marginBottom: 6 }}>
+                            <span
+                              style={{
+                                fontSize: 12,
+                                color: '#ad6800',
+                                background: '#fff7e6',
+                                border: '1px solid #ffd591',
+                                borderRadius: 4,
+                                padding: '0 6px',
+                                lineHeight: '20px',
+                              }}
+                            >
+                              ⚠ 已降级（高成本模型不可用，回退至基础模型）
+                            </span>
+                          </div>
+                        )}
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
                           components={{

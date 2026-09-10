@@ -138,10 +138,12 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         environment=config.app.environment,
     )
 
-    # 3. 初始化链路追踪
+    # 3. 初始化链路追踪（返回是否真正启用，供启动日志可见）
     try:
-        setup_tracing(config)
+        tracing_enabled = setup_tracing(config)
+        logger.info("链路追踪状态", enabled=tracing_enabled, provider=config.tracing.provider)
     except Exception as e:
+        tracing_enabled = False
         logger.warning("链路追踪初始化失败，已跳过", error=str(e))
 
     # 4. 创建 LLM 工厂

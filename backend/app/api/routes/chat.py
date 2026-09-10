@@ -96,6 +96,7 @@ class ChatResponse(BaseModel):
     metrics: dict = Field(default_factory=dict, description="量化指标")
     trace_id: str = Field(..., description="本次调用的 trace ID")
     meta: dict = Field(default_factory=dict, description="扩展元信息（知识入库状态等）")
+    degraded: bool = Field(False, description="本次是否发生 LLM 降级（reasoner→chat）")
 
 
 # ============================================================
@@ -434,6 +435,7 @@ async def chat(
         intent_confidence=result["intent_confidence"],
         metrics=result["metrics"],
         trace_id=result["trace_id"],
+        degraded=bool(result.get("metrics", {}).get("llm_degraded", False)),
         meta={
             "title": result.get("title", ""),
             "ingest_status": result.get("ingest_status", "disabled"),
@@ -575,6 +577,7 @@ async def chat_stream(
                     "latency_ms": result["latency_ms"],
                     "ingest_status": result.get("ingest_status", "disabled"),
                     "ingest_reason": result.get("ingest_reason", ""),
+                    "degraded": bool(result.get("metrics", {}).get("llm_degraded", False)),
                 }
                 done_payload = json.dumps(
                     {"type": "done", "meta": meta}, ensure_ascii=False

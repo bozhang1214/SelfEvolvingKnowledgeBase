@@ -89,6 +89,30 @@ class TestExpandEnvVars:
         result = _expand_env_vars("${VAR_A}-${VAR_B}-${VAR_A}")
         assert result == "aaa-bbb-aaa"
 
+    def test_expand_default_syntax_unset(self, monkeypatch):
+        """${VAR:-default} 未设置时返回 default"""
+        monkeypatch.delenv("TEST_DEFAULT_VAR", raising=False)
+        result = _expand_env_vars("${TEST_DEFAULT_VAR:-fallback}")
+        assert result == "fallback"
+
+    def test_expand_default_syntax_set(self, monkeypatch):
+        """${VAR:-default} 已设置时返回环境变量值"""
+        monkeypatch.setenv("TEST_DEFAULT_VAR", "real-value")
+        result = _expand_env_vars("${TEST_DEFAULT_VAR:-fallback}")
+        assert result == "real-value"
+
+    def test_expand_default_syntax_empty(self, monkeypatch):
+        """${VAR:-default} 为空串时返回 default"""
+        monkeypatch.setenv("TEST_DEFAULT_VAR", "")
+        result = _expand_env_vars("${TEST_DEFAULT_VAR:-fallback}")
+        assert result == "fallback"
+
+    def test_expand_colon_default_syntax(self, monkeypatch):
+        """${VAR:default}（简写）未设置时返回 default"""
+        monkeypatch.delenv("TEST_COLON_VAR", raising=False)
+        result = _expand_env_vars("${TEST_COLON_VAR:qwen-vl-plus}")
+        assert result == "qwen-vl-plus"
+
 
 # ============================================================
 # load_config 正常加载测试

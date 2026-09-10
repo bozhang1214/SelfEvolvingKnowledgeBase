@@ -23,6 +23,7 @@ export interface Message {
       total_tokens: number;
     };
     latency_ms?: number;
+    degraded?: boolean;
   };
 }
 
@@ -41,6 +42,7 @@ export interface ChatMeta {
   latency_ms: number;
   ingest_status: string;
   ingest_reason: string;
+  degraded?: boolean;
 }
 
 export interface StreamChunk {

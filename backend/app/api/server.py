@@ -200,8 +200,11 @@ def create_app() -> FastAPI:
             default_limit=config.api.rate_limit.requests_per_minute,
             default_window_seconds=60,
             route_limits={
-                "/api/v1/auth/login": config.api.auth.rate_limit_login_per_minute,
-                "/api/v1/auth/register": config.api.auth.rate_limit_login_per_minute,
+                "/api/v1/auth/": config.api.auth.rate_limit_login_per_minute,
+                "/api/v1/share/": config.api.rate_limit.share_per_minute,
+                "/api/v1/upload": config.api.rate_limit.upload_per_minute,
+                "/api/v1/job/": config.api.rate_limit.job_per_minute,
+                "/api/v1/news/": config.api.rate_limit.news_per_minute,
             },
         )
 

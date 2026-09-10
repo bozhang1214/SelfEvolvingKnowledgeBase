@@ -4,6 +4,7 @@ API 中间件：CORS、限流（Phase 3）
 注意：限流中间件使用纯 ASGI 实现，而非 BaseHTTPMiddleware。
 因为 BaseHTTPMiddleware 会缓冲整个响应体，破坏 SSE 流式传输。
 """
+
 from __future__ import annotations
 
 import json
@@ -33,10 +34,11 @@ def setup_cors(app: FastAPI) -> None:
 
 class RateLimitMiddleware:
     """
-    基于 IP 的简单限流中间件（纯 ASGI 实现）。
+    基于 IP + 路由分组的滑动窗口限流（纯 ASGI 实现）。
 
-    使用滑动窗口计数，支持按路由分组配置不同速率。
-    不使用 BaseHTTPMiddleware，避免缓冲 SSE 流式响应。
+    - 按 (client_ip, 路由组) 粒度独立计数，避免不同组互相影响；
+    - 路由组用最长前缀匹配（如 ``/api/v1/share/`` 覆盖所有分享子路径）；
+    - 不使用 BaseHTTPMiddleware，避免缓冲 SSE 流式响应。
     """
 
     def __init__(
@@ -49,8 +51,18 @@ class RateLimitMiddleware:
         self.app = app
         self.default_limit = default_limit
         self.default_window = default_window_seconds
-        self.route_limits = route_limits or {}
-        self._windows: dict[str, list[float]] = defaultdict(list)
+        # route_limits: 前缀 -> 每分钟上限；按前缀长度降序排列以便最长匹配
+        self.route_limits = sorted(
+            (route_limits or {}).items(), key=lambda kv: -len(kv[0])
+        )
+        self._windows: dict[tuple[str, str], list[float]] = defaultdict(list)
+
+    def _match_group(self, path: str) -> tuple[str, int]:
+        """返回 (分组键, 上限)，最长前缀优先，无匹配用默认。"""
+        for prefix, limit in self.route_limits:
+            if path.startswith(prefix):
+                return prefix, limit
+        return "default", self.default_limit
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -69,19 +81,17 @@ class RateLimitMiddleware:
         client = scope.get("client")
         client_ip = client[0] if client else "unknown"
 
-        # 获取限流配置
-        limit = self.route_limits.get(path, self.default_limit)
+        # 按 (ip, 组) 独立计数
+        group, limit = self._match_group(path)
         window = self.default_window
         now = time.time()
+        key = (client_ip, group)
 
         # 清理过期记录
-        self._windows[client_ip] = [
-            ts for ts in self._windows[client_ip]
-            if now - ts < window
-        ]
+        self._windows[key] = [ts for ts in self._windows[key] if now - ts < window]
 
         # 检查是否超限
-        if len(self._windows[client_ip]) >= limit:
+        if len(self._windows[key]) >= limit:
             body = json.dumps({
                 "code": 3001,
                 "message": "请求过于频繁，请稍后再试",
@@ -105,11 +115,11 @@ class RateLimitMiddleware:
             return
 
         # 记录本次请求
-        self._windows[client_ip].append(now)
+        self._windows[key].append(now)
 
         # 包装 send 以添加限流响应头
         original_send = send
-        rate_limit_remaining = max(0, limit - len(self._windows[client_ip]))
+        rate_limit_remaining = max(0, limit - len(self._windows[key]))
 
         async def send_with_headers(message):
             if message["type"] == "http.response.start":

@@ -6,6 +6,29 @@
 
 ---
 
+## 2026-09-10（集群2：止血 + 故障可见）
+
+### 限流重开（含分享问答）
+- `RateLimitMiddleware` 重写为「IP + 路由分组」独立滑动窗口（修复原全局计数误伤）；路由分组按最长前缀匹配。
+- 启用 `rate_limit.enabled=true`，分组：auth 5/min、share 20/min、upload 30/min、job 30/min、news 10/min、默认 60/min；纯 ASGI 不缓冲 SSE。
+- 覆盖 SHARE-1（分享问答公开链接限流）。
+
+### Tracing 打通（trace_id 注入）
+- `core/tracing.py` 新增 `get_trace_config()`：从 structlog 上下文读 trace_id/conversation_id，注入 LangChain RunnableConfig 的 metadata/tags；`setup_tracing` 改为返回是否启用。
+- `llm_factory` 的 ainvoke/astream 统一携带 `config=get_trace_config()`，使 LangSmith span 与业务 trace_id 关联。
+
+### 降级可见化 + 指标埋点
+- `ChatResponse` / SSE done meta 新增 `degraded` 字段；前端助手气泡在降级时显示「已降级」角标。
+- `LLMFactory._record_call` 接入 `record_llm_call`，修复「LLM 单次调用粒度指标零埋点」（重试/降级计数器真正发 Prometheus）。
+
+### 死配置清理
+- 修复 `${VAR:-default}` / `${VAR:default}` 环境变量默认值展开缺陷（原实现把整段当变量名，jwt_secret/视觉模型配置的默认值失效）。
+- 删除死配置 `app.debug`、`tools.vector_store.provider`。
+
+- 验证：后端 pytest **650 passed**、ruff 全绿、mypy **297≤310**；前端 tsc 0 错、eslint 0 错、vitest 66 passed。
+
+---
+
 ## 2026-09-10（功能开发：RAG 增强 / 检索评测 / 注入防护 / 反馈飞轮）
 
 ### RAG 检索增强（混合检索 + 重排 + 查询改写）
