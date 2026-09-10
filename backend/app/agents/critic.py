@@ -57,6 +57,7 @@ class CriticAgent(BaseAgent):
 
             task_complexity = float(state.get("task_complexity", 0.0))
             replan_count = int(state.get("replan_count", 0))
+            rewrite_count = int(state.get("rewrite_count", 0))
 
             # 根据复杂度选择模型（P2-13 语义：task_complexity >= 阈值 → reasoner 强模型）
             model_switch_threshold = self.config.reflection.model_switch_threshold
@@ -117,13 +118,21 @@ class CriticAgent(BaseAgent):
             )
             reasoning = str(data.get("reasoning", ""))
 
-            # 判断是否需要重规划
+            # 判断是否需要重规划 / 重写答案
             max_replan = self.config.reflection.max_replan
+            max_rewrite = self.config.reflection.max_rewrite
             should_replan = (
                 result_str == "needs_replan" and replan_count < max_replan
             )
+            should_rewrite = (
+                result_str == "needs_rewrite" and rewrite_count < max_rewrite
+            )
 
             new_replan_count = replan_count + (1 if should_replan else 0)
+            new_rewrite_count = rewrite_count + (1 if should_rewrite else 0)
+            rewrite_feedback = "\n".join(
+                [str(s) for s in suggestions] + [str(i) for i in issues]
+            )
 
             evaluation = {
                 "passed": passed,
@@ -147,12 +156,17 @@ class CriticAgent(BaseAgent):
                 relevance=relevance_score,
                 should_replan=should_replan,
                 replan_count=new_replan_count,
+                should_rewrite=should_rewrite,
+                rewrite_count=new_rewrite_count,
             )
 
             return {
                 "evaluation": evaluation,
                 "should_replan": should_replan,
                 "replan_count": new_replan_count,
+                "should_rewrite": should_rewrite,
+                "rewrite_count": new_rewrite_count,
+                "rewrite_feedback": rewrite_feedback,
             }
 
         except AgentError:

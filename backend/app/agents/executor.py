@@ -355,3 +355,41 @@ class ExecutorAgent(BaseAgent):
             )
             # 兜底：把工具结果直接作为草稿
             return tool_results or user_input
+
+    async def rewrite_answer(
+        self,
+        user_input: str,
+        draft_answer: str,
+        feedback: str,
+        rag_context: str = "",
+    ) -> str:
+        """
+        根据 Critic 反馈重写答案（needs_rewrite 分支）。
+
+        不重新执行工具，仅用「原答案 + 反馈」让 LLM 改进草稿。
+        失败时返回原草稿（降级不阻断流程）。
+        """
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        system_prompt = (
+            "你是答案优化器。请根据评审反馈改进下面的答案，"
+            "使其更准确、完整、相关。保持原有事实依据，不要新增未经证实的内容。"
+        )
+        human = (
+            f"用户问题：{user_input}\n\n"
+            f"原答案：{draft_answer}\n\n"
+            f"评审反馈：{feedback or '（无）'}\n\n"
+            f"知识库参考：{rag_context or '（无）'}\n\n"
+            "请输出改进后的完整答案："
+        )
+        try:
+            response = await self.llm_factory.ainvoke_with_stats(
+                "executor",
+                [SystemMessage(content=system_prompt), HumanMessage(content=human)],
+            )
+            if hasattr(response, "content"):
+                return str(response.content)
+            return str(response)
+        except Exception as e:
+            self.logger.warning("答案重写失败，返回原草稿", error=str(e))
+            return draft_answer

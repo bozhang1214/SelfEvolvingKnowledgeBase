@@ -146,6 +146,7 @@ memory:
 reflection:
   policy: always                        # Phase 1 仅实现 always（adaptive/sampling 占位已按 D3 删除）
   max_replan: 2                         # 最大重规划次数，超限则标记低置信度直通
+  max_rewrite: 1                        # needs_rewrite 时最多重写答案次数
   model_switch_threshold: 0.7           # 任务复杂度超过此阈值时切换 reasoner 做 Critic
 
 # ============ 评估指标阈值 ============

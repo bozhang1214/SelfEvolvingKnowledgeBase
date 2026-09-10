@@ -157,6 +157,7 @@ class ReflectionConfig(BaseModel):
     """反思策略配置（Phase 1 仅实现 always；adaptive/sampling 占位已按 D3 删除，见 11-EVOLUTION）"""
     policy: str = "always"
     max_replan: int = Field(2, ge=0)
+    max_rewrite: int = Field(1, ge=0, description="needs_rewrite 时最多重写答案次数")
     model_switch_threshold: float = Field(0.7, ge=0.0, le=1.0, description="复杂度>=阈值时 Critic 用 reasoner")
 
     @field_validator("policy")

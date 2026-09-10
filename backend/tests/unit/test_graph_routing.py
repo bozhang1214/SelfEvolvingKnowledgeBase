@@ -144,7 +144,7 @@ class TestRouteAfterCritic:
         assert result == "scribe"
 
     def test_needs_rewrite_routes_to_scribe(self, sample_config):
-        """测试 needs_rewrite 结果路由到 scribe（不重规划）"""
+        """测试 needs_rewrite 但未标记 should_rewrite 时路由到 scribe（不重写）"""
         strategy = AlwaysReflectStrategy(sample_config)
         state = create_initial_state("测试", "conv-1")
         state["evaluation"] = {"result": ReflectionResult.NEEDS_REWRITE.value}
@@ -152,6 +152,17 @@ class TestRouteAfterCritic:
 
         result = route_after_critic(state, strategy)
         assert result == "scribe"
+
+    def test_should_rewrite_routes_to_rewrite(self, sample_config):
+        """测试 should_rewrite=True 时路由到 rewrite（needs_rewrite 分支）"""
+        strategy = AlwaysReflectStrategy(sample_config)
+        state = create_initial_state("测试", "conv-1")
+        state["evaluation"] = {"result": ReflectionResult.NEEDS_REWRITE.value}
+        state["replan_count"] = 0
+        state["should_rewrite"] = True
+
+        result = route_after_critic(state, strategy)
+        assert result == "rewrite"
 
     def test_mock_strategy_replan_true(self):
         """测试使用 Mock 策略 should_replan 返回 True 时路由到 planner"""

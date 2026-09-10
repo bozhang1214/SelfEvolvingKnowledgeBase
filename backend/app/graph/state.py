@@ -167,6 +167,9 @@ class GraphState(TypedDict, total=False):
     evaluation: CriticEvaluation        # 评估结果
     replan_count: int                   # 已重规划次数
     should_replan: bool                 # 是否需要重规划
+    rewrite_count: int                  # 已重写答案次数
+    should_rewrite: bool                # 是否需要重写答案（needs_rewrite）
+    rewrite_feedback: str               # 重写反馈（issues+suggestions 拼接）
 
     # ============ Scribe 输出 ============
     final_answer: str                   # 最终答案

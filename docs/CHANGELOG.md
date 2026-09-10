@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-09-10（集群3.1：反思 needs_rewrite 分支 + RAG 评测基线）
+
+### needs_rewrite 分支（关闭 11-EVOLUTION 缺口）
+- `CriticAgent` 新增 `should_rewrite`/`rewrite_count`/`rewrite_feedback`（result=needs_rewrite 且未超 `max_rewrite` 时触发）。
+- `ExecutorAgent.rewrite_answer`：据 Critic 反馈重写答案（不重跑工具，失败回退原草稿）。
+- `graph/builder.py` 新增 `rewrite` 节点 + `critic→rewrite→critic` 循环边；`route_after_critic` 增加 rewrite 分支。
+- 配置 `reflection.max_rewrite`（默认 1）。
+
+### RAG 检索质量基线（纯向量，混合检索未启 rerank）
+- 真机 `sekb rag-eval` 30 条黄金集基线：**context_recall 0.512 / context_precision 0.468 / faithfulness 0.890 / answer_relevance 0.762**。
+- 修复 `RagEvalRunner` 用户隔离导致检索为空的 bug（默认 `user_id=None` 全库检索）。
+
+---
+
 ## 2026-09-10（集群1：Redis L2 中期记忆落地）
 
 ### Redis L2 会话记忆

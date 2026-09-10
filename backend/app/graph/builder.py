@@ -90,11 +90,13 @@ def route_after_critic(
     根据反思策略决定：
     - 通过 → scribe
     - 需要重规划 → planner（循环）
+    - 需要重写答案 → rewrite（循环，needs_rewrite 分支）
     """
     if reflection_strategy.should_replan(state):
         return "planner"
-    else:
-        return "scribe"
+    if state.get("should_rewrite"):
+        return "rewrite"
+    return "scribe"
 
 
 # ============================================================
@@ -330,9 +332,30 @@ class GraphBuilder:
                 state, self.vector_store, self.config, self.llm_factory
             )
 
+        # needs_rewrite 分支：根据 Critic 反馈重写答案（不重跑工具）
+        async def _rewrite(state: GraphState) -> dict[str, Any]:
+            executor_agent = self.agents["executor"]
+            try:
+                from app.tools.rag.format import format_rag_executor_reference
+
+                rag_context = format_rag_executor_reference(
+                    state.get("pre_retrieval_results", [])
+                )
+                new_draft = await executor_agent.rewrite_answer(
+                    user_input=state.get("user_input", ""),
+                    draft_answer=state.get("draft_answer", ""),
+                    feedback=state.get("rewrite_feedback", ""),
+                    rag_context=rag_context,
+                )
+                return {"draft_answer": new_draft}
+            except Exception as e:
+                logger.warning("答案重写节点失败，保留原草稿", error=str(e))
+                return {"draft_answer": state.get("draft_answer", "")}
+
         workflow.add_node("chat_simple", _chat_simple)
         workflow.add_node("clarify", _clarify)
         workflow.add_node("rag_retrieval", _rag_retrieval)
+        workflow.add_node("rewrite", _rewrite)
 
         # ============ 添加边 ============
 
@@ -373,8 +396,12 @@ class GraphBuilder:
             {
                 "scribe": "scribe",
                 "planner": "planner",
+                "rewrite": "rewrite",
             },
         )
+
+        # 重写答案 → Critic（重新评估）
+        workflow.add_edge("rewrite", "critic")
 
         # Scribe → END
         workflow.add_edge("scribe", END)
