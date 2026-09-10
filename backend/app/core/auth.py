@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -19,6 +20,10 @@ from app.core.exceptions import AuthError
 security = HTTPBearer(auto_error=False)
 
 JWT_ALGORITHM = "HS256"
+
+# jti 黑名单（SEC-02：登出后 token 立即失效）。单 worker 内存实现；
+# 多 worker 部署需外置 Redis（与 L2 记忆同源），见 11-EVOLUTION。
+_jti_blacklist: set[str] = set()
 
 
 # 弱密钥占位词：命中即判定为不安全（SEC-01）
@@ -66,26 +71,55 @@ def verify_password(password: str, stored_hash: str) -> bool:
 
 
 def create_jwt(user_id: str) -> str:
-    """创建 JWT，有效期 72 小时。"""
+    """创建 JWT，有效期由配置决定（默认 90 天），含 jti 供登出吊销。"""
     config = get_config()
     expire_hours = config.api.auth.token_expire_hours
     payload = {
         "sub": user_id,
+        "jti": uuid.uuid4().hex,
         "exp": datetime.now(timezone.utc) + timedelta(hours=expire_hours),
         "iat": datetime.now(timezone.utc),
     }
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
+def revoke_jwt(jti: str) -> None:
+    """把 jti 加入黑名单（登出后 token 立即失效）。"""
+    if jti:
+        _jti_blacklist.add(jti)
+
+
+def revoke_token(token: str) -> None:
+    """解码 token 并吊销其 jti（登出用）；解码失败静默忽略。"""
+    try:
+        payload = jwt.decode(
+            token,
+            get_jwt_secret(),
+            algorithms=[JWT_ALGORITHM],
+            options={"verify_exp": False},  # 允许吊销已过期 token（无害）
+        )
+    except jwt.InvalidTokenError:
+        return
+    revoke_jwt(payload.get("jti", ""))
+
+
+def _is_revoked(payload: dict[str, Any]) -> bool:
+    """判断 token 的 jti 是否已被吊销。"""
+    jti = payload.get("jti")
+    return bool(jti) and jti in _jti_blacklist
+
+
 def verify_jwt(token: str) -> dict[str, Any]:
-    """验证 JWT，返回 payload。"""
+    """验证 JWT，返回 payload；吊销或无效则抛 AuthError。"""
     try:
         payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
-        return payload
     except jwt.ExpiredSignatureError:
         raise AuthError("登录已过期，请重新登录")
     except jwt.InvalidTokenError:
         raise AuthError("无效的 token")
+    if _is_revoked(payload):
+        raise AuthError("token 已失效，请重新登录")
+    return payload
 
 
 async def get_current_user(

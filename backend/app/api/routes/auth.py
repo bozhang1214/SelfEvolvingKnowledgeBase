@@ -6,12 +6,15 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.audit import AuditAction, audit_log, get_client_ip
 from app.core.auth import (
     create_jwt,
     get_current_user,
     hash_password,
+    revoke_token,
+    security,
     verify_password,
 )
 from app.core.metrics import record_login_attempt, record_register_attempt
@@ -149,8 +152,14 @@ async def login(body: LoginRequest, request: Request):
 
 
 @router.post("/logout")
-async def logout(request: Request, user_id: str = Depends(get_current_user)):
-    """用户登出（客户端清除 token 即可）"""
+async def logout(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    user_id: str = Depends(get_current_user),
+):
+    """用户登出：吊销当前 token 的 jti，使其立即失效（SEC-02）。"""
+    if credentials is not None:
+        revoke_token(credentials.credentials)
     client_ip = get_client_ip(request)
     logger.info("用户登出", extra={"user_id": user_id})
     audit_log(AuditAction.LOGOUT, user_id=user_id, success=True, ip=client_ip)

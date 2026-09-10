@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-09-10（集群3.2/3.3 + 文档回填）
+
+### JWT jti 黑名单（SEC-02）
+- `create_jwt` 增加 `jti`；`revoke_token`/`revoke_jwt` 吊销；`verify_jwt` 校验黑名单；`POST /auth/logout` 吊销当前 token（登出即失效）。
+
+### PromptRegistry
+- 新增 `agents/prompts/registry.py`：路径配置化 + 缓存 + 热重载 + 版本哈希（sha256 短哈希）；`bootstrap` 装配 `prompt_registry`（`prompt/` 目录），供硬编码模板逐步迁移。
+
+### 文档回填
+- `docs/tmp/简历补强与SEKB增强待办.md`：标记 1/2/3a/3b 已完成、4/5 部分完成。
+- `docs/BACKLOG.md`：顶部新增「合并集群索引」，对齐集群2/5/1/3 状态与提交。
+
+---
+
 ## 2026-09-10（集群3.1：反思 needs_rewrite 分支 + RAG 评测基线）
 
 ### needs_rewrite 分支（关闭 11-EVOLUTION 缺口）

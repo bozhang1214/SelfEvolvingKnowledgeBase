@@ -94,6 +94,8 @@ class AppContext:
     job_agent: Any = None
     # L2 中期记忆（Redis，可选）：仅当 memory.l2_session.enabled=True 且连接可用时装配
     session_memory: Any = None
+    # Prompt 模板注册表（路径配置化 + 热重载 + 版本）
+    prompt_registry: Any = None
 
 
 async def initialize_app(config_path: str = "config.yaml") -> AppContext:
@@ -179,6 +181,11 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         except Exception as e:
             logger.warning("L2 中期记忆装配失败，降级为未启用", error=str(e))
             session_memory = None
+
+    # 6.6 创建 Prompt 模板注册表（路径配置化 + 热重载 + 版本）
+    from app.agents.prompts.registry import PromptRegistry
+
+    prompt_registry = PromptRegistry("prompt")
 
     # 7. 创建并初始化工具注册表
     tool_registry = ToolRegistry(config)
@@ -288,6 +295,7 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         news_agent=news_agent,
         job_agent=job_agent,
         session_memory=session_memory,
+        prompt_registry=prompt_registry,
     )
     return _app_context
 
