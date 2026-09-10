@@ -1,0 +1,32 @@
+[
+  {
+    "test_id": "RAG-01",
+    "query": "Python 装饰器是什么？有什么用途？",
+    "ground_truth": "装饰器是 Python 中用于在不修改原函数代码的前提下增强函数行为的语法糖，本质是接收函数并返回新函数的高阶函数，常用于日志、权限校验、缓存、计时等横切关注点。"
+  },
+  {
+    "test_id": "RAG-02",
+    "query": "Python 的 asyncio 事件循环是如何处理并发任务的？",
+    "ground_truth": "asyncio 通过单线程事件循环调度协程，在 await 挂起点让出控制权，用 async/await 实现非阻塞并发，适合 IO 密集型任务，配合 asyncio.gather 并发执行多个协程。"
+  },
+  {
+    "test_id": "RAG-03",
+    "query": "LangGraph 相比 LangChain 的 Chain 有什么优势？",
+    "ground_truth": "LangGraph 用图结构（节点+边）表达工作流，支持循环、条件路由、状态管理和可检查点，比线性 Chain 更适合构建带反思/重规划的多智能体 Agent。"
+  },
+  {
+    "test_id": "RAG-04",
+    "query": "RAG 的完整链路包含哪些环节？",
+    "ground_truth": "RAG 完整链路包括文档解析、文本分块、Embedding 向量化、向量库存储、检索召回（向量/关键词/混合）、重排（Rerank），以及把检索结果注入提示词生成答案。"
+  },
+  {
+    "test_id": "RAG-05",
+    "query": "Agent 的短期记忆和长期记忆分别如何设计？",
+    "ground_truth": "短期记忆用滑动窗口保存最近对话并在超限时压缩摘要；长期记忆用向量库持久化知识条目，按重要性评分与相似度合并维护，检索时按用户隔离召回。"
+  },
+  {
+    "test_id": "RAG-06",
+    "query": "多智能体协作的常见模式有哪些？",
+    "ground_truth": "常见模式包括监督者-执行者（Supervisor 路由）、规划-执行-反思（Plan-Execute-Critic 带重规划循环）、以及按角色分工的编排模式，通过状态图与条件边实现任务分配与通信。"
+  }
+]

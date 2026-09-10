@@ -32,7 +32,7 @@ from app.api.server import get_app_context
 from app.core.access import require_full_access
 from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
-from app.core.exceptions import SEKBError
+from app.core.exceptions import SecurityError, SEKBError
 from app.core.logging import bind_context, clear_context, get_logger
 from app.core.metrics import record_chat_error, record_chat_metrics
 from app.core.token_sink import reset_token_sink, set_token_sink
@@ -129,6 +129,23 @@ async def _run_chat(
         ``intent_confidence`` / ``metrics`` / ``trace_id`` / ``latency_ms`` 的字典
     """
     user_input = request.message
+
+    # 0. Prompt 注入防护（规则层 + 可选 LLM 层）
+    sec_cfg = ctx.config.security
+    if sec_cfg.prompt_injection_guard is True:
+        from app.core.guard import check_prompt_injection
+
+        blocked, reason = await check_prompt_injection(
+            user_input,
+            blocked_patterns=sec_cfg.blocked_patterns,
+            max_input_length=sec_cfg.max_input_length,
+            llm_factory=ctx.llm_factory,
+            use_llm_guard=sec_cfg.prompt_injection_use_llm,
+            llm_role=sec_cfg.prompt_injection_llm_role,
+        )
+        if blocked:
+            logger.warning("Prompt 注入拦截", user_id=user_id, reason=reason)
+            raise SecurityError("输入被安全策略拦截", details={"reason": reason})
 
     graph_input = user_input
 
@@ -254,6 +271,13 @@ async def _run_chat(
     }
     await ctx.storage.append_message(conv_id, user_msg)
 
+    # 记录本轮 RAG 命中的知识条目 ID，供反馈飞轮（thumbs up/down）调整条目重要性
+    rag_entry_ids = [
+        r.get("entry_id")
+        for r in (state_dict.get("pre_retrieval_results") or [])
+        if r.get("entry_id")
+    ]
+
     assistant_msg = {
         "role": "assistant",
         "content": answer,
@@ -262,6 +286,7 @@ async def _run_chat(
         "tokens_output": metrics.get("total_output_tokens", 0),
         "latency_ms": latency_ms,
         "trace_id": trace_id,
+        "rag_entry_ids": rag_entry_ids,
         # NEW-F 修复：持久化重试/降级质量指标，提升可追溯性
         "llm_retried": metrics.get("llm_retried", False),
         "llm_retry_count": metrics.get("llm_retry_count", 0),

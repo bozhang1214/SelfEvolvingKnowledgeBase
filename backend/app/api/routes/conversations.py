@@ -300,10 +300,28 @@ async def rate_message(
     except SEKBError as e:
         raise _handle_sekb_error(e, conv_id) from e
 
+    # 反馈数据飞轮：消费 thumbs 反馈，调整被引用知识条目的重要性
+    flywheel_result = {"adjusted": 0, "deleted": 0}
+    try:
+        target = next((m for m in messages if m.get("msg_id") == request.msg_id), None)
+        rag_entry_ids = (target or {}).get("rag_entry_ids") or []
+        if rag_entry_ids and ctx.knowledge_base is not None:
+            from app.services.feedback_service import apply_feedback
+
+            flywheel_result = await apply_feedback(
+                ctx.knowledge_base,
+                rating=request.rating,
+                rag_entry_ids=list(rag_entry_ids),
+                comment=request.comment or "",
+            )
+    except Exception as e:  # noqa: BLE001 - 反馈飞轮失败不影响反馈记录本身
+        logger.warning("反馈飞轮执行失败", conv_id=conv_id, error=str(e))
+
     return {
         "conv_id": conv_id,
         "msg_id": request.msg_id,
         "rating": request.rating,
         "feedback_id": feedback_id,
         "recorded": True,
+        "flywheel": flywheel_result,
     }

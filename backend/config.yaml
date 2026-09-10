@@ -67,6 +67,16 @@ llm:
       temperature: 0.3
       max_tokens: 4000                 # 单步输出为结构化 JSON，4000 token 足够
       response_format: json
+    rerank:                            # 检索重排 / 查询改写（低温度 JSON/短文本）
+      model: deepseek-chat
+      temperature: 0.0
+      max_tokens: 1000
+      response_format: json
+    ragas:                             # RAG 检索质量裁判（低温度 JSON 打分）
+      model: deepseek-chat
+      temperature: 0.0
+      max_tokens: 1000
+      response_format: json
 
   # 降级链：reasoner 不可用 → 降级 chat；chat 不可用 → 返回错误提示
   fallback:
@@ -115,6 +125,17 @@ memory:
     retrieval_top_k: 5                  # 检索返回 Top-5 结果
     importance_threshold: 0.3           # 入库最低重要性阈值，低于此值跳过
     allow_hash_fallback: false          # 生产禁用哈希降级；开发无模型时可设 true
+    # RAG 检索增强：混合检索（向量+BM25）+ 可选重排/查询改写
+    retrieval:
+      hybrid_enabled: true              # 启用「向量 + BM25」多路召回 + RRF 融合
+      bm25_enabled: true                # BM25 关键词通道
+      bm25_cache_ttl: 300               # BM25 索引缓存 5 分钟
+      bm25_page_size: 1000              # 分页拉取语料每页条数
+      rerank_enabled: false             # LLM 列表式重排（默认关，控制延迟）
+      rerank_top_n: 0                   # 0 = 用 top_k
+      rerank_role: rerank
+      query_rewrite_enabled: false      # 查询改写（默认关）
+      query_rewrite_role: rerank
     eviction:
       max_items: 10000                  # 单用户最大知识条目数
       stale_days: 7                     # 超过 7 天未访问视为陈旧
@@ -161,6 +182,10 @@ evaluation:
   regression:
     pass_rate_drop_threshold: 0.05      # 通过率下降 > 5% 视为高危回归
     metric_drop_threshold: 0.05         # 任一指标均值下降 > 5% 视为指标回归
+  # RAGAS 式检索质量评测（LLM-as-Judge）
+  ragas:
+    role: ragas                         # 裁判 LLM 角色
+    top_k: 5                            # 每次评测检索返回条数
 
 # ============ 成本控制 ============
 cost_control:
@@ -235,6 +260,8 @@ storage:
 security:
   pii_masking: true                     # 敏感信息脱敏（日志中自动遮盖 API Key 等）
   prompt_injection_guard: true          # Prompt 注入防护（检测并拦截恶意指令）
+  prompt_injection_use_llm: false       # 是否启用 LLM 层注入检测（额外延迟，默认关）
+  prompt_injection_llm_role: ragas      # LLM 层检测使用的角色
   max_input_length: 8000                 # 单次输入最大字符数
   # Prompt 注入防护拦截模式（正则匹配）
   blocked_patterns:

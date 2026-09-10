@@ -104,12 +104,26 @@ class EvictionConfig(BaseModel):
     similarity_merge_threshold: float = 0.95
 
 
+class RetrievalConfig(BaseModel):
+    """RAG 检索增强配置（混合检索 / 重排 / 查询改写）"""
+    hybrid_enabled: bool = False           # 是否启用「向量 + BM25」混合检索
+    bm25_enabled: bool = True              # 混合检索内是否启用 BM25 关键词通道
+    bm25_cache_ttl: int = 300              # BM25 索引缓存秒数
+    bm25_page_size: int = 1000             # 分页拉取语料每页条数
+    rerank_enabled: bool = False           # 是否启用 LLM 列表式重排
+    rerank_top_n: int = 0                  # 重排后保留条数（0 = 用 top_k）
+    rerank_role: str = "rerank"            # 重排 LLM 角色
+    query_rewrite_enabled: bool = False    # 是否启用查询改写
+    query_rewrite_role: str = "rerank"     # 查询改写 LLM 角色
+
+
 class L3MemoryConfig(BaseModel):
     """L3 长期知识库配置（Phase 2）"""
     enabled: bool = False
     retrieval_top_k: int = 5
     importance_threshold: float = 0.3
     eviction: EvictionConfig = EvictionConfig()
+    retrieval: RetrievalConfig = RetrievalConfig()
     # 生产环境禁用哈希降级：embedding 模型加载失败时应报错而非静默降级为哈希向量
     # （哈希向量维度 256 与 bge 模型 512 不一致，混用会破坏 ChromaDB HNSW 索引）
     allow_hash_fallback: bool = False
@@ -177,6 +191,12 @@ class RegressionConfig(BaseModel):
     metric_drop_threshold: float = 0.05
 
 
+class RagasConfig(BaseModel):
+    """RAGAS 式检索质量评测配置（LLM-as-Judge）"""
+    role: str = "ragas"          # 裁判 LLM 角色
+    top_k: int = 5               # 每次评测检索返回条数
+
+
 class EvaluationConfig(BaseModel):
     """评估体系配置"""
     enabled: bool = True
@@ -184,6 +204,7 @@ class EvaluationConfig(BaseModel):
     log_path: str = "data/eval_logs"
     metrics: EvaluationMetricsConfig = EvaluationMetricsConfig()
     regression: RegressionConfig = RegressionConfig()
+    ragas: RagasConfig = RagasConfig()
 
 
 class PricingConfig(BaseModel):
@@ -258,6 +279,8 @@ class SecurityConfig(BaseModel):
     """安全配置"""
     pii_masking: bool = True
     prompt_injection_guard: bool = True
+    prompt_injection_use_llm: bool = False   # 是否启用 LLM 层注入检测（额外延迟）
+    prompt_injection_llm_role: str = "ragas"  # LLM 层检测使用的角色
     max_input_length: int = 8000
     blocked_patterns: list[str] = []
 

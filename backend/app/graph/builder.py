@@ -195,12 +195,14 @@ async def rag_retrieval_node(
     state: GraphState,
     vector_store: Any,
     config: AppConfig,
+    llm_factory: Any = None,
 ) -> dict[str, Any]:
     """
     RAG 预检索节点：在 Supervisor 之后、Planner 之前执行知识库检索。
 
     根据意图从知识库中检索相关信息，注入到 state 的 pre_retrieval_results。
     当 vector_store 为 None（L3 未启用）时，静默跳过。
+    当配置启用混合检索时，将 vector_store 包装为 HybridRetriever（向量+BM25+可选重排）。
     """
     if vector_store is None:
         # L3 未启用，直接跳过
@@ -212,6 +214,26 @@ async def rag_retrieval_node(
 
     try:
         from app.tools.rag.retriever import RAGRetriever
+
+        # 混合检索：向量 + BM25 多路召回 → RRF 融合 → 可选重排
+        retrieval_cfg = config.memory.l3_knowledge.retrieval
+        if retrieval_cfg.hybrid_enabled:
+            from app.tools.rag.hybrid import HybridRetriever
+
+            vector_store = HybridRetriever(
+                vector_store,
+                config={
+                    "bm25_enabled": retrieval_cfg.bm25_enabled,
+                    "bm25_cache_ttl": retrieval_cfg.bm25_cache_ttl,
+                    "bm25_page_size": retrieval_cfg.bm25_page_size,
+                    "rerank_enabled": retrieval_cfg.rerank_enabled,
+                    "rerank_top_n": retrieval_cfg.rerank_top_n,
+                    "rerank_role": retrieval_cfg.rerank_role,
+                    "query_rewrite_enabled": retrieval_cfg.query_rewrite_enabled,
+                    "query_rewrite_role": retrieval_cfg.query_rewrite_role,
+                },
+                llm_factory=llm_factory,
+            )
 
         rag_config = {
             "retrieval_top_k": config.memory.l3_knowledge.retrieval_top_k,
@@ -304,7 +326,9 @@ class GraphBuilder:
 
         # Phase 2: RAG 检索节点
         async def _rag_retrieval(state: GraphState) -> dict[str, Any]:
-            return await rag_retrieval_node(state, self.vector_store, self.config)
+            return await rag_retrieval_node(
+                state, self.vector_store, self.config, self.llm_factory
+            )
 
         workflow.add_node("chat_simple", _chat_simple)
         workflow.add_node("clarify", _clarify)

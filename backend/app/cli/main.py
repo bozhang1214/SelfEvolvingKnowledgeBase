@@ -132,6 +132,51 @@ def eval(
 
 
 # ============================================================
+# 子命令：rag-eval
+# ============================================================
+
+@app.command()
+def rag_eval(
+    dataset: str = typer.Option(
+        "app/eval/datasets/rag_golden.json",
+        "--dataset",
+        "-d",
+        help="RAG 检索黄金数据集 JSON 文件路径",
+    ),
+    output: str = typer.Option(
+        "tests/reports/rag_eval_report.md",
+        "--output",
+        "-o",
+        help="评测报告输出路径（Markdown）",
+    ),
+    config_path: str = typer.Option(
+        "config.yaml", "--config", help="配置文件路径"
+    ),
+) -> None:
+    """运行 RAG 检索质量评测（context recall/precision、faithfulness、answer relevance）。"""
+    from app.cli.rag_eval import run_rag_eval
+
+    async def _run() -> None:
+        try:
+            ctx = await initialize_app(config_path)
+        except SEKBError as e:
+            console.print(f"[red]初始化失败: {e.message}[/red]")
+            raise typer.Exit(code=1)
+        try:
+            await run_rag_eval(dataset, output, ctx)
+        except SEKBError as e:
+            console.print(f"[red]评测失败: {e.message}[/red]")
+            raise typer.Exit(code=1)
+        except Exception as e:
+            console.print(f"[red]评测意外错误: {e}[/red]")
+            raise typer.Exit(code=1)
+        finally:
+            await shutdown_app(ctx)
+
+    asyncio.run(_run())
+
+
+# ============================================================
 # 子命令：health
 # ============================================================
 

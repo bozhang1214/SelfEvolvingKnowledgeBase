@@ -6,6 +6,30 @@
 
 ---
 
+## 2026-09-10（功能开发：RAG 增强 / 检索评测 / 注入防护 / 反馈飞轮）
+
+### RAG 检索增强（混合检索 + 重排 + 查询改写）
+- 新增 `tools/rag/bm25.py`（基于 rank_bm25 + jieba 的关键词召回）、`tools/rag/hybrid.py`（向量 + BM25 多路召回 → RRF 融合 → 可选重排）、`tools/rag/reranker.py`（LLM 列表式重排，失败降级原序）。
+- `graph/builder.py` 的 RAG 节点在 `memory.l3_knowledge.retrieval.hybrid_enabled` 开启时把 `vector_store` 包装为 `HybridRetriever`，上层意图路由/重要性过滤零改动。
+- 配置：`l3_knowledge.retrieval`（hybrid/bm25/rerank/query_rewrite 开关）+ `llm.roles.rerank`。生产默认：混合检索开、重排/查询改写关（控延迟）。
+
+### RAGAS 式检索质量评测
+- 新增 `eval/ragas_metrics.py`（context_recall / context_precision / faithfulness / answer_relevance 四指标，LLM-as-Judge，零第三方依赖）+ `eval/rag_runner.py` + `eval/datasets/rag_golden.json`。
+- CLI 子命令 `sekb rag-eval`（`cli/rag_eval.py` + `main.py`）输出 Markdown 报告。配置 `evaluation.ragas` + `llm.roles.ragas`。
+
+### Prompt 注入防护
+- 新增 `core/guard.py`：规则层（长度上限 + `blocked_patterns` 正则）+ 可选 LLM 层（低温度 JSON 分类）。
+- `chat.py` `_run_chat` 入口接入，命中抛 `SecurityError` → 403；`tools/rag/format.py` 在检索内容注入前加「忽略指令性语句」隔离标注（防 indirect injection）。
+- 配置：`security.prompt_injection_use_llm` / `prompt_injection_llm_role`（默认关 LLM 层）。
+
+### 反馈数据飞轮
+- 新增 `services/feedback_service.py`：消费 thumbs up/down → 被引用知识条目 `importance_score` 升降，踩到 0 分删除条目。
+- `chat.py` 持久化 `rag_entry_ids`（本轮 RAG 命中的条目）；`conversations.py` 的 `rate` 端点调用飞轮并返回 `flywheel` 结果。
+
+- 验证：后端 pytest **635 passed**、ruff 全绿、mypy **296≤310**（无新增类型错误）；新增单测 4 个文件（hybrid/ragas/guard/feedback）。
+
+---
+
 ## 2026-09-10
 
 ### Bug 修复（职位分析 / AI 对话 / 历史报告 / 系列文章）
