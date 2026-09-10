@@ -6,6 +6,19 @@
 
 ---
 
+## 2026-09-10（集群1：Redis L2 中期记忆落地）
+
+### Redis L2 会话记忆
+- 新增 `memory/session_memory.py`：`RedisSessionMemory`（实现 `SessionMemoryBackend`），基于 Redis 的跨会话偏好（Hash + TTL）与近期话题（List + LRU 截断 + TTL），连接失败优雅降级。
+- `bootstrap` 条件装配 `session_memory`（`l2_session.enabled` 且 Redis 可达）；`shutdown_app` 释放连接；`AppContext` 新增 `session_memory` 字段。
+- `chat.py` `_run_chat` 在回复后 `record_topic` 记录本轮话题（失败不阻塞回复）。
+- 配置 `l2_session.enabled=true` + `redis_url`；docker-compose 启用 redis 服务（移除 `with-db` profile）。
+
+### rag-eval 修复
+- `RagEvalRunner` 新增 `user_id` 参数（默认 None=全库检索）；修复默认落到 `"default"` 用户导致检索为空、评测全 0 的问题。
+
+---
+
 ## 2026-09-10（集群5：RAG 收尾 + 注入防护补全）
 
 ### 黄金集扩充 + 注入防护补全

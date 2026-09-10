@@ -341,6 +341,15 @@ async def _run_chat(
             except Exception as e:
                 logger.warning("回写会话标题失败", error=str(e), conv_id=conv_id)
 
+    # L2 中期记忆（Redis）：记录本轮对话话题，供跨会话连续性使用（失败不阻塞回复）
+    if ctx.session_memory is not None:
+        try:
+            await ctx.session_memory.record_topic(
+                user_id, title or intent or user_input[:30], conv_id=conv_id
+            )
+        except Exception as e:
+            logger.warning("L2 记录话题失败", error=str(e))
+
     return {
         "conversation_id": conv_id,
         "answer": answer,

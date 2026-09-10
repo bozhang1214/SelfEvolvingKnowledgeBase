@@ -90,10 +90,12 @@ class L1MemoryConfig(BaseModel):
 
 
 class L2MemoryConfig(BaseModel):
-    """L2 中期记忆配置（Phase 2）"""
+    """L2 中期记忆配置（Phase 2，Redis 落地）"""
     enabled: bool = False
     max_items: int = 50
     eviction: str = "lru"
+    redis_url: str = "redis://localhost:6379/0"  # Redis 连接串
+    ttl_days: int = 30                            # 偏好/话题的过期天数
 
 
 class EvictionConfig(BaseModel):

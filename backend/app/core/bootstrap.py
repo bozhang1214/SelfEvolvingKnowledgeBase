@@ -92,6 +92,8 @@ class AppContext:
     news_scheduler: Any = None
     # 招聘分析 Agent 实例（Phase 2，可选）
     job_agent: Any = None
+    # L2 中期记忆（Redis，可选）：仅当 memory.l2_session.enabled=True 且连接可用时装配
+    session_memory: Any = None
 
 
 async def initialize_app(config_path: str = "config.yaml") -> AppContext:
@@ -157,6 +159,26 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
 
     # 6. 创建 L1 短期记忆
     memory = ShortTermMemory(config.memory.l1_working, llm_factory)
+
+    # 6.5 条件装配 L2 中期记忆（Redis；连接失败降级为 None，不阻断启动）
+    session_memory = None
+    if config.memory.l2_session.enabled:
+        try:
+            from app.memory.session_memory import RedisSessionMemory
+
+            session_memory = RedisSessionMemory(
+                redis_url=config.memory.l2_session.redis_url,
+                max_items=config.memory.l2_session.max_items,
+                ttl_days=config.memory.l2_session.ttl_days,
+            )
+            if await session_memory.ping():
+                logger.info("L2 中期记忆已启用（Redis）", url=config.memory.l2_session.redis_url)
+            else:
+                logger.warning("L2 中期记忆 Redis 不可达，降级为未启用")
+                session_memory = None
+        except Exception as e:
+            logger.warning("L2 中期记忆装配失败，降级为未启用", error=str(e))
+            session_memory = None
 
     # 7. 创建并初始化工具注册表
     tool_registry = ToolRegistry(config)
@@ -265,6 +287,7 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         knowledge_ingester=knowledge_ingester,
         news_agent=news_agent,
         job_agent=job_agent,
+        session_memory=session_memory,
     )
     return _app_context
 
@@ -299,5 +322,12 @@ async def shutdown_app(ctx: AppContext) -> None:
     # 当前无需显式 close；若后续接入需要释放的资源，在此补充。
     if ctx.knowledge_base is not None:
         logger.info("L3 知识库已随应用关闭自动持久化")
+
+    # L2 中期记忆（Redis）连接释放
+    if ctx.session_memory is not None and hasattr(ctx.session_memory, "close"):
+        try:
+            await ctx.session_memory.close()
+        except Exception as e:
+            logger.warning("L2 中期记忆关闭异常", error=str(e))
 
     logger.info("应用已关闭")

@@ -219,13 +219,11 @@ services:
         limits:
           memory: 1G
 
-  # ============ 可选：Redis（Phase 2 L2 记忆迁移后启用）============
-  # 当 L2 session memory 从本地内存迁移到 Redis 时启用。
+  # ============ Redis（L2 中期记忆，2026-09-10 启用）============
   redis:
     image: redis:7-alpine
     container_name: sekb-redis
     restart: unless-stopped
-    profiles: ["with-db"]
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data

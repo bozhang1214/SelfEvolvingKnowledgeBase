@@ -113,11 +113,13 @@ memory:
     hard_token_limit: 4000              # 硬上限：永不超过
     compress_strategy: hierarchical     # 压缩策略：分层压缩
     max_compressed_summaries: 3         # 最多保留 3 条历史摘要
-  # L2 中期记忆：跨会话偏好/历史话题（Phase 2 Redis 实现，当前预留）
+  # L2 中期记忆：跨会话偏好/历史话题（Redis 落地）
   l2_session:
-    enabled: false                      # 当前未启用，接口已预留
-    max_items: 50                       # 每用户最多保存 50 条偏好
+    enabled: true                       # 已启用 Redis（2026-09-10）
+    max_items: 50                       # 每用户最多保存 50 条近期话题
     eviction: lru                       # 过期策略：最近最少使用
+    redis_url: redis://redis:6379/0     # 容器内用服务名 redis；宿主机调试改 localhost
+    ttl_days: 30                        # 偏好/话题过期天数
   # L3 长期知识库：向量库 + 结构化索引
   l3_knowledge:
     enabled: true                       # 已启用 ChromaDB

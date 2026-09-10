@@ -87,12 +87,15 @@ class RagEvalRunner:
         top_k: int = 5,
         judge_role: str = "ragas",
         answer_role: str = "executor",
+        user_id: str | None = None,
     ) -> None:
         self.vector_store = vector_store
         self.llm_factory = llm_factory
         self.top_k = top_k
         self.judge_role = judge_role
         self.answer_role = answer_role
+        # None = 不过滤用户（单用户部署直接检索全库；多用户时按需传入具体 user_id）
+        self.user_id = user_id
         if config is not None:
             ragas_cfg = getattr(config.evaluation, "ragas", None)
             if ragas_cfg is not None:
@@ -128,10 +131,12 @@ class RagEvalRunner:
         if not query:
             raise EvaluationError(f"用例缺少 query 字段: {test_id}")
 
-        # 1. 检索
+        # 1. 检索（user_id=None 表示不过滤用户，覆盖全库）
         contexts: list[str] = []
         if self.vector_store is not None:
-            results = await self.vector_store.search(query, top_k=self.top_k)
+            results = await self.vector_store.search(
+                query, user_id=self.user_id, top_k=self.top_k
+            )
             contexts = [r.get("content", "") for r in results if r.get("content")]
 
         # 2. 生成答案（仅当有上下文或 LLM 可用）
