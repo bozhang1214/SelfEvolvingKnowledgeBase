@@ -51,3 +51,19 @@ export interface StreamChunk {
   meta?: ChatMeta;
   error?: string;
 }
+
+/** 对话/用户维度的 token 与费用统计 */
+export interface UsageStats {
+  input_tokens: number;
+  output_tokens: number;
+  tokens: number;
+  calls: number;
+  cost_usd: number;
+  cost_cny: number;
+}
+
+export interface UsageResponse {
+  enabled: boolean;
+  conversation: UsageStats;
+  total: UsageStats;
+}

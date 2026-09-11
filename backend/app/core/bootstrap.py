@@ -96,6 +96,8 @@ class AppContext:
     session_memory: Any = None
     # Prompt 模板注册表（路径配置化 + 热重载 + 版本）
     prompt_registry: Any = None
+    # 对话 token/费用统计（Redis，可选）
+    usage_service: Any = None
 
 
 async def initialize_app(config_path: str = "config.yaml") -> AppContext:
@@ -186,6 +188,25 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
     from app.agents.prompts.registry import PromptRegistry
 
     prompt_registry = PromptRegistry("prompt")
+
+    # 6.7 条件装配对话用量统计（Redis；连接失败降级为 None，不阻断启动）
+    usage_service = None
+    if config.cost_control.usage.enabled:
+        try:
+            from app.services.usage_service import UsageService
+
+            usage_service = UsageService(
+                redis_url=config.cost_control.usage.redis_url,
+                usd_to_cny=config.cost_control.usd_to_cny,
+            )
+            if await usage_service.ping():
+                logger.info("对话用量统计已启用（Redis）", url=config.cost_control.usage.redis_url)
+            else:
+                logger.warning("对话用量统计 Redis 不可达，降级为未启用")
+                usage_service = None
+        except Exception as e:
+            logger.warning("对话用量统计装配失败，降级为未启用", error=str(e))
+            usage_service = None
 
     # 7. 创建并初始化工具注册表
     tool_registry = ToolRegistry(config)
@@ -296,6 +317,7 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         job_agent=job_agent,
         session_memory=session_memory,
         prompt_registry=prompt_registry,
+        usage_service=usage_service,
     )
     return _app_context
 
@@ -337,5 +359,12 @@ async def shutdown_app(ctx: AppContext) -> None:
             await ctx.session_memory.close()
         except Exception as e:
             logger.warning("L2 中期记忆关闭异常", error=str(e))
+
+    # 对话用量统计（Redis）连接释放
+    if ctx.usage_service is not None and hasattr(ctx.usage_service, "close"):
+        try:
+            await ctx.usage_service.close()
+        except Exception as e:
+            logger.warning("对话用量统计关闭异常", error=str(e))
 
     logger.info("应用已关闭")

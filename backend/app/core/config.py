@@ -215,9 +215,17 @@ class PricingConfig(BaseModel):
     output: float
 
 
+class UsageConfig(BaseModel):
+    """费用/用量统计存储配置（Redis，用于对话 token 与费用展示）"""
+    enabled: bool = True
+    redis_url: str = "redis://localhost:6379/0"
+
+
 class CostControlConfig(BaseModel):
-    """成本控制配置（预算检查/熔断字段原为占位，按 D3 删除，仅保留定价表）"""
+    """成本控制配置（仅保留定价表 + 费用统计；预算占位已按 D3 删除）"""
     pricing: dict[str, PricingConfig] = {}
+    usd_to_cny: float = 7.2              # USD → CNY 固定汇率（费用展示用）
+    usage: UsageConfig = UsageConfig()
 
 
 class LangSmithConfig(BaseModel):

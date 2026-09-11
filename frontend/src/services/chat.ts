@@ -1,6 +1,6 @@
 import apiClient, { unwrap, API_BASE } from './api';
 import type { ApiResponse } from '@/types/api';
-import type { Conversation, Message, ChatMeta } from '@/types/chat';
+import type { Conversation, Message, ChatMeta, UsageResponse } from '@/types/chat';
 
 export async function listConversations(): Promise<Conversation[]> {
   const res = await apiClient.get<ApiResponse<Conversation[]>>('/conversations');
@@ -29,6 +29,14 @@ export async function updateConversation(convId: string, data: { title?: string;
 
 export async function deleteConversation(convId: string): Promise<void> {
   await apiClient.delete(`/conversations/${convId}`);
+}
+
+/** 获取当前对话与用户累计的 token / 费用统计 */
+export async function getUsage(conversationId?: string): Promise<UsageResponse> {
+  const res = await apiClient.get<ApiResponse<UsageResponse>>('/chat/usage', {
+    params: conversationId ? { conversation_id: conversationId } : {},
+  });
+  return unwrap(res);
 }
 
 // SSE 流式聊天

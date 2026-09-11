@@ -13,7 +13,8 @@ import { useUserStore } from '@/stores/user';
 import { logger } from '@/utils/logger';
 import { copyText, downloadTextFile } from '@/utils/clipboard';
 import { createChatShare } from '@/services/share';
-import type { Message } from '@/types/chat';
+import { getUsage } from '@/services/chat';
+import type { Message, UsageStats } from '@/types/chat';
 import { CodeBlock, buildConversationMarkdown, joinSelectedMessages } from '@/features/chat/markdown';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -54,6 +55,10 @@ const Chat: React.FC = () => {
   const [editMsgContent, setEditMsgContent] = useState('');
   // 滚动跟踪：是否靠近底部（用户上滚则停止自动跟随）
   const [atBottom, setAtBottom] = useState(true);
+  // 用量统计：当前对话 + 用户累计（token / 费用）
+  const [convUsage, setConvUsage] = useState<UsageStats | null>(null);
+  const [totalUsage, setTotalUsage] = useState<UsageStats | null>(null);
+  const [usageEnabled, setUsageEnabled] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -196,6 +201,23 @@ const Chat: React.FC = () => {
   };
 
   const currentMessages = currentConvId ? (messages[currentConvId] || []) : [];
+
+  // 刷新用量统计（当前对话 + 用户累计）；会话切换、消息数变化、流式结束后触发
+  const refreshUsage = React.useCallback(async () => {
+    try {
+      const res = await getUsage(currentConvId || undefined);
+      setUsageEnabled(res.enabled);
+      setConvUsage(res.conversation);
+      setTotalUsage(res.total);
+    } catch {
+      // 静默失败：统计不影响聊天
+    }
+  }, [currentConvId]);
+
+  useEffect(() => {
+    refreshUsage();
+  }, [refreshUsage, currentMessages.length, isThisConvStreaming]);
+
   // 思考阶段（有 thinkingContent 但无 streamingContent）不显示 assistant 气泡
   // 正常流式输出阶段（有 streamingContent）才显示 assistant 气泡
   const showStreamingBubble = isThisConvStreaming && streamingContent.length > 0;
@@ -436,6 +458,13 @@ const Chat: React.FC = () => {
           locale={{ emptyText: '暂无对话' }}
           style={{ flex: 1 }}
         />
+        {usageEnabled && totalUsage && totalUsage.tokens > 0 && (
+          <div style={{ padding: '10px 16px', borderTop: '1px solid #f0f0f0' }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              所有对话累计使用 {totalUsage.tokens.toLocaleString()} tokens，费用约为 ¥{totalUsage.cost_cny.toFixed(4)} 元
+            </Text>
+          </div>
+        )}
       </Sider>
 
       {/* 聊天主区域 */}
@@ -781,6 +810,11 @@ const Chat: React.FC = () => {
               </Text>
               <Button size="small" type="link" onClick={() => clearQueue(currentConvId || '')}>清空队列</Button>
             </div>
+          )}
+          {usageEnabled && convUsage && convUsage.tokens > 0 && (
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
+              该对话用了 {convUsage.tokens.toLocaleString()} tokens，费用约为 ¥{convUsage.cost_cny.toFixed(4)} 元
+            </Text>
           )}
         </div>
 

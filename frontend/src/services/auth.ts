@@ -85,3 +85,19 @@ export function getTokenExpiry(): Date | null {
   const exp = decodeJwtExp(token);
   return exp ? new Date(exp) : null;
 }
+
+/** 已登录用户修改密码（需原密码） */
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  await apiClient.post('/auth/change-password', {
+    old_password: oldPassword,
+    new_password: newPassword,
+  });
+}
+
+/** 忘记密码：邮箱 + 新密码直接重置 */
+export async function resetPassword(email: string, newPassword: string): Promise<void> {
+  await apiClient.post('/auth/reset-password', {
+    email,
+    new_password: newPassword,
+  });
+}

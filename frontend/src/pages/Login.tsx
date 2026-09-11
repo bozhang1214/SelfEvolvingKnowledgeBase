@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
-import { Form, Input, Button, Card, Typography, message, Space, Alert } from 'antd';
+import { Form, Input, Button, Card, Typography, message, Space, Alert, Modal } from 'antd';
 import { MailOutlined, LockOutlined } from '@ant-design/icons';
 import { useUserStore } from '@/stores/user';
 import { logger, maskEmail } from '@/utils/logger';
+import { resetPassword } from '@/services/auth';
 
 const { Title, Text } = Typography;
 
@@ -13,6 +14,20 @@ const Login: React.FC = () => {
   const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
+  // 忘记密码：邮箱 + 新密码直接重置
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetForm] = Form.useForm();
+
+  const handleReset = async (values: { email: string; new_password: string }) => {
+    try {
+      await resetPassword(values.email, values.new_password);
+      message.success('密码已重置，请使用新密码登录');
+      setResetOpen(false);
+      resetForm.resetFields();
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '重置失败，请稍后再试');
+    }
+  };
 
   const onFinish = async (values: { email: string; password: string }) => {
     setLoading(true);
@@ -79,9 +94,55 @@ const Login: React.FC = () => {
           <div style={{ textAlign: 'center' }}>
             <Text>还没有账户？</Text>
             <Link to="/register">立即注册</Link>
+            <span style={{ margin: '0 8px', color: '#d9d9d9' }}>|</span>
+            <a onClick={() => setResetOpen(true)}>忘记密码？</a>
           </div>
         </Space>
       </Card>
+
+      {/* 忘记密码：邮箱 + 新密码直接重置 */}
+      <Modal
+        title="重置密码"
+        open={resetOpen}
+        onCancel={() => setResetOpen(false)}
+        onOk={() => resetForm.submit()}
+        okText="重置密码"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <Form form={resetForm} layout="vertical" onFinish={handleReset}>
+          <Form.Item
+            name="email"
+            label="注册邮箱"
+            rules={[{ required: true, type: 'email', message: '请输入有效邮箱' }]}
+          >
+            <Input prefix={<MailOutlined />} placeholder="注册时使用的邮箱" />
+          </Form.Item>
+          <Form.Item
+            name="new_password"
+            label="新密码"
+            rules={[{ required: true, min: 8, message: '新密码至少 8 位' }]}
+          >
+            <Input.Password prefix={<LockOutlined />} placeholder="至少 8 位" autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item
+            name="confirm_password"
+            label="确认新密码"
+            dependencies={['new_password']}
+            rules={[
+              { required: true, message: '请再次输入新密码' },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue('new_password') === value) return Promise.resolve();
+                  return Promise.reject(new Error('两次输入的新密码不一致'));
+                },
+              }),
+            ]}
+          >
+            <Input.Password prefix={<LockOutlined />} placeholder="再次输入新密码" autoComplete="new-password" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

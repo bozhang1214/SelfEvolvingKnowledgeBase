@@ -6,6 +6,22 @@
 
 ---
 
+## 2026-09-10（对话费用展示 + 修改/忘记密码）
+
+### 对话 token / 费用展示
+- 新增 `services/usage_service.py`：按「对话」与「用户」两个维度用 Redis Hash（HINCRBY/HINCRBYFLOAT）累计 token 与费用；Redis 不可用静默降级。
+- `bootstrap` 条件装配 `usage_service`；`chat.py` 每次回复后累加本轮 token/费用；新增 `GET /api/v1/chat/usage` 返回当前对话 + 用户累计（人民币）。
+- 配置：`cost_control.usd_to_cny: 7.2`（固定汇率）+ `cost_control.usage`（Redis）。
+- 前端：对话输入框下方显示「该对话用了 N tokens，费用约 ¥X 元」；会话列表底部显示「所有对话累计使用 N tokens，费用约 ¥X 元」。
+
+### 修改密码 / 忘记密码（邮箱登录保持不变）
+- `POST /auth/change-password`（已登录，校验原密码）→ 设置页新增「修改密码」卡片。
+- `POST /auth/reset-password`（忘记密码，邮箱 + 新密码直接重置，无邮件验证；已限流 + 审计）→ 登录页新增「忘记密码？」入口。
+
+> 注：预览模式**仍不开放 AI 聊天**（按确认调整），故不做预览限额。
+
+---
+
 ## 2026-09-10（模型切换：全量迁移到 DeepSeek V4.1 Flash）
 
 ### 模型统一切换到 deepseek-flash

@@ -52,6 +52,18 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    """已登录用户修改密码请求（需校验原密码）"""
+    old_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class ResetPasswordRequest(BaseModel):
+    """忘记密码重置请求（简化流程：邮箱 + 新密码，无邮件验证）"""
+    email: str = Field(..., pattern=r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
 class LoginResponse(BaseModel):
     """登录响应"""
     user: UserPublic

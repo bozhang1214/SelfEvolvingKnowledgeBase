@@ -197,6 +197,11 @@ cost_control:
     deepseek-flash:                     # V4.1 Flash 定价（近似，峰谷计价待精确值）
       input: 0.00014                    # 输入 $0.14/1K tokens
       output: 0.00028                   # 输出 $0.28/1K tokens
+  usd_to_cny: 7.2                       # 固定汇率（费用展示：美元 → 人民币）
+  # 对话 token / 费用统计存储（Redis）
+  usage:
+    enabled: true
+    redis_url: redis://redis:6379/0
 
 # ============ Tracing ============
 tracing:

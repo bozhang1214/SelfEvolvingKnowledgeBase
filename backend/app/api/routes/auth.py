@@ -19,9 +19,11 @@ from app.core.auth import (
 )
 from app.core.metrics import record_login_attempt, record_register_attempt
 from app.models.user import (
+    ChangePasswordRequest,
     LoginRequest,
     LoginResponse,
     RegisterRequest,
+    ResetPasswordRequest,
     User,
     UserPublic,
 )
@@ -163,6 +165,52 @@ async def logout(
     client_ip = get_client_ip(request)
     logger.info("用户登出", extra={"user_id": user_id})
     audit_log(AuditAction.LOGOUT, user_id=user_id, success=True, ip=client_ip)
+    return {"status": "ok"}
+
+
+@router.post("/change-password")
+async def change_password(
+    body: ChangePasswordRequest,
+    request: Request,
+    user_id: str = Depends(get_current_user),
+):
+    """已登录用户修改密码：校验原密码后直接更新。"""
+    storage = _get_user_storage()
+    client_ip = get_client_ip(request)
+    user = storage.find_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "用户不存在")
+    if not verify_password(body.old_password, user.password_hash):
+        audit_log(AuditAction.LOGIN_FAILED, user_id=user_id, success=False, ip=client_ip,
+                  detail={"reason": "change_password_wrong_old"})
+        raise HTTPException(400, "原密码错误")
+    storage.update(user_id, {"password_hash": hash_password(body.new_password)})
+    logger.info("用户修改密码", extra={"user_id": user_id})
+    audit_log(AuditAction.LOGIN, user_id=user_id, success=True, ip=client_ip,
+              detail={"action": "change_password"})
+    return {"status": "ok"}
+
+
+@router.post("/reset-password")
+async def reset_password(body: ResetPasswordRequest, request: Request):
+    """
+    忘记密码：邮箱 + 新密码直接重置（简化流程，无邮件验证）。
+
+    注意：此流程仅凭邮箱即可重置，存在被冒用的风险；已通过 /auth 分组限流
+    （每 IP 5 次/分钟）与审计日志缓解。如需更强安全，可改为邮件验证码流程。
+    """
+    storage = _get_user_storage()
+    client_ip = get_client_ip(request)
+    user = storage.find_by_email(body.email)
+    if not user:
+        # 不泄露邮箱是否注册：统一返回成功语义（仍记录审计）
+        audit_log(AuditAction.LOGIN_FAILED, success=False, ip=client_ip,
+                  detail={"reason": "reset_password_unknown_email"})
+        return {"status": "ok"}
+    storage.update(user.user_id, {"password_hash": hash_password(body.new_password)})
+    logger.info("用户重置密码", extra={"user_id": user.user_id})
+    audit_log(AuditAction.LOGIN, user_id=user.user_id, success=True, ip=client_ip,
+              detail={"action": "reset_password"})
     return {"status": "ok"}
 
 

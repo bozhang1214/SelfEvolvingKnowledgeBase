@@ -3,7 +3,7 @@ import { Card, Typography, Form, Input, Select, Button, Divider, message, Space,
 import { UserOutlined, ApiOutlined, SafetyOutlined, QrcodeOutlined } from '@ant-design/icons';
 import { useUserStore } from '@/stores/user';
 import apiClient from '@/services/api';
-import { getTokenExpiry } from '@/services/auth';
+import { changePassword, getTokenExpiry } from '@/services/auth';
 import { bossQrStart, bossQrStatus } from '@/services/job';
 
 const { Title, Text, Paragraph } = Typography;
@@ -11,6 +11,7 @@ const { Title, Text, Paragraph } = Typography;
 const Settings: React.FC = () => {
   const { user } = useUserStore();
   const [form] = Form.useForm();
+  const [pwdForm] = Form.useForm();
   const [expiry, setExpiry] = React.useState<Date | null>(null);
 
   React.useEffect(() => {
@@ -46,6 +47,16 @@ const Settings: React.FC = () => {
       }));
     } catch {
       message.error('更新失败');
+    }
+  };
+
+  const handleChangePassword = async (values: { old_password: string; new_password: string }) => {
+    try {
+      await changePassword(values.old_password, values.new_password);
+      message.success('密码已修改，请牢记新密码');
+      pwdForm.resetFields();
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '修改密码失败');
     }
   };
 
@@ -172,6 +183,45 @@ const Settings: React.FC = () => {
           </Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit">保存设置</Button>
+          </Form.Item>
+        </Form>
+      </Card>
+
+      {/* 修改密码 */}
+      <Card title={<Space><SafetyOutlined />修改密码</Space>} style={{ marginBottom: 16 }}>
+        <Form form={pwdForm} layout="vertical" onFinish={handleChangePassword}>
+          <Form.Item
+            name="old_password"
+            label="原密码"
+            rules={[{ required: true, message: '请输入原密码' }]}
+          >
+            <Input.Password placeholder="输入当前密码" autoComplete="current-password" />
+          </Form.Item>
+          <Form.Item
+            name="new_password"
+            label="新密码"
+            rules={[{ required: true, min: 8, message: '新密码至少 8 位' }]}
+          >
+            <Input.Password placeholder="至少 8 位" autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item
+            name="confirm_password"
+            label="确认新密码"
+            dependencies={['new_password']}
+            rules={[
+              { required: true, message: '请再次输入新密码' },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue('new_password') === value) return Promise.resolve();
+                  return Promise.reject(new Error('两次输入的新密码不一致'));
+                },
+              }),
+            ]}
+          >
+            <Input.Password placeholder="再次输入新密码" autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit">修改密码</Button>
           </Form.Item>
         </Form>
       </Card>

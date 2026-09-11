@@ -264,6 +264,19 @@ async def _run_chat(
     intent = state_dict.get("intent", "")
     intent_confidence = state_dict.get("intent_confidence", 0.0)
 
+    # 对话用量统计（Redis）：累计本轮 token 与费用，供前端展示（失败不阻塞回复）
+    if ctx.usage_service is not None:
+        try:
+            await ctx.usage_service.record(
+                conv_id=conv_id,
+                user_id=user_id,
+                input_tokens=metrics.get("total_input_tokens", 0),
+                output_tokens=metrics.get("total_output_tokens", 0),
+                cost_usd=metrics.get("total_cost_usd", 0.0),
+            )
+        except Exception as e:
+            logger.warning("对话用量统计失败", error=str(e))
+
     # 6. 持久化消息
     user_msg = {
         "role": "user",
@@ -613,3 +626,46 @@ async def chat_stream(
             "Transfer-Encoding": "chunked",
         },
     )
+
+
+# ============================================================
+# 对话用量统计（token / 费用展示）
+# ============================================================
+
+_EMPTY_USAGE: dict[str, Any] = {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "tokens": 0,
+    "calls": 0,
+    "cost_usd": 0.0,
+    "cost_cny": 0.0,
+}
+
+
+@router.get("/usage")
+async def get_usage(
+    conversation_id: str | None = None,
+    ctx: AppContext = Depends(get_app_context),
+    user_id: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """
+    返回「当前对话」与「用户全部对话累计」的 token 与费用统计（费用为约合人民币）。
+
+    - ``conversation_id`` 为空时只返回用户累计。
+    - Redis 未启用时 ``enabled=False``，各项为零，前端静默不展示。
+    """
+    if ctx.usage_service is None:
+        return {"enabled": False, "conversation": _EMPTY_USAGE, "total": _EMPTY_USAGE}
+
+    conversation = dict(_EMPTY_USAGE)
+    if conversation_id:
+        conv = await ctx.storage.get_conversation(conversation_id)
+        if conv is None or conv.get("user_id") != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"会话不存在: {conversation_id}",
+            )
+        conversation = await ctx.usage_service.get_conversation(conversation_id)
+
+    total = await ctx.usage_service.get_user_total(user_id)
+    return {"enabled": True, "conversation": conversation, "total": total}
