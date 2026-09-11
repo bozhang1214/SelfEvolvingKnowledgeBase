@@ -176,7 +176,13 @@ const Job: React.FC = () => {
     }
     setBatchAnalyzing(true);
     try {
-      const { report } = await batchAnalyze({ jobs: targetJobs, force });
+      // 带上本次采集的关键词/城市，避免后端回退到配置默认值（曾导致报告恒显示 Agent）
+      const { report } = await batchAnalyze({
+        jobs: targetJobs,
+        force,
+        keyword: lastFetchKeyword.trim() || fetchKeyword.trim() || undefined,
+        city: fetchCity || undefined,
+      });
       setMarketReport(report);
       message.success('批量分析完成');
     } catch (e: any) {
@@ -247,7 +253,7 @@ const Job: React.FC = () => {
     const salaryK = fetchSalary === '不限' ? 0 : parseInt(fetchSalary, 10) || 0;
     try {
       await saveJobCache({
-        keyword: lastFetchKeyword.trim() || 'Agent',
+        keyword: lastFetchKeyword.trim() || fetchKeyword.trim() || '未指定',
         city: fetchCity === '不限' ? '' : fetchCity,
         min_salary_k: salaryK,
         jobs,

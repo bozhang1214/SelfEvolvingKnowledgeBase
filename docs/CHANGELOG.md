@@ -6,6 +6,14 @@
 
 ---
 
+## 2026-09-11（Bug 修复：批量分析/历史报告关键词恒为 Agent）
+
+- **根因**：前端 `handleBatchAnalyze` 调 `batchAnalyze({ jobs, force })` 未传 `keyword`，后端回退到 `config.job.default_keyword="Agent"`，导致报告关键词永远是 Agent（职位数正确、仅关键词错）。
+- **修复**：批量分析时带上 `lastFetchKeyword`/`fetchCity`；`syncJobCache` 的硬编码 `'Agent'` 兜底改为 `lastFetchKeyword || fetchKeyword || '未指定'`。
+- **存量数据修复**：按 `job_count` 映射回真实搜索关键词，修正 8 条历史报告标题 + `.json` keyword + `.md` 标题，并修正批量报告缓存（`Agent`→`技术型产品`）；原文件已备份 `*.bak`。
+
+---
+
 ## 2026-09-10（对话费用展示 + 修改/忘记密码）
 
 ### 对话 token / 费用展示
