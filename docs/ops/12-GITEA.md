@@ -167,6 +167,27 @@ python3 scripts/gitea_mirror.py rebuild && python3 scripts/gitea_mirror.py sync
 | 实际推送 | ✅ 正常（`sekb` / `jobcopilot` 与 Gitea 一致，两个空仓库待有内容后推送） |
 | Token | ✅ 已轮换为新 PAT；旧 PAT 实测 `Bad credentials`（已失效） |
 
+### ⚠️ 已知：GitHub 链路会间歇性不可用（非配置问题）
+
+实测同一小时内：18:44 / 18:46 同步**成功**，18:50 失败并报
+`Failed to connect to github.com:443 after 135273 ms`。
+诊断特征：`api.github.com` 秒回（HTTP 200 / 0.4s）、`github.com:443` **TCP 可达**，
+但 HTTPS **TLS 握手挂死**（`curl` 返回 `HTTP 000`、`time_connect=0`）——
+典型的跨境链路抖动，**不是** token 或镜像配置问题。
+
+**应对**：
+
+- 失败**不用改配置**，重试即可（实测重试第一次就成功）。Gitea 会在
+  `interval`（8h）与每次 push 时自动重试；
+- 判断「是网络问题还是配置问题」：看 `last_error` 文案。
+  网络类（`Failed to connect` / `Could not connect` / `SSL`）→ 重试；
+  凭据类（`403` / `Authentication failed`）→ 走上面的 token 轮换流程；
+- **不要**因为一次失败就去删改镜像配置——那才是真的会把地址搞坏
+  （见坑 2：地址写错是静默失效，没有报错）。
+
+> 这也正是 RFC D-02 把 Gitea 定为权威源、GitHub 降为**归档镜像**的原因：
+> 归档允许最终一致，不要求强实时。
+
 
 ---
 
