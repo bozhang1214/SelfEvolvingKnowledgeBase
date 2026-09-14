@@ -255,29 +255,93 @@ python3 scripts/gitea_mirror.py status
 > 改仓库脚本不会影响 cron 实际执行的那份。
 > 建议二选一：cron 直接指向仓库内路径（单一事实源），或在部署脚本里显式 `install -m 755` 同步过去。
 
-### 6.2 恢复 Gitea
+### 6.2 恢复（统一走 `scripts/restore_kb.sh`）
+
+恢复脚本已与备份脚本**对称**：一个脚本覆盖两个卷，不再是「备份自动、恢复手工」。
 
 ```bash
 cd /opt/self-evolving-kb/SelfEvolvingKnowledgeBase
-docker compose -f docker-compose.monitoring.yml stop gitea
-docker run --rm -v sekb_gitea_data:/data -v /opt/self-evolving-kb/backups:/backup \
-  alpine sh -c "rm -rf /data/* /data/.[!.]* /data/..?* 2>/dev/null; tar xzf /backup/sekb_gitea_data_<TS>.tar.gz -C /data"
-docker compose -f docker-compose.monitoring.yml start gitea
-curl -fsS http://localhost:3000/api/healthz   # 校验
+
+# 恢复两个卷（推荐：--both 自动配对同时间戳的另一半）
+bash scripts/restore_kb.sh --both /opt/self-evolving-kb/backups/sekb_data_<TS>.tar.gz
+
+# 只恢复其一
+bash scripts/restore_kb.sh --sekb  /opt/self-evolving-kb/backups/sekb_data_<TS>.tar.gz
+bash scripts/restore_kb.sh --gitea /opt/self-evolving-kb/backups/sekb_gitea_data_<TS>.tar.gz
+
+# 也可不传卷参数：按文件名自动识别
+bash scripts/restore_kb.sh /opt/self-evolving-kb/backups/sekb_gitea_data_<TS>.tar.gz
 ```
 
-> 清空卷时带上 `.[!.]*` / `/data/..?*`，与 `restore_kb.sh` 保持一致：只 `rm -rf /data/*` 会**漏掉隐藏文件**
-> （如卷根的 `lost+found`），残留可能与解包内容混杂。
+脚本内置的保障（每一条都对应一个真实踩坑）：
 
-> ⚠️ **缺口：恢复路径与备份路径不对称。** 备份已统一（`scripts/backup_kb.sh` 一个脚本覆盖
-> `sekb_data` + `sekb_gitea_data`），但恢复是**手工且割裂**的：
-> `scripts/restore_kb.sh` 按设计**只恢复 `sekb_data`**（`VOLUME_NAME="sekb_data"`），
-> **不认 `sekb_gitea_data_*.tar.gz`**——Gitea 恢复只有上面这段手工命令，无脚本、无演练记录。
-> 灾难恢复时须记得**两条路径都跑**，否则会「恢复了知识库、丢了源码仓库」。
-> 待办：把 Gitea 恢复并入 `restore_kb.sh`（如 `--gitea` 或默认双卷）或新增 `restore_gitea.sh`。
+| 保障 | 说明 |
+|---|---|
+| 成对预检 | `--both` 先确认两个文件都存在且可解包，**否则直接退出**——不会恢复一半 |
+| 完整性校验 | 解包前 `tar tzf` 验证归档可读，避免清空卷后才发现备份已损坏（审查项 OPS-12） |
+| 目标卷存在检查 | 卷不存在即失败。否则 `docker run -v` 会**静默创建空卷**，把失败伪装成「恢复成功」 |
+| 服务兜底 | `trap EXIT` 只重启**本次真正停掉**的服务（backend / gitea 分别跟踪；旧版只认 backend） |
+| 清卷彻底 | `rm -rf /data/* /data/.[!.]* /data/..?*`，含隐藏文件（旧手工命令漏掉隐藏文件） |
 
-> ⚠️ 恢复演练**至少做过一次**才可信（RFC 风险项）。截至 2026-09-14 **尚无演练记录**：
-> `sekb_gitea_data` 的备份产物存在（手动备份 18:19 / 18:29 已含该卷），但**从未实际回灌验证**过。
+### 6.3 恢复演练（`--drill`：**不碰线上数据**）
+
+演练是 RFC 要求的例行项。脚本提供**旁路卷演练模式**：只往旁路卷回灌，**不停止/重启任何线上服务**；
+并带安全联锁——`--drill` 一旦发现目标是生产卷（`sekb_data` / `sekb_gitea_data`）就**直接拒绝退出**，
+避免在服务运行的不一致状态下误覆盖真实数据。
+
+```bash
+cd /opt/self-evolving-kb/SelfEvolvingKnowledgeBase
+docker volume create sekb_drill_data && docker volume create sekb_drill_gitea
+
+RESTORE_SEKB_VOLUME=sekb_drill_data RESTORE_GITEA_VOLUME=sekb_drill_gitea \
+  bash scripts/restore_kb.sh --drill --both \
+  /opt/self-evolving-kb/backups/sekb_data_<TS>.tar.gz
+
+# 校验：起临时 Gitea 指向旁路卷（仅绑 127.0.0.1:3300，不撞生产的 3000）
+docker run -d --name sekb-gitea-drill -p 127.0.0.1:3300:3000 \
+  -v sekb_drill_gitea:/data -e USER_UID=1000 -e USER_GID=1000 \
+  -e GITEA__database__DB_TYPE=sqlite3 -e GITEA__database__PATH=/data/gitea/gitea.db \
+  -e GITEA__server__ROOT_URL=http://localhost:3300/ -e GITEA__security__INSTALL_LOCK=true \
+  gitea/gitea:1.27.3
+sleep 10 && curl -fsS http://127.0.0.1:3300/api/healthz
+curl -s -H "Authorization: token $(cat ~/.gitea-token)" \
+  "http://127.0.0.1:3300/api/v1/user/repos?limit=50" | python3 -m json.tool | head
+
+# 清理（务必删干净，别把旁路卷留成垃圾）
+docker rm -f sekb-gitea-drill
+docker volume rm sekb_drill_data sekb_drill_gitea
+```
+
+#### 演练记录
+
+| 日期 | 备份时间戳 | 方式 | 结果 |
+|---|---|---|---|
+| 2026-09-14 | `20260914_182934` | `--drill --both` → 旁路卷 + 临时 Gitea | ✅ **通过**（首次演练） |
+
+2026-09-14 首次双卷演练的实测结论：
+
+- `gitea.db` 2.77 MB、文件头为 `SQLite format 3`；`bo/` 下 4 个仓库目录俱在
+  （`sekb` 2.9M、`jobcopilot` 632K、两个空仓库各 156K）；
+- 旁路卷起临时 Gitea → `healthz` OK（第 2 次探测）；用**生产 token** 查到 **4 个仓库**且
+  `private` 标记正确 ⇒ **凭据与仓库元数据随备份完整恢复**；
+- Push Mirror 配置（`remote_address` + `interval: 8h0m0s`）同样在 ⇒ 恢复后镜像可继续工作；
+- 从旁路实例 `git ls-remote` 成功（`refs/heads/main` → `6f44ad0`，即 18:29 快照时点）⇒ **git 对象完整**；
+- `sekb_data` 旁路卷：`chroma_db` 93.6M、`conversations`、`uploads`、`news`、`profile`、`index.json`
+  等 23 个顶层条目齐全；
+- **演练全程生产容器 uptime 未变**（backend / gitea 始终 healthy），且旁路卷与生产 `gitea.db`
+  md5 不同 ⇒ 确实没碰线上。
+
+> 恢复**会覆盖**目标卷，执行前请确认卷内没有未备份的新数据。
+> 极端情况下若仓库目录不可用（无法执行脚本），可退回手工步骤：
+>
+> ```bash
+> cd /opt/self-evolving-kb/SelfEvolvingKnowledgeBase
+> docker compose -f docker-compose.monitoring.yml stop gitea
+> docker run --rm -v sekb_gitea_data:/data -v /opt/self-evolving-kb/backups:/backup \
+>   alpine sh -c "rm -rf /data/* /data/.[!.]* /data/..?* 2>/dev/null; tar xzf /backup/sekb_gitea_data_<TS>.tar.gz -C /data"
+> docker compose -f docker-compose.monitoring.yml start gitea
+> curl -fsS http://localhost:3000/api/healthz   # 校验
+> ```
 
 ---
 

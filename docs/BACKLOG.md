@@ -47,7 +47,7 @@
 
 | # | 需求点 | 原因 / 说明 | 优先级 |
 |---|--------|-------------|--------|
-| G1 | `restore_kb.sh` 不覆盖 `sekb_gitea_data`（备份/恢复**不对称**） | 备份已统一为单脚本双卷，恢复仍只有 `sekb_data`；Gitea 恢复仅文档 §6.2 手工命令，**且从未演练**。灾难恢复易「恢复了知识库、丢了源码仓库」。建议：Gitea 并入 `restore_kb.sh`（`--gitea`）或新增 `restore_gitea.sh`，并补一次演练记录 | **高** |
+| G1 | `restore_kb.sh` 不覆盖 `sekb_gitea_data`（备份/恢复**不对称**） | ✅ **已解决（2026-09-14，`de65c8a`）**：`restore_kb.sh` 重写为与备份对称的**双卷恢复**（`--sekb`/`--gitea`/`--both`，文件名可自动识别卷类型），并新增 `--dry-run` 预检、`tar tzf` 完整性校验（顺带解决 OPS-12 的「无完整性校验」）、目标卷存在检查、按实际停服对象兜底重启、以及 **`--drill` 旁路卷演练模式**（带「拒绝写入生产卷」安全联锁）。**已完成首次双卷演练**：旁路卷回灌 + 临时 Gitea 起库 → 4 仓库/凭据/镜像配置/git 对象全部完好，演练期间生产 uptime 未变。记录见 `12-GITEA.md` §6.3 | 已解决 |
 | G2 | Gitea 镜像「静默停摆」无任何告警 | 镜像失败只写 Gitea 的 `last_error`，无 Prometheus 指标 / Alertmanager 规则 / 定时巡检。最危险是 **GitHub PAT 过期**后永久失败而无人知（界面不主动提示）。建议把 `gitea_mirror.py status` 退出码接入巡检，或对 `last_update` 陈旧度（>2×interval=16h）告警 | 中 |
 | G3 | 本地 `main` 跟踪 `origin/main`（GitHub）而非权威源 `gitea/main` | 裸敲 `git push`/`git pull` 会直接操作 **GitHub 归档镜像**，绕过 Gitea 权威源，可能造成两侧分叉；`git status` 的「领先 139」是**陈旧计数**（`origin/main` 长期不 fetch），具误导性。建议 `git branch -u gitea/main main` | 中 |
 | G4 | cron 备份脚本与仓库脚本**无同步机制** | cron 执行 `/opt/self-evolving-kb/backup_kb.sh`，版本库里是 `/opt/self-evolving-kb/SelfEvolvingKnowledgeBase/scripts/backup_kb.sh`——**两个文件**，仓库内无任何同步逻辑。实测 2026-09-14 两者逐字节一致，但属**手工维护的巧合**；改仓库脚本不影响 cron 实际执行的那份。建议 cron 指向仓库内路径（单一事实源）或部署时 `install -m 755` 同步 | 中 |

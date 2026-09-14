@@ -215,7 +215,7 @@ echo "--- 容器:"; docker ps --format '{{.Names}}\t{{.Status}}'
 ## 关联
 
 - 备份脚本：`scripts/backup_kb.sh`（cron 实际执行的是 `/opt/self-evolving-kb/backup_kb.sh`——**两者为不同文件、无自动同步机制**，改仓库版本不影响 cron；详见 `12-GITEA.md` §6.1）
-- 恢复脚本：`scripts/restore_kb.sh`（**仅恢复 `sekb_data`，不含 `sekb_gitea_data`**；Gitea 恢复见 `12-GITEA.md` §6.2）
+- 恢复脚本：`scripts/restore_kb.sh`（已与备份**对称**：`--sekb` / `--gitea` / `--both` 双卷恢复，含 `--dry-run` 预检与 `--drill` 旁路卷演练；详见 `12-GITEA.md` §6.2–6.3）
 - 部署脚本：`deploy/deploy.sh`（阶段 7 清理）
 - 监控看板：`docs/ops/11-MONITORING.md`
 - 代码仓库底座：`docs/ops/12-GITEA.md`

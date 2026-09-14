@@ -199,13 +199,16 @@ STOPPED_SEKB=false
 STOPPED_GITEA=false
 
 restart_services() {
-  echo "[$(date +%Y%m%d_%H%M%S)] 兜底：确保已停服务重新启动"
+  # 演练模式 / 未停服时静默（不打印误导性的「已停服务」提示）
   if [ "${STOPPED_SEKB}" = true ]; then
+    echo "[$(date +%Y%m%d_%H%M%S)] 兜底：重启 backend"
     docker compose -f docker-compose.prod.yml --env-file .env.prod start backend 2>/dev/null || true
   fi
   if [ "${STOPPED_GITEA}" = true ]; then
+    echo "[$(date +%Y%m%d_%H%M%S)] 兜底：重启 gitea"
     docker compose -f docker-compose.monitoring.yml start gitea 2>/dev/null || true
   fi
+  return 0
 }
 trap restart_services EXIT
 
