@@ -87,6 +87,12 @@ FROM python:3.11-slim
 # 镜像源参数（需在每个 stage 重新声明）
 ARG APT_MIRROR=mirrors.aliyun.com
 
+# 内核（jobcopilot 子模块）的 commit，由 deploy.sh 传入。
+# 烧进镜像后，容器启动日志与 /health 都能报出「线上跑的到底是哪个内核」——
+# 这是子模块钉版本在**运行时**的可见性兜底（不用进容器翻文件）。
+ARG JOBCOPILOT_COMMIT=unknown
+ENV JOBCOPILOT_COMMIT=${JOBCOPILOT_COMMIT}
+
 WORKDIR /app
 
 # 替换为国内镜像源，加速 apt 下载

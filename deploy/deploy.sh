@@ -188,19 +188,30 @@ step "阶段 2/7：构建镜像"
 if [ "$SKIP_BUILD" = true ]; then
     warn "跳过镜像构建（--skip-build）"
 else
-    # 内核包 jobcopilot 是 git 子模块，构建时需要它出现在仓库根
-    # （docker-compose.prod.yml 通过 additional_contexts 把它传进镜像）。
-    if [ ! -f "jobcopilot/pyproject.toml" ]; then
-        fail "缺少内核包子模块 jobcopilot/" \
-"它是本仓库的 git 子模块，初始化一次即可（之后随 git pull 自动跟进）：
-    git submodule update --init
-若已初始化但想更新到 SEKB 钉住的版本：
-    git submodule update
-若子模块处于脏状态需要强制对齐：
-    git submodule update --force"
+    # 内核包 jobcopilot 是 git 子模块（docker-compose.prod.yml 通过
+    # additional_contexts 把它传进镜像）。**硬闸门**：未初始化 / commit 与 SEKB
+    # 钉住的不一致 / 工作区脏，都直接中止——否则会「静默部署一个不是钉住版本的内核」。
+    # 紧急情况可用 SKIP_KERNEL_CHECK=1 绕过（会打印警告）。
+    if [ "${SKIP_KERNEL_CHECK:-0}" = "1" ]; then
+        warn "已通过 SKIP_KERNEL_CHECK=1 跳过内核查校验（本次部署的内核版本未被验证）"
+    elif [ -x "scripts/check_kernel.sh" ]; then
+        info "校验内核查（git 子模块）状态..."
+        if ! bash scripts/check_kernel.sh --strict; then
+            fail "内核查状态异常，已中止部署" \
+"按上面的提示对齐后重试。常用修复：
+    git submodule update --init      # 未初始化
+    git submodule update             # commit 与 SEKB 钉住的不一致
+    git submodule update --force     # 工作区脏、要丢弃本地改动
+紧急绕过（不推荐）：SKIP_KERNEL_CHECK=1 bash deploy/deploy.sh ..."
+        fi
+        KERNEL_SHA="$(git submodule status jobcopilot 2>/dev/null | cut -c2- | awk '{print $1}')"
+        info "内核查 commit：${KERNEL_SHA:0:7}（已钉在 SEKB 中，构建时会烧进镜像）"
+        # 传给 docker compose build（compose 里 args.JOBCOPILOT_COMMIT 插值），
+        # 最终成为容器内的环境变量，供启动日志与 /health 报告。
+        export JOBCOPILOT_COMMIT="$KERNEL_SHA"
+    elif [ ! -f "jobcopilot/pyproject.toml" ]; then
+        fail "缺少内核包子模块 jobcopilot/" "git submodule update --init"
     fi
-    # 打出内核实际版本，便于部署日志里追溯（子模块钉的是固定 commit）
-    info "内核查就绪：$(git submodule status jobcopilot 2>/dev/null | awk '{print $1}' | cut -c1-7) $(grep -m1 '^version' jobcopilot/pyproject.toml || echo '')"
 
     # 构建前网络预检测：测试镜像源连通性
     info "检测镜像源连通性..."

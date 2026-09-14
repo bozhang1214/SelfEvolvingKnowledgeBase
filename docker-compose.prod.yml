@@ -49,6 +49,9 @@ services:
         # 换到其他平台时改为 mirrors.aliyun.com / https://mirrors.aliyun.com/pypi/simple/
         APT_MIRROR: mirrors.cloud.tencent.com
         PIP_INDEX: https://mirrors.cloud.tencent.com/pypi/simple/
+        # 内核（jobcopilot 子模块）commit：由 deploy.sh 导出后传入，
+        # 烧进镜像供启动日志与 /health 报告「线上跑的是哪个内核」
+        JOBCOPILOT_COMMIT: ${JOBCOPILOT_COMMIT:-unknown}
     image: self-evolving-kb-backend:${TAG:-latest}
     container_name: sekb-backend
     restart: unless-stopped

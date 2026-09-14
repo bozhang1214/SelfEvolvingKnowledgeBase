@@ -1,3 +1,7 @@
 [submodule "jobcopilot"]
 	path = jobcopilot
-	url = ssh://git@100.71.24.105:2222/bo/jobcopilot.git
+	# 默认用**公开**的 GitHub 地址：任何人 clone SEKB 都能直接拉到子模块。
+	# 本机/服务器想走自托管 Gitea（更快、且是权威源）请用 URL 重写，不要改这一行：
+	#   Mac:    git config --global url."ssh://git@100.71.24.105:2222/bo/".insteadOf "https://github.com/bozhang1214/"
+	#   服务器: git config --global url."http://localhost:3000/bo/".insteadOf "https://github.com/bozhang1214/"
+	url = https://github.com/bozhang1214/jobcopilot.git

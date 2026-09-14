@@ -210,9 +210,27 @@
 
 ### 安装
 
+> **⚠️ 本仓库含 git 子模块 `jobcopilot`（职位分析内核，独立仓库）。**
+> 克隆时**必须**一并拉取，否则后端构建缺依赖、`import jobcopilot` 直接失败。
+>
+> ```bash
+> # 方式一（推荐）：克隆时递归拉子模块
+> git clone --recurse-submodules <repo-url> SelfEvolvingKnowledgeBase
+>
+> # 方式二：已经克隆过了，补初始化
+> git submodule update --init
+>
+> # 不确定状态？一条命令看清（异常时给可复制的修复命令）
+> bash scripts/check_kernel.sh
+> ```
+>
+> 该脚本报告：子模块是否初始化 / commit 是否与 SEKB 钉住的版本一致 / 工作区是否干净 /
+> 内置提示词是否完整。部署前检查与 CI 用的是**同一个脚本**，标准一致。
+> 线上运行时也能查：`GET /api/v1/health/` 的 `kernel` 字段（含 commit 与提示词生效来源）。
+
 ```bash
 # 1. 克隆项目
-git clone <repo-url> SelfEvolvingKnowledgeBase
+git clone --recurse-submodules <repo-url> SelfEvolvingKnowledgeBase
 cd SelfEvolvingKnowledgeBase
 
 # 2. 创建虚拟环境

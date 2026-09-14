@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.server import get_app_context
 from app.core.bootstrap import AppContext
+from app.core.kernel_info import kernel_info
 from app.core.metrics import service_health, service_subsystem_health
 
 router = APIRouter(prefix="/api/v1/health", tags=["health"])
@@ -93,6 +94,9 @@ async def health_check(ctx: AppContext = Depends(get_app_context)) -> dict:
             "version": ctx.config.app.version,
             "environment": ctx.config.app.environment,
         },
+        # 内核查（jobcopilot）版本：与 `git submodule status jobcopilot` 的
+        # commit 比对，即可确认线上跑的是不是 SEKB 钉住的那一份。
+        "kernel": kernel_info(),
     }
 
 

@@ -207,6 +207,25 @@ echo -e "${BLUE}========== 2. 代码与配置 ==========${NC}"
 # 2.1 docker-compose.prod.yml 存在
 check_file_exists "docker-compose.prod.yml"
 
+# 2.1.1 内核（jobcopilot git 子模块）状态：
+# 未初始化 / commit 与 SEKB 钉住的不一致 / 工作区脏，都会让构建产出
+# 「不是钉住版本的内核」。这里提前暴露，别等到构建或运行才发现。
+#
+# ⚠️ 必须写成 `if VAR="$(cmd)"; then` 形式：本脚本是 set -euo pipefail，
+#    若写成 `VAR="$(cmd)"` 再判 $?，命令返回非 0 时脚本会**直接退出**，
+#    门禁失败反而变成静默中断整个预检。
+if [ -x "scripts/check_kernel.sh" ]; then
+    if KERNEL_OUT="$(bash scripts/check_kernel.sh --strict 2>&1)"; then
+        KERNEL_SHA="$(git submodule status jobcopilot 2>/dev/null | cut -c2- | awk '{print $1}')"
+        pass "内核 jobcopilot 子模块状态正常（钉住 commit ${KERNEL_SHA:0:7}）"
+    else
+        fail "内核 jobcopilot 子模块状态异常" "运行 bash scripts/check_kernel.sh 查看详情与修复命令"
+        printf '%s\n' "$KERNEL_OUT" | sed 's/^/    /' | tail -20
+    fi
+else
+    warn "未找到 scripts/check_kernel.sh，跳过内核查校验"
+fi
+
 # 2.2 docker-compose.monitoring.yml 存在
 check_file_exists "docker-compose.monitoring.yml"
 

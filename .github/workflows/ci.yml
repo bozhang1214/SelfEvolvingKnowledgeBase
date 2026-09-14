@@ -38,6 +38,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 内核 jobcopilot 是 git 子模块，backend 代码与 mypy/构建都依赖它
+          submodules: true
+      # 内核（子模块）状态闸门：未初始化 / commit 与 SEKB 钉住的不一致 /
+      # 工作区脏，都在这里直接失败——防止「子模块静默过期」混进主干。
+      - name: Kernel (submodule) status gate
+        run: bash scripts/check_kernel.sh --strict
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -121,6 +128,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 内核 jobcopilot 是 git 子模块，backend 代码与 mypy/构建都依赖它
+          submodules: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -156,6 +166,9 @@ jobs:
     needs: [unit-test]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 内核 jobcopilot 是 git 子模块，backend 代码与 mypy/构建都依赖它
+          submodules: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -182,6 +195,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 内核 jobcopilot 是 git 子模块，backend 代码与 mypy/构建都依赖它
+          submodules: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -213,6 +229,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 内核 jobcopilot 是 git 子模块，backend 代码与 mypy/构建都依赖它
+          submodules: true
       - uses: docker/setup-buildx-action@v3
       - name: Login to GHCR
         uses: docker/login-action@v3

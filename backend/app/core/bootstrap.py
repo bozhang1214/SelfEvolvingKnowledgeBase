@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from app.agents.strategies.base import ReflectionStrategy
 from app.agents.strategies.factory import create_reflection_strategy
 from app.core.config import AppConfig, get_config
+from app.core.kernel_info import log_kernel_info
 from app.core.llm_factory import LLMFactory
 from app.core.logging import get_logger, setup_logging
 from app.core.tracing import setup_tracing
@@ -294,6 +295,8 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
 
         job_agent = JobAgent(config.job, llm_factory)
         logger.info("招聘分析 Agent 已启用", llm_role=config.job.llm_role)
+        # 打出内核查版本/commit：子模块钉版本在**运行时**的可见性兜底
+        log_kernel_info()
 
     logger.info("应用初始化完成")
 
