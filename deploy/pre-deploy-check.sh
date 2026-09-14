@@ -393,8 +393,13 @@ if [ -f "deploy/alertmanager.yml" ]; then
         warn "Docker 未运行，跳过 alertmanager.yml 校验" "启动 Docker 后重新执行检查"
     else
         # 捕获 amtool 输出，便于排查具体错误
-        AMTOOL_OUTPUT=$(docker run --rm -v "$PROJECT_ROOT/deploy/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
-            prom/alertmanager:latest amtool check-config /etc/alertmanager/alertmanager.yml 2>&1)
+        # ⚠️ 必须显式 --entrypoint amtool：prom/alertmanager 镜像的 ENTRYPOINT 是
+        #    /bin/alertmanager，否则 `... prom/alertmanager:latest amtool check-config`
+        #    会把 amtool 当成 alertmanager 的参数，报
+        #    「unexpected amtool, try --help」并让预检永久失败。
+        AMTOOL_OUTPUT=$(docker run --rm --entrypoint amtool \
+            -v "$PROJECT_ROOT/deploy/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
+            prom/alertmanager:latest check-config /etc/alertmanager/alertmanager.yml 2>&1)
         AMTOOL_EXIT=$?
         if [ "$AMTOOL_EXIT" -eq 0 ]; then
             pass "alertmanager.yml 配置校验通过"
