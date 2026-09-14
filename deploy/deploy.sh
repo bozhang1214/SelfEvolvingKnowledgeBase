@@ -355,10 +355,14 @@ success "清理完成"
 # 限制构建缓存上限（防止 buildkit 缓存无限增长撑爆磁盘）
 # 背景：2026-09-14 排查发现构建缓存堆到 20.2G，占满 59G 磁盘的 1/3，
 #       直接导致部署前检查「需要 ≥20G 空闲」反复告警。缓存只影响重建速度，不影响功能。
-info "限制构建缓存上限（2GB）..."
+# 上限取 14G 的依据（实测）：
+#   - 只有保留住 `pip install -r requirements.txt` 那一层（约 14G，含 torch/transformers），
+#     依赖才不会每次重装；卡到 2G 会让每次部署多花 ~13 分钟重装依赖；
+#   - 14G 上限下磁盘占用约 35G、可用约 24G，稳稳通过 20G 预检。
+info "限制构建缓存上限（14GB）..."
 if [ "$DRY_RUN" = false ]; then
-    if docker builder prune -af --max-used-space 2GB >/dev/null 2>&1; then
-        success "构建缓存已收敛到 2GB 以内"
+    if docker builder prune -af --max-used-space 14GB >/dev/null 2>&1; then
+        success "构建缓存已收敛到 14GB 以内"
     else
         # 旧版 Docker 不支持 --max-used-space，退化为整体清理（同样安全）
         docker builder prune -af >/dev/null 2>&1 || true
