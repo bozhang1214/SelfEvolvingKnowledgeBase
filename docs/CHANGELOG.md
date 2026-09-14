@@ -19,6 +19,9 @@ Push Mirror 地址正确且最近同步全部成功、`sekb` 为 private、`back
 - **G2 镜像静默停摆无告警**：失败仅写 Gitea `last_error`，无指标/告警规则/定时巡检；
   最危险是 **GitHub PAT 过期**后永久失败而无人知。`gitea_mirror.py status` 本可用退出码判定，
   但无人定时执行。
+  （**注**：审查中顺带**实测闭环成功**——本次 `push gitea` 后 Gitea 经 `sync_on_commit`
+  **自动**镜像到 GitHub，三点 SHA 一致（`dee8b47`），`last_update` 由 18:55 自动推进到 19:27，
+  无需人工 `sync`。故 G2 是**纯可观测性缺口**，镜像机制本身工作正常。）
 - **G3 本地跟踪分支错**：Mac 上 `main` 跟踪 `origin/main`（**GitHub 归档镜像**）而非权威源
   `gitea/main` ⇒ 裸敲 `git push`/`pull` 会打到 GitHub；`git status` 的「领先 139」为
   `origin/main` 长期不 fetch 的**陈旧计数**（已在文档注明并给出 `git branch -u gitea/main`）。
