@@ -36,6 +36,7 @@ related: [docs/tech/00-README]
 | 10 | [10-JOB-SOURCES.md](./10-JOB-SOURCES.md) | 招聘渠道采集状态跟踪 | 采集源维护 |
 | 11 | [11-CHANGE-RELEASE-POLICY.md](./11-CHANGE-RELEASE-POLICY.md) | 变更与发布操作规约（HIL 闸门/回滚/审计） | 任何生产变更前 |
 | 11 | [11-MONITORING.md](./11-MONITORING.md) | Prometheus/Grafana 监控配置与使用手册（看报表/改报表/查数） | 首次看监控、自己改报表时 |
+| 12 | [12-GITEA.md](./12-GITEA.md) | 自托管 Gitea 部署与日常运维（仓库/凭据/镜像/备份恢复） | 改仓库、配镜像、恢复代码时 |
 
 ## 关联
 
