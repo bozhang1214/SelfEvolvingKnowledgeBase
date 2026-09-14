@@ -6,6 +6,26 @@
 
 ---
 
+## 2026-09-14（运维：GitHub token 轮换 + 镜像同步跑通）
+
+- **Token 轮换**：旧 PAT 实测已失效（`curl /user` 返回 `Bad credentials` ✅）；
+  新 PAT 写入 `/home/bo/.github-token`（600）。
+  **顺带发现旧 token 还残留在 `/home/bo/.git-credentials` 的 github.com 行**——已一并更新
+  （只换这一行，Gitea 凭据不动）。
+- **四个推送镜像全部重建并同步成功**：`sekb` / `jobcopilot` 与 Gitea 逐字节一致。
+- **新增 `scripts/gitea_mirror.py`**（`status` / `sync` / `rebuild`），把本轮两个坑固化下来：
+  1. **触发同步的端点不是 `mirror-sync`** —— 那是给拉取镜像用的，对推送镜像返回
+     `400 Repository is not a mirror`（**既不代表成功也不代表失败**）。正确的是
+     `push_mirrors-sync`。上一轮我据此误判过「已触发同步」，实际那次是 push 提交时
+     `sync_on_commit` 生效的；
+  2. **Gitea 仓库名 ≠ GitHub 仓库名** —— Gitea 侧 `sekb`、GitHub 侧 `SelfEvolvingKnowledgeBase`。
+     我按 Gitea 名拼出了 `https://github.com/bozhang1214/sekb.git`（**不存在的仓库，且不报错**），
+     差点让 SEKB 镜像静默失效；现已改成显式映射表。
+- `12-GITEA.md` 补：仓库名映射表、token 轮换流程（含「旧 token 必须验证 Bad credentials」）、
+  `scripts/gitea_mirror.py` 用法、凭据位置补 `.gitea-token`。
+
+---
+
 ## 2026-09-14（工程：内核子模块状态在四个时机全部显性化）
 
 **要解决的问题**：子模块最大的风险是**静默过期**——`git pull` 完 SEKB 子模块纹丝不动、
