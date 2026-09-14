@@ -49,6 +49,7 @@
 |---|---|---|
 | 服务器 git 拉取（Gitea 访问令牌）| `/home/bo/.git-credentials` | `600` |
 | GitHub PAT（推送镜像用）| `/home/bo/.github-token` | `600` |
+| Gitea API token（`scripts/gitea_mirror.py` 用）| `/home/bo/.gitea-token` 或环境变量 `GITEA_TOKEN` | `600` |
 | 开发者 Mac 推送（Gitea SSH key）| `~/.ssh/id_ed25519` → Gitea「mac-zhangbo」| — |
 | Gitea 管理员密码 | 由 owner 保管（CLI 创建，可改）| — |
 
@@ -111,7 +112,50 @@ curl -u bo:<密码> -X POST http://localhost:3000/api/v1/user/repos \
 
 - 配置位置：Gitea 仓库 → Settings → Mirror Settings → **Push Mirror**（或用 API `POST /repos/{owner}/{repo}/push_mirrors`）。
 - 策略：`interval: 8h` + `sync_on_commit: true`。
-- 手动触发：`POST /api/v1/repos/bo/sekb/push_mirrors-sync`。
+- 运维工具：**`scripts/gitea_mirror.py`**（`status` / `sync` / `rebuild`），下面的坑都已处理。
+
+```bash
+python3 scripts/gitea_mirror.py status    # 查看四个仓库的镜像状态
+python3 scripts/gitea_mirror.py sync      # 触发一次同步（正确端点）
+python3 scripts/gitea_mirror.py rebuild   # token 轮换后用新 token 重建
+```
+
+### ⚠️ 两个实测踩过的坑
+
+**坑 1：触发同步的端点不是 `mirror-sync`。**
+`POST /repos/{o}/{r}/mirror-sync` 是给**拉取镜像**（pull mirror）用的，对推送镜像返回
+`400 Repository is not a mirror`——**它 400 既不表示同步成功也不表示失败**。
+推送镜像必须用 `POST /repos/{o}/{r}/push_mirrors-sync`。
+
+> 曾因此误判：以为手动触发了同步，其实那次是 push 提交时 `sync_on_commit` 生效的。
+
+**坑 2：Gitea 仓库名 ≠ GitHub 仓库名。**
+Gitea 侧叫 `sekb`，GitHub 侧叫 `SelfEvolvingKnowledgeBase`。用 Gitea 名拼 GitHub URL
+（`https://github.com/bozhang1214/sekb.git`）会**指向不存在的仓库，且不报错、静默失效**。
+`scripts/gitea_mirror.py` 里用显式映射表，不靠同名巧合。
+
+| Gitea | GitHub |
+|---|---|
+| `sekb` | `SelfEvolvingKnowledgeBase` |
+| `jobcopilot` | `jobcopilot` |
+| `jobcopilot-prompts` | `jobcopilot-prompts` |
+| `jobcopilot-dsh-plugin` | `jobcopilot-dsh-plugin` |
+
+### Token 轮换流程（GitHub PAT 换新时）
+
+```bash
+# 1) 更新落盘的 token（600）
+umask 077; printf '%s' '<新 token>' > /home/bo/.github-token
+
+# 2) 若 .git-credentials 里也有 github.com 行，一并更新（否则 git 仍用旧 token）
+grep -n github.com /home/bo/.git-credentials
+
+# 3) 用新 token 重建四个镜像（Gitea 不会自动感知 token 变更）
+python3 scripts/gitea_mirror.py rebuild && python3 scripts/gitea_mirror.py sync
+```
+
+> **旧 token 一定要吊销并验证**：`curl -H "Authorization: token <旧>" https://api.github.com/user`
+> 返回 `Bad credentials` 才算真失效。
 
 ⚠️ **为什么单向**：双向同步必然冲突（两边都能改，谁赢？）。D-02 已定 Gitea 为主、GitHub 为归档镜像，单向吻合。
 
@@ -119,12 +163,10 @@ curl -u bo:<密码> -X POST http://localhost:3000/api/v1/user/repos \
 
 | 项 | 状态 |
 |---|---|
-| 镜像配置 | ✅ 已配置 |
-| 实际推送 | ❌ **被 GitHub 阻塞**：`You must verify your email address` |
+| 镜像配置 | ✅ 四个仓库均已配置，地址正确 |
+| 实际推送 | ✅ 正常（`sekb` / `jobcopilot` 与 Gitea 一致，两个空仓库待有内容后推送） |
+| Token | ✅ 已轮换为新 PAT；旧 PAT 实测 `Bad credentials`（已失效） |
 
-**待 owner 处理**：去 https://github.com/settings/emails 验证邮箱。验证后镜像即自动生效（Gitea 侧已有 119+ 提交待推送）。
-
-> 同一原因也导致 **GitHub 仓库创建 API 返回 403**（`At least one email address must be verified`），故 JobCopilot 三个仓库暂只建在 Gitea，GitHub 侧待验证后补建。
 
 ---
 
