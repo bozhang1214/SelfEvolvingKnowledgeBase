@@ -73,12 +73,25 @@ git remote -v
 # origin  git@github.com:bozhang1214/SelfEvolvingKnowledgeBase.git
 ```
 
-> 首次使用需把本机公钥加到 Gitea：Gitea → Settings → SSH/GPG Keys（或用 `POST /api/v1/user/keys`）。
+**首次接入一台新机器**（三步，缺前两步会直接失败）：
+
+```bash
+# 1) 本机公钥加到 Gitea：Gitea → Settings → SSH/GPG Keys（或用 POST /api/v1/user/keys）
+#    验证：应回显 Hi there, bo! 之类欢迎语
+ssh -p 2222 git@100.71.24.105
+
+# 2) 信任 Gitea 的 SSH 主机公钥（否则报 Host key verification failed）
+ssh-keyscan -p 2222 -t ed25519 100.71.24.105 >> ~/.ssh/known_hosts
+
+# 3) 建议关掉主机密钥自动补全，否则每次推送会打印
+#    "hostfile_replace_entries: mkstemp: Operation not permitted" 警告（无害但吵闹）
+git config --local core.sshCommand "ssh -o UpdateHostKeys=no"
+```
 
 ### 4.2 服务器拉取（新发布链路，**取代原 bundle+scp**）
 
 ```bash
-cd /home/bo/self-evolving-kb/SelfEvolvingKnowledgeBase
+cd /opt/self-evolving-kb/SelfEvolvingKnowledgeBase
 git pull            # main 已 track gitea/main
 ```
 
