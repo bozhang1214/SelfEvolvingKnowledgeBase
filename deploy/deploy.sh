@@ -361,10 +361,13 @@ success "清理完成"
 #   - 14G 上限下磁盘占用约 35G、可用约 24G，稳稳通过 20G 预检。
 info "限制构建缓存上限（14GB）..."
 if [ "$DRY_RUN" = false ]; then
-    if docker builder prune -af --max-used-space 14GB >/dev/null 2>&1; then
+    # ⚠️ 这里**不能加 -a/--all**：实测 `builder prune -af --max-used-space N`
+    #    会静默变成空操作（返回 Total: 0B，缓存一点不掉）。
+    #    正确用法是不带 -a，让它按上限做 LRU 淘汰。
+    if docker builder prune -f --max-used-space 14GB >/dev/null 2>&1; then
         success "构建缓存已收敛到 14GB 以内"
     else
-        # 旧版 Docker 不支持 --max-used-space，退化为整体清理（同样安全）
+        # 旧版 Docker 不支持 --max-used-space，退化为整体清空（同样安全，只是下次构建慢）
         docker builder prune -af >/dev/null 2>&1 || true
         warn "Docker 版本不支持缓存上限参数，已改为整体清空构建缓存"
     fi
