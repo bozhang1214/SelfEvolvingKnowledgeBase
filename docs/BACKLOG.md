@@ -1,7 +1,7 @@
 # 需求跟踪 / Backlog
 
 > 用途：跟踪暂缓需求点与当前推进中的功能，避免遗漏。
-> 最后更新：2026-09-10
+> 最后更新：2026-09-14
 
 ## 〇、合并集群索引（2026-09-10 起）
 
@@ -39,6 +39,20 @@
 | D12 | 健康自检（检索探针） | 定期跑一次检索探针，向量丢失/检索异常时飞书告警，避免「用户先发现搜索为空」；L2 备份 + 探针可形成完整「检测→恢复」闭环 | 低 |
 | D14 | 多功能联动（skill 调度 + 反馈闭环） | ✅ 已闭环：用户画像地基（`5d9eefc`）+ skill 按钮与调度（应聘/资讯助手注入画像与模块知识）+ 方案 B 记录员 LLM 后台抽取偏好回流画像（`fd395f2`）+ 画像反向影响职位分析（批量/单职位注入实时画像）。**资讯部分定案：保持公共流，日报不做个性化**（`b8e964d`） | 已定案 |
 | D15 | 文档守卫工具（lychee 死链检查、OpenAPI/清单校验、文档结构守卫脚本） | 属于「文档工程剩余」（C1/C3/C5/C9-C10），统一推迟到文档专项轮次；本次测试工具链批次只接代码质量类工具，避免范围膨胀 | 低 |
+
+### G. Gitea 实现审查发现（2026-09-14）
+
+> 来源：对用户自建 Gitea 链路的代码/服务器实测审查。功能**主体正常**（四仓库镜像地址正确、
+> 最近同步成功、`sekb` 私有、备份已含双卷），以下为**缺口与错配**。
+
+| # | 需求点 | 原因 / 说明 | 优先级 |
+|---|--------|-------------|--------|
+| G1 | `restore_kb.sh` 不覆盖 `sekb_gitea_data`（备份/恢复**不对称**） | 备份已统一为单脚本双卷，恢复仍只有 `sekb_data`；Gitea 恢复仅文档 §6.2 手工命令，**且从未演练**。灾难恢复易「恢复了知识库、丢了源码仓库」。建议：Gitea 并入 `restore_kb.sh`（`--gitea`）或新增 `restore_gitea.sh`，并补一次演练记录 | **高** |
+| G2 | Gitea 镜像「静默停摆」无任何告警 | 镜像失败只写 Gitea 的 `last_error`，无 Prometheus 指标 / Alertmanager 规则 / 定时巡检。最危险是 **GitHub PAT 过期**后永久失败而无人知（界面不主动提示）。建议把 `gitea_mirror.py status` 退出码接入巡检，或对 `last_update` 陈旧度（>2×interval=16h）告警 | 中 |
+| G3 | 本地 `main` 跟踪 `origin/main`（GitHub）而非权威源 `gitea/main` | 裸敲 `git push`/`git pull` 会直接操作 **GitHub 归档镜像**，绕过 Gitea 权威源，可能造成两侧分叉；`git status` 的「领先 139」是**陈旧计数**（`origin/main` 长期不 fetch），具误导性。建议 `git branch -u gitea/main main` | 中 |
+| G4 | cron 备份脚本与仓库脚本**无同步机制** | cron 执行 `/opt/self-evolving-kb/backup_kb.sh`，版本库里是 `/opt/self-evolving-kb/SelfEvolvingKnowledgeBase/scripts/backup_kb.sh`——**两个文件**，仓库内无任何同步逻辑。实测 2026-09-14 两者逐字节一致，但属**手工维护的巧合**；改仓库脚本不影响 cron 实际执行的那份。建议 cron 指向仓库内路径（单一事实源）或部署时 `install -m 755` 同步 | 中 |
+| G5 | Gitea 端口绑 `0.0.0.0` + 部分仓库为 `public`（防御纵深） | compose 用 `"3000:3000"` / `"2222:22"` 绑全网卡。当前公网**不可达**（ufw `INPUT DROP` + `EnableUserlandProxy: true` 使流量经 INPUT 链）——**但依赖该代理**：若为性能改 `--userland-proxy=false`，流量转 FORWARD 链由 Docker 直插 `ACCEPT`，**绕过 ufw** 即暴露。且 `jobcopilot` / `jobcopilot-prompts` / `jobcopilot-dsh-plugin` 为 **public**（`sekb` 为 private ✅）。建议显式绑 `100.71.24.105:3000` 或 `127.0.0.1:3000`（与 backend SEC-02 一致），并确认三个镜像仓在 GitHub 侧本就是公开的 | 中 |
+| G6 | 服务器残留错配 remote `github` | `github → http://localhost:3000/bo/SelfEvolvingKnowledgeBase.git`：名为 `github` 却指向**本地 Gitea**，且拼的是 GitHub 侧仓库名——Gitea 上该仓库**不存在**（认证 API `404`，真实名 `sekb`）。既推不到 GitHub 也推不进 Gitea，属残留错配（归档由 Push Mirror 负责）。建议 `git remote remove github` | 低 |
 
 ## 三、已完成（本轮及之前）
 

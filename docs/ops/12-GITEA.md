@@ -74,6 +74,15 @@ git remote -v
 # origin  git@github.com:bozhang1214/SelfEvolvingKnowledgeBase.git
 ```
 
+> ⚠️ **本地 `main` 的跟踪分支指向 `origin/main`（GitHub 归档镜像），而非权威源 `gitea/main`**（实测 2026-09-14）。
+> 后果有二：裸敲 `git push` / `git pull` 会直接操作 **GitHub**，绕过 Gitea 权威源，可能造成两侧分叉；
+> 且 `origin/main` 长期不 fetch，`git status` 会显示「领先 N 个提交」这类**陈旧计数**，具有误导性。
+> 建议改为跟踪权威源（一次性）：
+>
+> ```bash
+> git branch -u gitea/main main   # 之后裸 git push/pull 即走 Gitea
+> ```
+
 **首次接入一台新机器**（三步，缺前两步会直接失败）：
 
 ```bash
@@ -97,6 +106,19 @@ git pull            # main 已 track gitea/main
 ```
 
 > 原「本地 `git bundle` → `scp` → 服务器 `fetch`+`merge`」流程**已废弃**（那是为绕过 GitHub 不稳而设）。
+
+> ⚠️ **服务器上残留一个误导性的 `github` remote**（实测 2026-09-14）：
+>
+> ```
+> gitea   http://localhost:3000/bo/sekb.git                      ← 正确（main 已 track gitea/main）
+> github  http://localhost:3000/bo/SelfEvolvingKnowledgeBase.git ← 错配
+> ```
+>
+> 名为 `github` 却指向**本地 Gitea**，且拼的是 GitHub 侧仓库名 `SelfEvolvingKnowledgeBase`——
+> Gitea 上该仓库**并不存在**（带 token 的认证 API 返回 `404`，真实仓库名是 `sekb`）。
+> 它既推不到 GitHub，也推不进 Gitea，属**残留错配**：Gitea→GitHub 的归档由 Push Mirror 负责，
+> 服务器**不需要** `github` remote（且 `ENABLE_PUSH_CREATE_USER` 未开启，推错地址会直接失败而非静默建库）。
+> 建议清理：`git remote remove github`（服务器只保留 `gitea`）。
 
 ### 4.3 建新仓库
 
@@ -188,6 +210,25 @@ python3 scripts/gitea_mirror.py rebuild && python3 scripts/gitea_mirror.py sync
 > 这也正是 RFC D-02 把 Gitea 定为权威源、GitHub 降为**归档镜像**的原因：
 > 归档允许最终一致，不要求强实时。
 
+### ⚠️ 已知缺口：镜像「静默停摆」没有任何告警
+
+镜像失败**只写进 Gitea 的 `last_error` 字段**，没有任何主动通知：
+
+- 没有 Prometheus 指标、没有 Alertmanager 规则、没有巡检任务；
+- `gitea_mirror.py status` 是**人工**调用才有结论（它设计为可用退出码判定，但当前无人定时执行）；
+- 最危险的失效是 **GitHub PAT 过期**：PAT 有有效期，过期后镜像从某天起**永久失败**，
+  而 Gitea 界面不主动提示，等你某天去 GitHub 看才发现归档停在几周前。
+
+**建议**（对齐 RFC 的「定期巡检 + 关键环节告警」）：把 `status` 的退出码接入现有巡检/告警链路，
+或对 `last_update` 的**陈旧度**做判定——例如超过 `2×interval`（16h）未成功即告警。
+
+```bash
+# 可直接用于定时任务的判据（非 0 即需要关注）
+python3 scripts/gitea_mirror.py status
+```
+
+> 现状小结：**Push Mirror 本身工作正常**（四仓库最近一次同步均成功、`last_error` 为空），
+> 缺的是「失败时有人知道」。这属于**可观测性缺口，不是功能缺陷**。
 
 ---
 
@@ -206,18 +247,36 @@ python3 scripts/gitea_mirror.py rebuild && python3 scripts/gitea_mirror.py sync
 - 卷不存在时静默跳过（未部署 Gitea 的环境不受影响）；
 - 保留 14 天（`RETENTION_DAYS` 可覆盖）。
 
+> ⚠️ **路径漂移风险**：cron 执行的是 `/opt/self-evolving-kb/backup_kb.sh`（仓库**之外**的一份副本），
+> 而版本库里的脚本在 `/opt/self-evolving-kb/SelfEvolvingKnowledgeBase/scripts/backup_kb.sh`——
+> **两者是两个文件**，且仓库内**没有任何**把它们同步的机制（`deploy.sh` 只是 `./scripts/backup_kb.sh` 地调用）。
+> 实测 2026-09-14 两者内容仍**逐字节一致**，但这是**手工维护的巧合**：
+> 改仓库脚本不会影响 cron 实际执行的那份。
+> 建议二选一：cron 直接指向仓库内路径（单一事实源），或在部署脚本里显式 `install -m 755` 同步过去。
+
 ### 6.2 恢复 Gitea
 
 ```bash
 cd /opt/self-evolving-kb/SelfEvolvingKnowledgeBase
 docker compose -f docker-compose.monitoring.yml stop gitea
 docker run --rm -v sekb_gitea_data:/data -v /opt/self-evolving-kb/backups:/backup \
-  alpine sh -c "rm -rf /data/* && tar xzf /backup/sekb_gitea_data_<TS>.tar.gz -C /data"
+  alpine sh -c "rm -rf /data/* /data/.[!.]* /data/..?* 2>/dev/null; tar xzf /backup/sekb_gitea_data_<TS>.tar.gz -C /data"
 docker compose -f docker-compose.monitoring.yml start gitea
 curl -fsS http://localhost:3000/api/healthz   # 校验
 ```
 
-> ⚠️ 恢复演练**至少做过一次**才可信（RFC 风险项）。
+> 清空卷时带上 `.[!.]*` / `/data/..?*`，与 `restore_kb.sh` 保持一致：只 `rm -rf /data/*` 会**漏掉隐藏文件**
+> （如卷根的 `lost+found`），残留可能与解包内容混杂。
+
+> ⚠️ **缺口：恢复路径与备份路径不对称。** 备份已统一（`scripts/backup_kb.sh` 一个脚本覆盖
+> `sekb_data` + `sekb_gitea_data`），但恢复是**手工且割裂**的：
+> `scripts/restore_kb.sh` 按设计**只恢复 `sekb_data`**（`VOLUME_NAME="sekb_data"`），
+> **不认 `sekb_gitea_data_*.tar.gz`**——Gitea 恢复只有上面这段手工命令，无脚本、无演练记录。
+> 灾难恢复时须记得**两条路径都跑**，否则会「恢复了知识库、丢了源码仓库」。
+> 待办：把 Gitea 恢复并入 `restore_kb.sh`（如 `--gitea` 或默认双卷）或新增 `restore_gitea.sh`。
+
+> ⚠️ 恢复演练**至少做过一次**才可信（RFC 风险项）。截至 2026-09-14 **尚无演练记录**：
+> `sekb_gitea_data` 的备份产物存在（手动备份 18:19 / 18:29 已含该卷），但**从未实际回灌验证**过。
 
 ---
 
@@ -228,7 +287,9 @@ curl -fsS http://localhost:3000/api/healthz   # 校验
 | 502/无法访问 | `docker ps --filter name=sekb-gitea`；`docker logs sekb-gitea --tail 50` |
 | `healthz` 报 database 失败 | 检查 `sekb_gitea_data` 卷挂载与 `gitea.db` 权限 |
 | push 被拒（auth）| 确认 SSH key 在 Gitea 已登记；或检查 `.git-credentials` |
-| 镜像失败 | 查 Push Mirror 的 `last_error`；常见为 GitHub 侧凭据/邮箱问题 |
+| 镜像失败 | 查 Push Mirror 的 `last_error`；网络类（`Failed to connect`）重试即可，凭据类（`403`/`Authentication failed`）走 token 轮换 |
+| 镜像**长期没更新但没人报错** | 典型的**静默停摆**：多半是 GitHub PAT 过期。跑 `python3 scripts/gitea_mirror.py status`，看 `last_update` 是否陈旧（>16h）与 `last_error`；重轮换 token 后 `rebuild` + `sync` |
+| 推送报 404 / 推到奇怪地址 | 检查是否推了残留的 `github` remote（指向不存在的 Gitea 仓库 `bo/SelfEvolvingKnowledgeBase`）；用 `git remote -v` 核对，只保留 `gitea` |
 | 磁盘增长 | 仓库对象增长；必要时 `gitea admin` 清理或调大磁盘 |
 
 ---

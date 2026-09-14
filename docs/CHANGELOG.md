@@ -6,6 +6,49 @@
 
 ---
 
+## 2026-09-14（运维：Gitea 链路实现审查 + 文档纠偏）
+
+对用户已实现的自建 Gitea 链路做代码/服务器实测审查。**结论：功能主体正常**——四仓库
+Push Mirror 地址正确且最近同步全部成功、`sekb` 为 private、`backup_kb.sh` 已覆盖双卷、
+公网端口实测不可达。以下为发现的**缺口与错配**（已登记 `BACKLOG.md` G1–G6）：
+
+- **G1（高）备份/恢复不对称**：`restore_kb.sh`（53 行）按设计**只恢复 `sekb_data`**
+  （`VOLUME_NAME="sekb_data"`），**不认 `sekb_gitea_data_*.tar.gz`**；Gitea 恢复只有
+  `12-GITEA.md` §6.2 的手工步骤，且**无演练记录**。备份已统一为单脚本双卷，恢复却割裂
+  ⇒ 灾难恢复易「恢复了知识库、丢了源码仓库」。
+- **G2 镜像静默停摆无告警**：失败仅写 Gitea `last_error`，无指标/告警规则/定时巡检；
+  最危险是 **GitHub PAT 过期**后永久失败而无人知。`gitea_mirror.py status` 本可用退出码判定，
+  但无人定时执行。
+- **G3 本地跟踪分支错**：Mac 上 `main` 跟踪 `origin/main`（**GitHub 归档镜像**）而非权威源
+  `gitea/main` ⇒ 裸敲 `git push`/`pull` 会打到 GitHub；`git status` 的「领先 139」为
+  `origin/main` 长期不 fetch 的**陈旧计数**（已在文档注明并给出 `git branch -u gitea/main`）。
+  （本地 remotes 本身与 §4.1 文档**完全一致**，无误。）
+- **G4 cron 脚本漂移**：cron 执行 `/opt/self-evolving-kb/backup_kb.sh`，仓库版在
+  `.../SelfEvolvingKnowledgeBase/scripts/backup_kb.sh`——**是两个文件**且仓库内无任何同步逻辑
+  （实测逐字节一致属手工巧合，`deploy.sh` 只做相对调用）。
+- **G5 端口绑 `0.0.0.0` + 部分仓库 public**：当前公网不可达**依赖 `EnableUserlandProxy: true`**
+  （使流量走 INPUT 链被 ufw `DROP`）；若改 `--userland-proxy=false` 则转 FORWARD 链被 Docker
+  直插 `ACCEPT` **绕过 ufw** 即暴露。另 `jobcopilot*` 三仓为 public（`sekb` 为 private ✅）。
+- **G6 服务器残留错配 remote `github`**：指向 `http://localhost:3000/bo/SelfEvolvingKnowledgeBase.git`，
+  名为 `github` 实则指向本地 Gitea，且该仓库**不存在**（带 token 的认证 API 返回 `404`，
+  真实名是 `sekb`）——正是文档「坑 2」描述的静默失效模式。
+
+**文档调整**：
+
+- **修正 ops 编号冲突**：`11-CHANGE-RELEASE-POLICY.md` 与 `11-MONITORING.md` **同时占用 11**
+  （`00-README.md` 索引里两行都写 `| 11 |`）。已将较新建的变更发布规约移至
+  **`14-CHANGE-RELEASE-POLICY.md`**（保留已建立的 `11-MONITORING`，只改 2 处引用，避免牵连
+  `13-DISK-MEMORY.md`）。
+- `12-GITEA.md`：补 §4.1 跟踪分支告警、§4.2 服务器 `github` remote 错配说明、§5「镜像静默
+  停摆无告警」缺口、§6.1 cron 脚本漂移风险、§6.2 恢复清卷补 `.[!.]*`＋恢复不对称警告＋
+  「尚无演练记录」、§7 排障表补「静默停摆」「推到错误 remote」两行。
+- `13-DISK-MEMORY.md`：关联段标注备份脚本**双文件无同步**、恢复脚本**不含 Gitea 卷**。
+
+> 审查方法：Gitea 认证 API（`/user/repos`、`/push_mirrors`）＋ `docker logs` ＋ 卷/权限实测；
+> 公网可达性用 Mac 侧 `curl` 直连 `49.232.42.91:3000/2222/8000` 验证（均 `HTTP 000`）。
+
+---
+
 ## 2026-09-14（运维：GitHub token 轮换 + 镜像同步跑通）
 
 - **Token 轮换**：旧 PAT 实测已失效（`curl /user` 返回 `Bad credentials` ✅）；

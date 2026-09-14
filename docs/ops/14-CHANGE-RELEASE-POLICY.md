@@ -9,7 +9,7 @@ based-on-commit: 45b7961
 related: [docs/ops/00-README, docs/tmp/自迭代闭环设计RFC]
 ---
 
-# 变更与发布操作规约（11-CHANGE-RELEASE-POLICY）
+# 变更与发布操作规约（14-CHANGE-RELEASE-POLICY）
 
 > 本文定义 SEKB 的**变更与发布操作规则**：谁能改什么、上线前要过哪些确认、如何留痕、事故如何回滚。依据《自迭代闭环设计 RFC》（docs/tmp/），Human-In-Loop（HIL）为强制原则。
 > 适用于：代码发布、配置变更、数据操作、凭据轮换、依赖升级、回滚。
