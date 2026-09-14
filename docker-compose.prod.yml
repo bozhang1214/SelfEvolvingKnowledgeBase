@@ -126,6 +126,8 @@ services:
       - "${FRONTEND_PORT:-80}:80"
       - "443:443"
     volumes:
+      # JobCopilot 提示词分发（自建主源，由 deploy.sh 用 jobcopilot publish 生成）
+      - ./prompts-dist:/var/www/jobcopilot-prompts:ro
       # 挂载 nginx 配置：托管 SPA + 反向代理 /api 到 backend 容器
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       # Let's Encrypt 证书（certbot 签发在宿主机，只读挂载给 nginx）

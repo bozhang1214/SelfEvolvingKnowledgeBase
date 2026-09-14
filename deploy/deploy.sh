@@ -241,6 +241,19 @@ else
     fi
 
     echo ""
+    # 发布提示词到自建分发目录（nginx /prompts/，供 `jobcopilot pull --remote` 拉取）。
+    # 用后端镜像跑一次性容器：只有它装了 jobcopilot，宿主机无需再装一套依赖。
+    info "发布 JobCopilot 提示词到 ./prompts-dist（自建分发源）..."
+    mkdir -p prompts-dist
+    if docker run --rm -v "$PWD/prompts-dist:/out" \
+            --entrypoint jobcopilot "self-evolving-kb-backend:${TAG:-latest}" \
+            publish --out /out >/dev/null 2>&1; then
+        PROMPT_VER="$(python3 -c "import json;print(json.load(open('prompts-dist/manifest.json'))['version'])" 2>/dev/null || echo '?')"
+        success "提示词已发布（version=$PROMPT_VER，nginx 路径 /prompts/）"
+    else
+        warn "提示词发布失败（非致命；/prompts/ 将不可用，pull 会回落到 GitHub 或包内）"
+    fi
+
     info "构建前端镜像（约 2-3 分钟）..."
     if run "timeout 600 docker compose -f docker-compose.prod.yml --env-file .env.prod build --progress=plain frontend"; then
         success "前端镜像构建完成"

@@ -61,6 +61,9 @@ backend/data/
 # ============ Docker ============
 deploy/certs/
 
+# ============ JobCopilot 提示词分发产物（由 jobcopilot publish 生成，不进版本库）============
+prompts-dist/
+
 # ============ 前端 ============
 frontend/node_modules/
 frontend/dist/
