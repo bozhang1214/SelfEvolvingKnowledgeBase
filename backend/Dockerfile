@@ -69,6 +69,18 @@ RUN pip install --no-cache-dir --prefix=/install \
         --timeout 120 --retries 3 \
         -r requirements.txt
 
+# 安装本地内核包 jobcopilot（独立仓库，通过**命名构建上下文**传入，
+# 见 docker-compose.prod.yml 的 additional_contexts）。
+# 顺序放在 requirements 之后：内核改动只失效这一层，依赖层缓存得以保留。
+# 本地/服务器都需要在仓库根放一份 jobcopilot 检出（该目录已 gitignore）。
+COPY --from=jobcopilot . /jobcopilot-src
+RUN pip install --no-cache-dir --prefix=/install \
+        -i ${PIP_INDEX} \
+        --trusted-host mirrors.cloud.tencent.com \
+        --trusted-host mirrors.aliyun.com \
+        --timeout 120 --retries 3 \
+        /jobcopilot-src
+
 # --------------- stage 2: runtime ---------------
 FROM python:3.11-slim
 

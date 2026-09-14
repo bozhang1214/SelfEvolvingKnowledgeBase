@@ -179,6 +179,16 @@ step "阶段 2/7：构建镜像"
 if [ "$SKIP_BUILD" = true ]; then
     warn "跳过镜像构建（--skip-build）"
 else
+    # 内核包 jobcopilot 是独立仓库，构建时需要仓库根有一份检出
+    # （docker-compose.prod.yml 通过 additional_contexts 把它传进镜像）。
+    if [ ! -f "jobcopilot/pyproject.toml" ]; then
+        fail "缺少内核包检出 jobcopilot/" \
+"这是独立仓库，需要单独 clone 到本仓库根（该目录已 gitignore）：
+    git clone ssh://git@<gitea-host>:2222/bo/jobcopilot.git
+若已有检出，请先 git pull 拉取最新内核版本。"
+    fi
+    info "内核查出就绪：$(grep -m1 '^version' jobcopilot/pyproject.toml || echo 'jobcopilot')"
+
     # 构建前网络预检测：测试镜像源连通性
     info "检测镜像源连通性..."
     if curl -sf --connect-timeout 5 -o /dev/null https://mirrors.cloud.tencent.com/ 2>/dev/null; then

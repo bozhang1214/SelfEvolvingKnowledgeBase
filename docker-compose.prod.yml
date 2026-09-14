@@ -38,6 +38,12 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      # 内核包 jobcopilot 是独立仓库，用命名构建上下文传进镜像
+      # （Dockerfile 里 `COPY --from=jobcopilot`）。
+      # 前提：仓库根有一份 jobcopilot 检出（该目录已 gitignore）：
+      #   git clone ssh://git@<gitea-host>:2222/bo/jobcopilot.git
+      additional_contexts:
+        jobcopilot: ./jobcopilot
       args:
         # 腾讯云镜像源（公网统一域名，VPC 内自动走内网，不消耗公网带宽）
         # 换到其他平台时改为 mirrors.aliyun.com / https://mirrors.aliyun.com/pypi/simple/
