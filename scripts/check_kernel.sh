@@ -39,7 +39,12 @@ WARNINGS=0
 say()  { $QUIET || echo -e "$1"; }
 ok()   { say "  ${GREEN}✅${NC} $1"; }
 bad()  { PROBLEMS=$((PROBLEMS + 1)); echo -e "  ${RED}❌${NC} $1"; }
+# warn：**内核完整性**问题（commit 不符 / 工作区脏）——--strict 下致命
 warn() { WARNINGS=$((WARNINGS + 1)); echo -e "  ${YELLOW}⚠${NC} $1"; }
+# note：**环境**提示（本机没有装内核的 Python 等）——与内核是否可用无关，
+#       绝不参与 --strict 判定，否则服务器（内核跑在 Docker 里、宿主机无 venv）
+#       会被自己的部署闸门误拦。
+note() { say "  ${BLUE}ℹ${NC} $1"; }
 tip()  { echo -e "     ${YELLOW}→${NC} $1"; }
 
 if ! $QUIET; then
@@ -144,8 +149,9 @@ if [ -f "$PROMPT_DIR/README.md" ]; then
     tip "rm $PROMPT_DIR/README.md   # 并回内核仓库修正"
 fi
 
-# 能被 Python 导入才算真可用（可选，缺 python 不算错）
-# 解释器优先用项目 venv（jobcopilot 装在这里），系统 python3 通常没有。
+# 能被 Python 导入才算真可用（**环境项，不影响 --strict 判定**）
+# 解释器优先用项目 venv（jobcopilot 装在这里）；服务器宿主机通常没有 venv
+# （后端跑在 Docker 里），那种情况下这里应当是提示而非失败。
 PY=""
 for c in "$PROJECT_ROOT/backend/.venv/bin/python" \
          "$PROJECT_ROOT/.venv/bin/python" \
@@ -161,11 +167,11 @@ print(len(list(base_dir().glob('*.md'))))
 " 2>/dev/null)"; then
         ok "内核可被 Python 导入（可见 ${STEPS} 份内置提示词）"
     else
-        warn "选中的解释器（$PY）导入不到 jobcopilot（只做部署构建可忽略）"
-        tip "cd $SUBMODULE_PATH && pip install -e '.[dev]'"
+        note "本机解释器（$PY）导入不到 jobcopilot —— 若内核跑在 Docker 里属正常，构建与运行不受影响"
+        tip "本地开发想导入的话：cd $SUBMODULE_PATH && pip install -e '.[dev]'"
     fi
 else
-    warn "未找到 Python，跳过导入检查"
+    note "本机未找到 Python，跳过导入检查（不影响部署构建）"
 fi
 
 # ---------- 结论 ----------
