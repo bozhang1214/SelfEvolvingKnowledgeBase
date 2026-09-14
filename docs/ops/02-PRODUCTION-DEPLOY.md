@@ -187,27 +187,42 @@ cd /opt/self-evolving-kb
 git clone https://github.com/your-org/SelfEvolvingKnowledgeBase.git .
 ```
 
-### 3.1.1 克隆内核查 `jobcopilot`（必需）
+### 3.1.1 初始化内核查子模块 `jobcopilot`（必需）
 
-职位分析的内核已抽成**独立仓库** `jobcopilot`，后端镜像通过 Docker 的
-**命名构建上下文**把它装进镜像（`docker-compose.prod.yml` 的 `additional_contexts`
-＋ 后端 Dockerfile 的 `COPY --from=jobcopilot`）。
-
-因此构建前，**本仓库根目录**必须有一份 jobcopilot 检出：
+职位分析的内核已抽成**独立仓库** `jobcopilot`，并以 **git 子模块**挂在仓库根。
+后端镜像通过 Docker 的**命名构建上下文**把它装进镜像
+（`docker-compose.prod.yml` 的 `additional_contexts` ＋ 后端 Dockerfile 的 `COPY --from=jobcopilot`）。
 
 ```bash
+# 方式一：clone 时一并拉子模块（推荐，新机器用）
+git clone --recurse-submodules <SEKB-仓库地址> .
+
+# 方式二：已经 clone 过了，补初始化
 cd /opt/self-evolving-kb/SelfEvolvingKnowledgeBase
-git clone ssh://git@<gitea-host>:2222/bo/jobcopilot.git jobcopilot
-# 或走 HTTP（若服务器已配 .git-credentials）：
-# git clone http://localhost:3000/bo/jobcopilot.git jobcopilot
+git submodule update --init
 ```
 
-要点：
+**URL 重写的必要性**：`.gitmodules` 里记的是 Gitea 的 Tailscale SSH 地址
+（`ssh://git@100.71.24.105:2222/bo/jobcopilot.git`），而服务器平时走 HTTP。
+不要在子模块里改 URL（那会弄脏 `.gitmodules` 这个跟踪文件，导致每次 pull 冲突），
+用**全局 URL 重写**：
 
-- 该目录已在 `.gitignore` 里忽略，**不会**污染 SEKB 仓库，`git pull` 也不会动它；
-- 内核有新版本时，要**单独** `cd jobcopilot && git pull`；
-- `deploy.sh` 构建前会检查 `jobcopilot/pyproject.toml` 是否存在，缺失即报错并提示上面的命令；
-- 发布顺序：先推 jobcopilot，再推 SEKB，最后服务器依次 pull 两个仓库。
+```bash
+git config --global url."http://localhost:3000/".insteadOf "ssh://git@100.71.24.105:2222/"
+```
+
+**日常维护要点**：
+
+| 场景 | 命令 |
+|---|---|
+| 跟进 SEKB 钉住的内核版本 | `git submodule update`（`git pull` 后执行） |
+| 内核有新版本 | 先在 jobcopilot 仓库提交并推送，再回 SEKB `git add jobcopilot` 提交指针 |
+| 子模块被本地改脏、要强制对齐 | `git submodule update --force` |
+| 部署日志里追溯内核版本 | `git submodule status jobcopilot`（deploy.sh 也会打印） |
+
+> **子模块的价值**：SEKB 记录的是 jobcopilot 的**固定 commit**，部署可复现。
+> 发布顺序：**先推 jobcopilot → 再回 SEKB 更新子模块指针并推 → 服务器 `git pull` + `git submodule update`**。
+> 忘了第二步的后果是「部署用的还是旧内核」——`deploy.sh` 会打出实际 commit 便于发现。
 
 ### 3.2 配置环境变量
 

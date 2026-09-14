@@ -179,15 +179,19 @@ step "阶段 2/7：构建镜像"
 if [ "$SKIP_BUILD" = true ]; then
     warn "跳过镜像构建（--skip-build）"
 else
-    # 内核包 jobcopilot 是独立仓库，构建时需要仓库根有一份检出
+    # 内核包 jobcopilot 是 git 子模块，构建时需要它出现在仓库根
     # （docker-compose.prod.yml 通过 additional_contexts 把它传进镜像）。
     if [ ! -f "jobcopilot/pyproject.toml" ]; then
-        fail "缺少内核包检出 jobcopilot/" \
-"这是独立仓库，需要单独 clone 到本仓库根（该目录已 gitignore）：
-    git clone ssh://git@<gitea-host>:2222/bo/jobcopilot.git
-若已有检出，请先 git pull 拉取最新内核版本。"
+        fail "缺少内核包子模块 jobcopilot/" \
+"它是本仓库的 git 子模块，初始化一次即可（之后随 git pull 自动跟进）：
+    git submodule update --init
+若已初始化但想更新到 SEKB 钉住的版本：
+    git submodule update
+若子模块处于脏状态需要强制对齐：
+    git submodule update --force"
     fi
-    info "内核查出就绪：$(grep -m1 '^version' jobcopilot/pyproject.toml || echo 'jobcopilot')"
+    # 打出内核实际版本，便于部署日志里追溯（子模块钉的是固定 commit）
+    info "内核查就绪：$(git submodule status jobcopilot 2>/dev/null | awk '{print $1}' | cut -c1-7) $(grep -m1 '^version' jobcopilot/pyproject.toml || echo '')"
 
     # 构建前网络预检测：测试镜像源连通性
     info "检测镜像源连通性..."
