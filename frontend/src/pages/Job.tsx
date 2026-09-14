@@ -5,6 +5,7 @@ import {
 import {
   ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined,
   BarChartOutlined, DeleteOutlined, ReloadOutlined, UploadOutlined, HistoryOutlined, DownloadOutlined,
+  SendOutlined, PlusOutlined,
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import {
@@ -20,15 +21,36 @@ import {
   saveJobCache,
   getLatestJobCache,
   getCachedBatchAnalysis,
+  listApplyPlan,
+  saveApplyPlan,
+  deleteApplyPlan,
   type JobAnalyzeResult,
   type JobMeta,
   type FetchedJob,
   type MarketReport,
   type ArchivedReportMeta,
+  type ApplyPlanItem,
+  type ApplyPlanStats,
 } from '@/services/job';
 
 const { Text, Paragraph } = Typography;
 const { TextArea } = Input;
+
+/** 投递作战计划：分层标签（1=长期主攻 / 2=中期过渡 / 3=短期保底） */
+const PLAN_TIER_LABELS: Record<number, { text: string; color: string }> = {
+  1: { text: '① 主攻', color: 'red' },
+  2: { text: '② 过渡', color: 'orange' },
+  3: { text: '③ 保底', color: 'blue' },
+};
+
+/** 投递作战计划：状态标签 */
+const PLAN_STATUS_LABELS: Record<string, { text: string; color: string }> = {
+  planned: { text: '计划投', color: 'default' },
+  applied: { text: '已投', color: 'processing' },
+  interview: { text: '面试中', color: 'warning' },
+  rejected: { text: '已挂', color: 'error' },
+  offer: { text: 'Offer', color: 'success' },
+};
 
 import { SectionRenderer, MarketSection, KnowledgeSection, JobTitle, classifyRole, isEmptyValue, getMatchScore, matchScoreColor, SECTION_LABELS, SECTION_ORDER, CITY_OPTIONS, SALARY_OPTIONS, type SectionKey } from '@/features/job/render';
 
@@ -56,8 +78,8 @@ const Job: React.FC = () => {
   // 批量职位分析
   const [batchAnalyzing, setBatchAnalyzing] = useState(false);
   const [marketReport, setMarketReport] = useState<MarketReport | null>(null);
-  // 分析模式：职位收集 / 批量分析 / 单职位分析 / 历史报告
-  const [analysisMode, setAnalysisMode] = useState<'collect' | 'batch' | 'single' | 'history'>('collect');
+  // 分析模式：职位收集 / 批量分析 / 单职位分析 / 历史报告 / 投递计划
+  const [analysisMode, setAnalysisMode] = useState<'collect' | 'batch' | 'single' | 'history' | 'plan'>('collect');
 
   // 批量上传职位文件
   const [importing, setImporting] = useState(false);
@@ -71,6 +93,29 @@ const Job: React.FC = () => {
   const [historyTab, setHistoryTab] = useState<'batch' | 'single'>('batch');
   // 最近一次缓存的批量分析报告（用于「批量分析」tab 默认展示）
   const [cachedMarketReport, setCachedMarketReport] = useState<MarketReport | null>(null);
+
+  // 投递作战计划
+  const [planItems, setPlanItems] = useState<ApplyPlanItem[]>([]);
+  const [planStats, setPlanStats] = useState<ApplyPlanStats | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planModalOpen, setPlanModalOpen] = useState(false);
+  const [planSaving, setPlanSaving] = useState(false);
+  // 当前编辑的记录（null = 新增）
+  const [planEditing, setPlanEditing] = useState<ApplyPlanItem | null>(null);
+  const [planForm, setPlanForm] = useState<{
+    company: string;
+    title: string;
+    tier: number;
+    status: ApplyPlanItem['status'];
+    applied_at: string;
+    result_at: string;
+    cooldown_months: number;
+    url: string;
+    note: string;
+  }>({
+    company: '', title: '', tier: 1, status: 'planned',
+    applied_at: '', result_at: '', cooldown_months: 0, url: '', note: '',
+  });
 
   // 挂载时：回填最近一次缓存的职位 + 筛选选项，并预取缓存的批量报告
   useEffect(() => {
@@ -119,6 +164,14 @@ const Job: React.FC = () => {
     }
   }, [analysisMode]);
 
+  // 进入「投递计划」tab 时加载投递记录
+  useEffect(() => {
+    if (analysisMode === 'plan') {
+      loadApplyPlan();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysisMode]);
+
   const handleImportClick = () => fileInputRef.current?.click();
 
   const handleImportFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -163,6 +216,66 @@ const Job: React.FC = () => {
       await deleteJobReport(id);
       message.success('报告已删除');
       loadReports();
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '删除失败');
+    }
+  };
+
+  // ===== 投递作战计划 =====
+  const loadApplyPlan = async () => {
+    setPlanLoading(true);
+    try {
+      const { items, stats } = await listApplyPlan();
+      setPlanItems(items);
+      setPlanStats(stats);
+    } catch {
+      // 静默失败
+    } finally {
+      setPlanLoading(false);
+    }
+  };
+
+  const openPlanModal = (item?: ApplyPlanItem) => {
+    setPlanEditing(item || null);
+    setPlanForm(
+      item
+        ? {
+            company: item.company, title: item.title, tier: item.tier, status: item.status,
+            applied_at: item.applied_at, result_at: item.result_at,
+            cooldown_months: item.cooldown_months, url: item.url, note: item.note,
+          }
+        : {
+            company: '', title: '', tier: 1, status: 'planned',
+            applied_at: new Date().toISOString().slice(0, 10),
+            result_at: '', cooldown_months: 6, url: '', note: '',
+          },
+    );
+    setPlanModalOpen(true);
+  };
+
+  const handleSavePlan = async () => {
+    if (!planForm.company.trim() && !planForm.title.trim()) {
+      message.warning('请至少填写公司或岗位');
+      return;
+    }
+    setPlanSaving(true);
+    try {
+      await saveApplyPlan({ ...(planEditing ? { id: planEditing.id } : {}), ...planForm });
+      message.success(planEditing ? '已更新' : '已添加');
+      setPlanModalOpen(false);
+      loadApplyPlan();
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '保存失败');
+    } finally {
+      setPlanSaving(false);
+    }
+  };
+
+  const handleDeletePlan = async (id: string) => {
+    try {
+      await deleteApplyPlan(id);
+      message.success('已删除');
+      loadApplyPlan();
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '删除失败');
     }
@@ -360,7 +473,7 @@ const Job: React.FC = () => {
     <div style={{ padding: 24, overflow: 'auto', background: '#fff', minHeight: '100%' }}>
       <Tabs
         activeKey={analysisMode}
-        onChange={(k) => setAnalysisMode(k as 'collect' | 'batch' | 'single' | 'history')}
+        onChange={(k) => setAnalysisMode(k as 'collect' | 'batch' | 'single' | 'history' | 'plan')}
         style={{ maxWidth: 1080, margin: '0 auto' }}
         items={[
           {
@@ -813,6 +926,189 @@ const Job: React.FC = () => {
                     )}
                   </Spin>
                 </Card>
+              </>
+            ),
+          },
+          {
+            key: 'plan',
+            label: <span><SendOutlined /> 投递计划</span>,
+            children: (
+              <>
+                <Card
+                  title={
+                    <Space>
+                      <SendOutlined />
+                      <Text strong>投递作战计划</Text>
+                      <Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
+                        记录投递进度 + 冷却期提醒（大厂面试挂了通常要等 6-12 个月才能再投）
+                      </Text>
+                    </Space>
+                  }
+                  extra={
+                    <Space>
+                      <Button size="small" icon={<ReloadOutlined />} onClick={loadApplyPlan}>刷新</Button>
+                      <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openPlanModal()}>新增投递</Button>
+                    </Space>
+                  }
+                  style={{ marginBottom: 16 }}
+                >
+                  {/* 进度统计 */}
+                  <Row gutter={12} style={{ marginBottom: 16 }}>
+                    {[
+                      { label: '总投递', value: planStats?.total || 0, color: '#1677ff' },
+                      { label: '计划投', value: planStats?.planned || 0, color: '#8c8c8c' },
+                      { label: '已投/面试', value: (planStats?.applied || 0) + (planStats?.interview || 0), color: '#faad14' },
+                      { label: '已挂', value: planStats?.rejected || 0, color: '#ff4d4f' },
+                      { label: '冷却中', value: planStats?.cooling || 0, color: '#d4380d' },
+                      { label: 'Offer', value: planStats?.offer || 0, color: '#52c41a' },
+                    ].map((s) => (
+                      <Col xs={8} sm={4} key={s.label}>
+                        <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: '10px 0', textAlign: 'center' }}>
+                          <div style={{ fontSize: 22, fontWeight: 700, color: s.color }}>{s.value}</div>
+                          <Text type="secondary" style={{ fontSize: 12 }}>{s.label}</Text>
+                        </div>
+                      </Col>
+                    ))}
+                  </Row>
+
+                  <Spin spinning={planLoading}>
+                    {planItems.length === 0 ? (
+                      <Empty description="还没有投递记录，点右上角「新增投递」开始记录" />
+                    ) : (
+                      <Table
+                        size="small"
+                        rowKey="id"
+                        dataSource={planItems}
+                        pagination={false}
+                        columns={[
+                          {
+                            title: '公司', dataIndex: 'company', width: 130,
+                            render: (v: string, r: ApplyPlanItem) => (
+                              r.url ? <a href={r.url} target="_blank" rel="noreferrer"><Text strong>{v || '-'}</Text></a> : <Text strong>{v || '-'}</Text>
+                            ),
+                          },
+                          { title: '岗位', dataIndex: 'title', ellipsis: true, render: (v: string) => v || '-' },
+                          {
+                            title: '分层', dataIndex: 'tier', width: 90,
+                            render: (v: number) => <Tag color={PLAN_TIER_LABELS[v]?.color}>{PLAN_TIER_LABELS[v]?.text || v}</Tag>,
+                          },
+                          {
+                            title: '状态', dataIndex: 'status', width: 90,
+                            render: (v: string) => <Tag color={PLAN_STATUS_LABELS[v]?.color}>{PLAN_STATUS_LABELS[v]?.text || v}</Tag>,
+                          },
+                          { title: '投递日期', dataIndex: 'applied_at', width: 105, render: (v: string) => v || '-' },
+                          {
+                            title: '能否再投', width: 130,
+                            render: (_: unknown, r: ApplyPlanItem) =>
+                              r.cooling
+                                ? <Tag color="red">冷却中 {r.days_left} 天</Tag>
+                                : r.cooldown_until
+                                  ? <Tag color="green">已解冻（{r.cooldown_until}）</Tag>
+                                  : <Tag color="green">可投</Tag>,
+                          },
+                          {
+                            title: '操作', width: 110,
+                            render: (_: unknown, r: ApplyPlanItem) => (
+                              <Space size={0}>
+                                <Button size="small" type="link" onClick={() => openPlanModal(r)}>编辑</Button>
+                                <Button size="small" type="link" danger onClick={() => handleDeletePlan(r.id)}>删除</Button>
+                              </Space>
+                            ),
+                          },
+                        ]}
+                      />
+                    )}
+                  </Spin>
+                </Card>
+
+                {/* 新增 / 编辑投递记录 */}
+                <Modal
+                  title={planEditing ? '编辑投递记录' : '新增投递记录'}
+                  open={planModalOpen}
+                  onCancel={() => setPlanModalOpen(false)}
+                  onOk={handleSavePlan}
+                  confirmLoading={planSaving}
+                  okText="保存"
+                  width={560}
+                >
+                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <Row gutter={12}>
+                      <Col span={12}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>公司</Text>
+                        <Input value={planForm.company} onChange={(e) => setPlanForm({ ...planForm, company: e.target.value })} placeholder="如 字节跳动" />
+                      </Col>
+                      <Col span={12}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>岗位</Text>
+                        <Input value={planForm.title} onChange={(e) => setPlanForm({ ...planForm, title: e.target.value })} placeholder="如 产品解决方案架构师" />
+                      </Col>
+                    </Row>
+                    <Row gutter={12}>
+                      <Col span={8}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>分层</Text>
+                        <Select
+                          style={{ width: '100%' }}
+                          value={planForm.tier}
+                          onChange={(v) => setPlanForm({ ...planForm, tier: v })}
+                          options={[
+                            { value: 1, label: '① 长期主攻' },
+                            { value: 2, label: '② 中期过渡' },
+                            { value: 3, label: '③ 短期保底' },
+                          ]}
+                        />
+                      </Col>
+                      <Col span={8}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>状态</Text>
+                        <Select
+                          style={{ width: '100%' }}
+                          value={planForm.status}
+                          onChange={(v) => setPlanForm({ ...planForm, status: v })}
+                          options={[
+                            { value: 'planned', label: '计划投' },
+                            { value: 'applied', label: '已投' },
+                            { value: 'interview', label: '面试中' },
+                            { value: 'rejected', label: '已挂' },
+                            { value: 'offer', label: 'Offer' },
+                          ]}
+                        />
+                      </Col>
+                      <Col span={8}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>冷却月数</Text>
+                        <Select
+                          style={{ width: '100%' }}
+                          value={planForm.cooldown_months}
+                          onChange={(v) => setPlanForm({ ...planForm, cooldown_months: v })}
+                          options={[
+                            { value: 0, label: '无' },
+                            { value: 3, label: '3 个月' },
+                            { value: 6, label: '6 个月' },
+                            { value: 12, label: '12 个月' },
+                          ]}
+                        />
+                      </Col>
+                    </Row>
+                    <Row gutter={12}>
+                      <Col span={12}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>投递日期</Text>
+                        <Input value={planForm.applied_at} onChange={(e) => setPlanForm({ ...planForm, applied_at: e.target.value })} placeholder="YYYY-MM-DD" />
+                      </Col>
+                      <Col span={12}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>出结果日期（挂了才填，用于算冷却）</Text>
+                        <Input value={planForm.result_at} onChange={(e) => setPlanForm({ ...planForm, result_at: e.target.value })} placeholder="YYYY-MM-DD" />
+                      </Col>
+                    </Row>
+                    <div>
+                      <Text type="secondary" style={{ fontSize: 12 }}>链接</Text>
+                      <Input value={planForm.url} onChange={(e) => setPlanForm({ ...planForm, url: e.target.value })} placeholder="职位链接（可选）" />
+                    </div>
+                    <div>
+                      <Text type="secondary" style={{ fontSize: 12 }}>备注</Text>
+                      <TextArea rows={2} value={planForm.note} onChange={(e) => setPlanForm({ ...planForm, note: e.target.value })} placeholder="如：内推人 XXX / 面试反馈（可选）" />
+                    </div>
+                    {planForm.status === 'rejected' && planForm.result_at && planForm.cooldown_months > 0 && (
+                      <Alert type="warning" showIcon message={`冷却 ${planForm.cooldown_months} 个月，期间不要重复投递该公司（避免触发冷冻期）`} />
+                    )}
+                  </Space>
+                </Modal>
               </>
             ),
           },

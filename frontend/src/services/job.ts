@@ -219,3 +219,52 @@ export async function getCachedBatchAnalysis(): Promise<{ cached: boolean; repor
   const res = await apiClient.get<{ cached: boolean; report: MarketReport | null }>('/job/batch-analyze/cached');
   return res.data;
 }
+
+/** 投递作战计划：一条投递记录。 */
+export interface ApplyPlanItem {
+  id: string;
+  company: string;
+  title: string;
+  /** 分层：1=长期主攻 2=中期过渡 3=短期保底 */
+  tier: number;
+  status: 'planned' | 'applied' | 'interview' | 'rejected' | 'offer';
+  applied_at: string;
+  result_at: string;
+  cooldown_months: number;
+  url: string;
+  note: string;
+  /** 以下为后端计算的派生字段（前端直接展示，不自己算日期） */
+  cooldown_until: string;
+  cooling: boolean;
+  days_left: number;
+  can_apply: boolean;
+}
+
+export interface ApplyPlanStats {
+  total: number;
+  planned: number;
+  applied: number;
+  interview: number;
+  rejected: number;
+  offer: number;
+  cooling: number;
+}
+
+/** 获取投递计划列表 + 进度统计（含冷却期倒计时）。 */
+export async function listApplyPlan(): Promise<{ items: ApplyPlanItem[]; stats: ApplyPlanStats }> {
+  const res = await apiClient.get<{ items: ApplyPlanItem[]; stats: ApplyPlanStats }>('/job/apply-plan');
+  return res.data;
+}
+
+/** 新增或更新一条投递记录（带 id 则更新）。 */
+export async function saveApplyPlan(payload: Partial<ApplyPlanItem>): Promise<{ item: ApplyPlanItem }> {
+  const res = await apiClient.post<{ item: ApplyPlanItem }>('/job/apply-plan', payload);
+  logger.info('apply_plan_saved', { id: payload.id || '(new)', company: payload.company });
+  return res.data;
+}
+
+/** 删除一条投递记录。 */
+export async function deleteApplyPlan(planId: string): Promise<{ deleted: boolean }> {
+  const res = await apiClient.delete<{ deleted: boolean }>(`/job/apply-plan/${planId}`);
+  return res.data;
+}

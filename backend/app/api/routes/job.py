@@ -46,6 +46,24 @@ class JobFetchRequest(BaseModel):
     limit: int = Field(20, ge=1, le=40, description="每页数量（部分源固定返回约 40）")
 
 
+class ApplyPlanReq(BaseModel):
+    """投递作战计划：新增 / 更新一条投递记录（带 id 则更新）。"""
+
+    id: str | None = Field(None, description="记录 ID，更新时必传；新增留空")
+    company: str = Field("", max_length=100, description="公司名")
+    title: str = Field("", max_length=200, description="岗位名")
+    tier: int = Field(1, description="分层：1=长期主攻 2=中期过渡 3=短期保底")
+    status: str = Field(
+        "planned",
+        description="状态：planned 计划投 / applied 已投 / interview 面试中 / rejected 已挂 / offer 已拿 offer",
+    )
+    applied_at: str = Field("", max_length=10, description="投递日期 YYYY-MM-DD")
+    result_at: str = Field("", max_length=10, description="出结果日期 YYYY-MM-DD（挂面时用于算冷却）")
+    cooldown_months: int = Field(0, ge=0, le=24, description="冷却月数（挂面后多久能再投）")
+    url: str = Field("", max_length=500, description="职位链接")
+    note: str = Field("", max_length=500, description="备注")
+
+
 def _require_job_agent() -> Any:
     """获取招聘分析 Agent，未启用则 503。"""
     ctx = get_app_context()
@@ -340,4 +358,39 @@ async def delete_archived_report(report_id: str, user_id: str = Depends(get_curr
     from app.agents.job.archive import delete_report
 
     deleted = delete_report(user_id, report_id)
+    return {"deleted": deleted}
+
+
+# ============================================================
+# 投递作战计划
+# ============================================================
+
+
+@router.get("/apply-plan")
+async def list_apply_plan(user_id: str = Depends(get_current_user)):
+    """返回投递计划列表 + 进度统计（含冷却期倒计时，前端直接展示）。"""
+    _require_job_agent()
+    from app.agents.job.apply_plan import compute_stats, list_plans
+
+    items = list_plans(user_id)
+    return {"items": items, "stats": compute_stats(items)}
+
+
+@router.post("/apply-plan")
+async def save_apply_plan(body: ApplyPlanReq, user_id: str = Depends(get_current_user)):
+    """新增或更新一条投递记录（带 id 则更新）。"""
+    _require_job_agent()
+    from app.agents.job.apply_plan import upsert_plan
+
+    item = upsert_plan(user_id, body.model_dump())
+    return {"item": item}
+
+
+@router.delete("/apply-plan/{plan_id}")
+async def delete_apply_plan(plan_id: str, user_id: str = Depends(get_current_user)):
+    """删除一条投递记录。"""
+    _require_job_agent()
+    from app.agents.job.apply_plan import delete_plan
+
+    deleted = delete_plan(user_id, plan_id)
     return {"deleted": deleted}
