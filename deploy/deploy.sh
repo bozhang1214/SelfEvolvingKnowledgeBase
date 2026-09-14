@@ -157,18 +157,27 @@ run "cp docker-compose.prod.yml docker-compose.prod.yml.${BACKUP_TAG}.bak" 2>/de
 run "cp deploy/nginx.conf deploy/nginx.conf.${BACKUP_TAG}.bak" 2>/dev/null || true
 success "配置文件已备份（.${BACKUP_TAG}.bak 后缀）"
 
-# 触发数据备份（若脚本存在）
-if [ -x "deploy/backup.sh" ] && [ "$DRY_RUN" = false ]; then
-    info "触发数据备份..."
-    if ./deploy/backup.sh >> /var/log/sekb-deploy-backup.log 2>&1; then
-        success "数据备份完成"
+# 触发数据备份（部署前的安全快照）
+#
+# 用维护中的 scripts/backup_kb.sh，**不用** deploy/backup.sh：
+#   1) deploy/backup.sh 写死 /backup 目录，部署用户对其无权限 → 一直静默失败；
+#   2) 它还会把 .env.prod 明文打进备份并 sync 到 S3（安全审查 SEC-09）；
+#   3) 它只覆盖 ChromaDB/会话，**不覆盖 Gitea 数据卷**（D-02 起是版本管理权威源）。
+# backup_kb.sh 覆盖 sekb_data + sekb_gitea_data，且带 EXIT trap 兜底重启服务。
+if [ -x "scripts/backup_kb.sh" ] && [ "$DRY_RUN" = false ]; then
+    info "触发部署前数据备份（停服务取一致快照，约 1-2 分钟）..."
+    mkdir -p logs
+    BACKUP_LOG="logs/deploy-backup.log"
+    if ./scripts/backup_kb.sh >> "$BACKUP_LOG" 2>&1; then
+        success "数据备份完成（日志：$BACKUP_LOG）"
     else
-        warn "数据备份失败（非致命，继续部署）"
+        warn "数据备份失败（非致命，继续部署；日志：$BACKUP_LOG）"
+        [ -f "$BACKUP_LOG" ] && tail -5 "$BACKUP_LOG" | sed 's/^/    /'
     fi
 elif [ "$DRY_RUN" = true ]; then
-    echo -e "  ${YELLOW}[DRY-RUN]${NC} ./deploy/backup.sh"
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} ./scripts/backup_kb.sh"
 else
-    warn "未找到 backup.sh，跳过数据备份"
+    warn "未找到 scripts/backup_kb.sh，跳过部署前数据备份"
 fi
 
 # ============================================================
