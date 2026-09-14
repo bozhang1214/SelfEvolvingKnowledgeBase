@@ -2,7 +2,39 @@
 
 > 记录所有功能迭代与问题修复。按时间倒序，最新在前。
 > 维护约定：**每次功能开发或问题修复完成后，必须同步在本文件追加一条记录**，并更新文档头部「最后更新」日期。
-> 最后更新：2026-09-14
+> 最后更新：2026-09-15
+
+---
+
+## 2026-09-15（JobCopilot P2：MCP Server + CLI run）
+
+内核查升到 `3b441c3`（子模块指针同步）。**SEKB 侧未接入 MCP（P4 才切），行为完全不变。**
+
+**MCP 工具集（6 个）**：`analyze_job` / `analyze_jobs_batch` / `get_profile` /
+`save_profile` / `list_prompt_packs` / `sync_prompts`。双传输：
+`jobcopilot-mcp`（stdio，给 DSH / Claude Desktop / Cursor）与
+`jobcopilot-mcp --http`（streamable HTTP，给云端平台）。
+
+**本轮最重要的发现：API 边界不能静默失败。** 内核「每步独立降级」在引擎里是对的，
+但在 MCP 边界上，LLM 全挂时会返回 **7 个空段落**——调用方看起来像「调用成功但没内容」，
+完全看不出是 Key 失效 / 余额不足 / 网络不通。已改为：全失败 → 结构化错误（含排查方向）；
+部分失败 → 结果照常返回但带 `warnings` 标出不可信段落。这正是 P4 DoD 3 要防的模式。
+
+**安全默认**：HTTP 形态下默认**禁用 `source_path`**。该参数让服务端读本地文件
+（88 个职位当参数传会烧大量 token），但 HTTP 面向「别人的服务器 + 多用户」，
+开放任意路径读取等于暴露宿主机文件系统。确需启用要显式开，并可用
+`JOBCOPILOT_SOURCE_ROOT` 限定目录。
+
+**报错可排障**：实测 OpenAI 不可达时错误信息是「OpenAI 调用失败: 」（冒号后空白，
+因 httpx 网络异常的 `str()` 为空），完全无从下手。已带上异常类型与兜底说明。
+
+**验证**：jobcopilot **177 passed**（+34）/ ruff 全绿 / mypy strict 30 文件零错误。
+- **协议级**：官方 MCP 客户端真实拉起子进程，走完 initialize → list_tools（6 个工具）→
+  call_tool；HTTP 形态同样端到端覆盖，并断言 `source_path` 被拒。
+- **DoD 3 真 LLM 超时验证**（生产容器内、stdio 全链路）：50 职位 **12.5s** 返回
+  （限值 180s，余量 14×），market 5 字段 / knowledge 6 字段全非空。
+- **DoD 4 多 provider**：DeepSeek 真实调用成功；千问 / Kimi / 豆包 / 智谱**端点正确且返回干净 401**；
+  OpenAI 国内网络不可达（ConnectTimeout，非代码问题）。
 
 ---
 
