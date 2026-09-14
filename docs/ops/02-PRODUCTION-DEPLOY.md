@@ -187,6 +187,28 @@ cd /opt/self-evolving-kb
 git clone https://github.com/your-org/SelfEvolvingKnowledgeBase.git .
 ```
 
+### 3.1.1 克隆内核查 `jobcopilot`（必需）
+
+职位分析的内核已抽成**独立仓库** `jobcopilot`，后端镜像通过 Docker 的
+**命名构建上下文**把它装进镜像（`docker-compose.prod.yml` 的 `additional_contexts`
+＋ 后端 Dockerfile 的 `COPY --from=jobcopilot`）。
+
+因此构建前，**本仓库根目录**必须有一份 jobcopilot 检出：
+
+```bash
+cd /opt/self-evolving-kb/SelfEvolvingKnowledgeBase
+git clone ssh://git@<gitea-host>:2222/bo/jobcopilot.git jobcopilot
+# 或走 HTTP（若服务器已配 .git-credentials）：
+# git clone http://localhost:3000/bo/jobcopilot.git jobcopilot
+```
+
+要点：
+
+- 该目录已在 `.gitignore` 里忽略，**不会**污染 SEKB 仓库，`git pull` 也不会动它；
+- 内核有新版本时，要**单独** `cd jobcopilot && git pull`；
+- `deploy.sh` 构建前会检查 `jobcopilot/pyproject.toml` 是否存在，缺失即报错并提示上面的命令；
+- 发布顺序：先推 jobcopilot，再推 SEKB，最后服务器依次 pull 两个仓库。
+
 ### 3.2 配置环境变量
 
 ```bash

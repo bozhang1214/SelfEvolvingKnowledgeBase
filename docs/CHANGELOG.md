@@ -6,6 +6,26 @@
 
 ---
 
+## 2026-09-14（重构：招聘分析内核抽到 jobcopilot 独立包 · P0）
+
+- **背景**：招聘助手要作为独立产品发布，先做「抽内核」——把分析能力从 SEKB 里剥出来，SEKB 改为**直接依赖**该包。
+- **新仓库 `jobcopilot`**（Gitea 主 + GitHub 镜像）：零宿主耦合、**零第三方依赖**的 Python 包。
+  - `analyzers/single`：单职位 7 步流水线（深度分析 → 知识优先级/差距分析 → 面试Q&A/简历建议/项目迭代/求职策略），每步独立降级；
+  - `analyzers/batch`：批量分析（市场行情 + 职位知识迭代，两路并行）；
+  - `analyzers/apply_plan`：投递计划 + 大厂冷冻期计算；
+  - `stats`：程序化统计（公司/方向/热点关键词），Eval L1 层可零成本断言；
+  - `prompts`：多级回退（请求级 override → 宿主本地目录 → packs/职能族 → base）；
+  - `providers`：OpenAI 兼容客户端 + DeepSeek/千问/Kimi/豆包/智谱 预设，**BYOK**（Key 只走环境变量）。
+- **SEKB 侧保留**：爬虫（collector/sources/fetcher）、缓存（job_cache/analysis_cache）、历史存档（archive）、用户画像与存储接线（profile）。
+- **新增适配层** `app/agents/job/llm_adapter.py`：中性 Message ↔ LangChain 消息互转，SEKB 的模型路由/计费/重试/降级**完全不变**。
+- **可观测性**：内核默认用标准库 logging 会绕过 SEKB 的脱敏处理器（日志含 LLM 原文片段），故新增 `set_logger_factory` 注入点，把内核日志接进 structlog 管道。
+- **隐私**：`prompt/job/README.md` 含真实姓名/公司/年龄/薪资，**刻意不进开源包**；加了两道护栏（文件名黑名单 + 逐字节来源比对）。
+- **构建**：`backend/Dockerfile` 通过命名构建上下文 `COPY --from=jobcopilot` 安装内核包（`docker-compose.prod.yml` 的 `additional_contexts`），`deploy.sh` 增加内核查检出前置检查。
+- **验证**：SEKB **704 → 715 passed**（原 704 一条不差）；ruff 全绿；mypy 门禁 300 ≤ 基线 310（类型债降 10）；jobcopilot 自身 78 例 + ruff + mypy strict 全绿。
+- **回归比对**：`docs/tmp/p0_regression_check.py` 用同一个假 LLM 驱动「git HEAD 旧实现」与「新实现」，比对发给 LLM 的调用序列（含消息类型与正文）、7 段结构化输出、批量报告、降级路径 —— **全部完全一致**。
+
+---
+
 ## 2026-09-14（运维：服务器磁盘回收 19.5G + 部署脚本加固）
 
 - **背景**：`deploy.sh` 反复报「磁盘需 ≥20G 空闲」预检不过，排查发现真凶是 Docker 构建缓存。

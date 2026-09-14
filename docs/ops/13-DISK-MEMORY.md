@@ -142,12 +142,30 @@ sudo systemctl disable --now multipathd.service multipathd.socket
 光清不加固会复发。部署脚本「阶段 7：清理与收尾」已加入构建缓存上限：
 
 ```bash
-docker builder prune -af --max-used-space 2GB
+docker builder prune -f --max-used-space 14GB     # ✅ 正确
+# docker builder prune -af --max-used-space 14GB  # ❌ 静默空操作！
 ```
 
-- 保留 2G 热缓存（兼顾增量构建速度），超出部分自动回收；
-- 旧版 Docker 不支持 `--max-used-space` 时自动退化为整体清空（同样是安全的）；
-- Docker 29.6.1 / buildx 0.35 实测支持。
+### ⚠️ 两个实测踩到的坑
+
+**坑 1：`--max-used-space` 不能和 `-a/--all` 一起用。**
+实测 `docker builder prune -af --max-used-space 10GB` 返回 `Total: 0B`——**缓存一点不掉**，且不报错。
+去掉 `-a` 后立刻正常：`19.54GB → 12.36GB`（LRU 淘汰）。这类「静默不生效」最危险，
+加固命令必须实测过一次输出再上线。
+
+**坑 2：上限设太小会让每次部署重装依赖。**
+完整安装 `requirements.txt`（含 torch / transformers）需要保留约 **14G** 缓存层。
+一开始按「能省则省」设成 2G，代价是每次部署都要重装依赖、构建从 1 分钟变成 **13 分钟**。
+14G 上限下磁盘占用约 35G、可用约 24G，稳稳通过 20G 预检——**这是磁盘与部署速度的平衡点**。
+
+### 缓存与悬空镜像
+
+每次部署出新镜像后，**上一个后端镜像会失去标签**（`image:` 名字被新镜像占用），
+变成 10G 级别的可回收空间。部署脚本阶段 7 的 `docker image prune -f` 会顺手清掉，
+所以**不要在部署前手动清**——那时旧镜像还被运行中的容器占着，清不掉。
+
+> 旧版 Docker 不支持 `--max-used-space` 时自动退化为整体清空（安全，只是下次构建慢）。
+> 本机实测 Docker 29.6.1 / buildx 0.35 支持。
 
 ---
 
