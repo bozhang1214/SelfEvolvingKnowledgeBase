@@ -1,5 +1,6 @@
-import React from 'react';
-import { Alert, Popover, Space, Tag, Typography } from 'antd';
+import React, { useMemo, useState } from 'react';
+import { Alert, Empty, Input, List, Modal, Popover, Space, Tag, Typography } from 'antd';
+import { SearchOutlined } from '@ant-design/icons';
 import type { FetchedJob, JobAnalyzeResult } from '@/services/job';
 
 const { Text, Paragraph } = Typography;
@@ -127,7 +128,11 @@ const JsonBlock: React.FC<{ data: unknown }> = ({ data }) => {
 };
 
 /** 市场行情区块（批量职位分析.md 输出）：中文标签 + 易读布局，替代生硬的通用 JSON 表格。 */
-export const MarketSection: React.FC<{ data: Record<string, any> }> = ({ data }) => {
+export const MarketSection: React.FC<{
+  data: Record<string, any>;
+  /** 传入后，「招聘 N 个」标签可点击，回传赛道名供上层弹出对应职位列表 */
+  onShowJobs?: (trackName?: string) => void;
+}> = ({ data, onShowJobs }) => {
   const tracks = Array.isArray(data.track_heatmap) ? data.track_heatmap : [];
   const skill = data.skill_threshold || {};
   const must = Array.isArray(skill.must) ? skill.must : [];
@@ -143,7 +148,15 @@ export const MarketSection: React.FC<{ data: Record<string, any> }> = ({ data })
             {tracks.map((t: any, i: number) => (
               <div key={i}>
                 <Text strong>{t.track || `赛道 ${i + 1}`}</Text>
-                {t.job_count != null && <Tag color="blue" style={{ marginLeft: 8 }}>招聘 {t.job_count} 个</Tag>}
+                {t.job_count != null && (
+                  <Tag
+                    color="blue"
+                    style={{ marginLeft: 8, cursor: onShowJobs ? 'pointer' : undefined }}
+                    onClick={onShowJobs ? () => onShowJobs(t.track) : undefined}
+                  >
+                    招聘 {t.job_count} 个{onShowJobs ? ' ›' : ''}
+                  </Tag>
+                )}
                 {t.salary_signal && <Tag color="gold">{t.salary_signal}</Tag>}
                 {t.comment && <Text type="secondary">　{t.comment}</Text>}
               </div>
@@ -732,3 +745,83 @@ export function matchScoreColor(score: number): string {
   if (score >= 60) return 'blue';
   return 'orange';
 }
+
+/**
+ * 按赛道名粗筛职位（best-effort）：从赛道名提取关键词，匹配职位名 / 公司。
+ * 无匹配时**返回全部**，避免「点了赛道却弹出空列表」的体验落差。
+ */
+export function filterJobsByTrack(jobs: FetchedJob[], trackName?: string): FetchedJob[] {
+  if (!trackName) return jobs;
+  const keywords = trackName
+    .split(/[/、／\s|｜]+/)
+    .map((k) => k.trim())
+    .filter((k) => k.length >= 2);
+  if (keywords.length === 0) return jobs;
+  const matched = jobs.filter((j) => {
+    const hay = `${j.title || ''} ${j.company || ''}`;
+    return keywords.some((k) => hay.includes(k));
+  });
+  return matched.length > 0 ? matched : jobs;
+}
+
+/**
+ * 职位列表弹框（可复用）：批量分析 / 历史报告 / 赛道热力共用。
+ * 职位名复用 `JobTitle`——点击跳原文、悬浮看 JD 详情；顶部支持关键词过滤。
+ */
+export const JobListModal: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  jobs: FetchedJob[];
+  /** 弹框标题（默认「职位列表（N）」） */
+  title?: string;
+}> = ({ open, onClose, jobs, title }) => {
+  const [q, setQ] = useState('');
+  const shown = useMemo(() => {
+    const kw = q.trim().toLowerCase();
+    if (!kw) return jobs;
+    return jobs.filter((j) =>
+      `${j.title || ''} ${j.company || ''} ${j.city || ''} ${j.salary || ''}`
+        .toLowerCase()
+        .includes(kw),
+    );
+  }, [jobs, q]);
+
+  return (
+    <Modal
+      title={title || `职位列表（${jobs.length}）`}
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width={920}
+    >
+      <Input
+        allowClear
+        prefix={<SearchOutlined />}
+        placeholder="搜索职位名 / 公司 / 城市"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        style={{ marginBottom: 12 }}
+      />
+      {shown.length === 0 ? (
+        <Empty description="没有匹配的职位" />
+      ) : (
+        <div style={{ maxHeight: '60vh', overflow: 'auto' }}>
+          <List
+            size="small"
+            dataSource={shown}
+            renderItem={(j, idx) => (
+              <List.Item key={j.job_id || j.job_url || idx}>
+                <Space wrap size={8}>
+                  <JobTitle job={j} />
+                  {j.company && <Text type="secondary">{j.company}</Text>}
+                  {j.salary && <Tag color="gold">{j.salary}</Tag>}
+                  {j.city && <Tag>{j.city}</Tag>}
+                </Space>
+              </List.Item>
+            )}
+          />
+        </div>
+      )}
+    </Modal>
+  );
+};

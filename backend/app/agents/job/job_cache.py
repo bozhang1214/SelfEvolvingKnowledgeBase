@@ -90,3 +90,43 @@ def get_latest_cached(user_id: str) -> dict[str, Any] | None:
         "min_salary_k": min_salary_k,
         "jobs": best_entry.get("jobs") or [],
     }
+
+
+def list_all_cached(user_id: str) -> list[dict[str, Any]]:
+    """返回某用户所有未过期的缓存职位集合（供「投递计划」选填职位）。
+
+    返回 ``[{"keyword", "city", "min_salary_k", "count", "jobs"}, ...]``，按 ts 倒序。
+    """
+    data = _load()
+    prefix = f"{user_id}|"
+    now = time.time()
+    out: list[dict[str, Any]] = []
+
+    for key, entry in data.items():
+        if not key.startswith(prefix):
+            continue
+        ts = entry.get("ts", 0) or 0
+        if now - ts > _TTL_SECONDS:
+            continue
+
+        # key 形如 user_id|keyword|city|min_salary_k（keyword/city 均不含 "|"）
+        seg = key[len(prefix):].split("|")
+        keyword = seg[0] if len(seg) > 0 else ""
+        city = seg[1] if len(seg) > 1 else ""
+        try:
+            min_salary_k = int(seg[2]) if len(seg) > 2 and seg[2].isdigit() else 0
+        except (ValueError, IndexError):
+            min_salary_k = 0
+
+        jobs = entry.get("jobs") or []
+        out.append({
+            "keyword": keyword,
+            "city": city,
+            "min_salary_k": min_salary_k,
+            "count": len(jobs),
+            "jobs": jobs,
+            "ts": ts,
+        })
+
+    out.sort(key=lambda x: -x["ts"])
+    return out

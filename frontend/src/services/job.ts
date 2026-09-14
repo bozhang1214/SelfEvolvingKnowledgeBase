@@ -214,6 +214,21 @@ export async function getLatestJobCache(): Promise<LatestJobCache> {
   return res.data;
 }
 
+/** 一组缓存职位集合（按「关键词 + 城市 + 薪资」分组）。 */
+export interface JobCacheSet {
+  keyword: string;
+  city: string;
+  min_salary_k: number;
+  count: number;
+  jobs: FetchedJob[];
+}
+
+/** 列出全部未过期的缓存职位集合（供「投递计划」从缓存职位库选填职位）。 */
+export async function listJobCaches(): Promise<{ caches: JobCacheSet[]; total: number }> {
+  const res = await apiClient.get<{ caches: JobCacheSet[]; total: number }>('/job/cache/list');
+  return res.data;
+}
+
 /** 获取最后一次缓存的批量分析报告（14 天内，无则 report=null）。 */
 export async function getCachedBatchAnalysis(): Promise<{ cached: boolean; report: MarketReport | null }> {
   const res = await apiClient.get<{ cached: boolean; report: MarketReport | null }>('/job/batch-analyze/cached');

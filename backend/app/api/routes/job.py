@@ -330,6 +330,16 @@ async def get_latest_job_cache(user_id: str = Depends(get_current_user)):
     return {**cached, "cached": True, "count": len(cached["jobs"])}
 
 
+@router.get("/cache/list")
+async def list_job_caches(user_id: str = Depends(get_current_user)):
+    """返回某用户所有未过期的缓存职位集合（供「投递计划」从缓存职位库选填职位）。"""
+    _require_job_agent()
+    from app.agents.job.job_cache import list_all_cached
+
+    caches = list_all_cached(user_id)
+    return {"caches": caches, "total": sum(c["count"] for c in caches)}
+
+
 @router.get("/reports")
 async def list_archived_reports(user_id: str = Depends(get_current_user)):
     """列出历史存档报告（元信息，不含正文）。"""

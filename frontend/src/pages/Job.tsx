@@ -5,7 +5,7 @@ import {
 import {
   ThunderboltOutlined, ClearOutlined, FileSearchOutlined, SearchOutlined,
   BarChartOutlined, DeleteOutlined, ReloadOutlined, UploadOutlined, HistoryOutlined, DownloadOutlined,
-  SendOutlined, PlusOutlined,
+  SendOutlined, PlusOutlined, UnorderedListOutlined,
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import {
@@ -21,6 +21,7 @@ import {
   saveJobCache,
   getLatestJobCache,
   getCachedBatchAnalysis,
+  listJobCaches,
   listApplyPlan,
   saveApplyPlan,
   deleteApplyPlan,
@@ -31,6 +32,7 @@ import {
   type ArchivedReportMeta,
   type ApplyPlanItem,
   type ApplyPlanStats,
+  type JobCacheSet,
 } from '@/services/job';
 
 const { Text, Paragraph } = Typography;
@@ -52,7 +54,7 @@ const PLAN_STATUS_LABELS: Record<string, { text: string; color: string }> = {
   offer: { text: 'Offer', color: 'success' },
 };
 
-import { SectionRenderer, MarketSection, KnowledgeSection, JobTitle, classifyRole, isEmptyValue, getMatchScore, matchScoreColor, SECTION_LABELS, SECTION_ORDER, CITY_OPTIONS, SALARY_OPTIONS, type SectionKey } from '@/features/job/render';
+import { SectionRenderer, MarketSection, KnowledgeSection, JobTitle, JobListModal, filterJobsByTrack, classifyRole, isEmptyValue, getMatchScore, matchScoreColor, SECTION_LABELS, SECTION_ORDER, CITY_OPTIONS, SALARY_OPTIONS, type SectionKey } from '@/features/job/render';
 
 const Job: React.FC = () => {
   const [jdText, setJdText] = useState('');
@@ -117,6 +119,28 @@ const Job: React.FC = () => {
     applied_at: '', result_at: '', cooldown_months: 0, url: '', note: '',
   });
 
+  // 职位列表弹框（批量分析 / 历史报告 / 赛道热力共用）
+  const [jobListModal, setJobListModal] = useState<{ open: boolean; jobs: FetchedJob[]; title: string }>({
+    open: false, jobs: [], title: '',
+  });
+  // 缓存职位库（供「投递计划」选填职位）
+  const [jobCaches, setJobCaches] = useState<JobCacheSet[]>([]);
+  // 投递弹窗里「从缓存职位库选填」的当前选中项
+  const [planPickedJob, setPlanPickedJob] = useState<string | undefined>(undefined);
+
+  // 缓存职位库展平为选项（供投递弹窗选填）
+  const planJobOptions = useMemo(
+    () =>
+      jobCaches.flatMap((c) =>
+        c.jobs.map((j, i) => ({
+          value: `${c.keyword}|${i}|${j.job_url || j.title}`,
+          label: `[${c.keyword}] ${j.company || '—'} · ${j.title || '—'}${j.salary ? ` · ${j.salary}` : ''}`,
+          job: j,
+        })),
+      ),
+    [jobCaches],
+  );
+
   // 挂载时：回填最近一次缓存的职位 + 筛选选项，并预取缓存的批量报告
   useEffect(() => {
     let alive = true;
@@ -169,7 +193,6 @@ const Job: React.FC = () => {
     if (analysisMode === 'plan') {
       loadApplyPlan();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysisMode]);
 
   const handleImportClick = () => fileInputRef.current?.click();
@@ -237,6 +260,8 @@ const Job: React.FC = () => {
 
   const openPlanModal = (item?: ApplyPlanItem) => {
     setPlanEditing(item || null);
+    setPlanPickedJob(undefined);
+    loadJobCaches(); // 拉取缓存职位库，供「从缓存职位库选填」
     setPlanForm(
       item
         ? {
@@ -278,6 +303,33 @@ const Job: React.FC = () => {
       loadApplyPlan();
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '删除失败');
+    }
+  };
+
+  // ===== 职位列表弹框（批量分析 / 历史报告 / 赛道热力共用）=====
+  const showJobList = (jobs: FetchedJob[], title?: string) => {
+    setJobListModal({ open: true, jobs, title: title || `职位列表（${jobs.length}）` });
+  };
+
+  /** 赛道热力点击：按赛道名粗筛相关职位后弹出（无匹配则回退全部） */
+  const showTrackJobs = (allJobs: FetchedJob[], trackName?: string) => {
+    const filtered = filterJobsByTrack(allJobs, trackName);
+    const isFiltered = !!trackName && filtered.length !== allJobs.length;
+    showJobList(
+      filtered,
+      trackName
+        ? `「${trackName}」${isFiltered ? '相关' : ''}职位（${filtered.length} / 共 ${allJobs.length}）`
+        : `职位列表（${allJobs.length}）`,
+    );
+  };
+
+  /** 加载缓存职位库（投递计划选填职位用） */
+  const loadJobCaches = async () => {
+    try {
+      const { caches } = await listJobCaches();
+      setJobCaches(caches);
+    } catch {
+      // 静默失败
     }
   };
 
@@ -713,6 +765,20 @@ const Job: React.FC = () => {
               showIcon
               style={{ marginBottom: 12 }}
               message={`分析于 ${marketReport.analyzed_at?.replace('T', ' ').slice(0, 19) || ''} · 共 ${marketReport.job_count} 个职位 · 关键词「${marketReport.keyword}」· ${marketReport.city}`}
+              action={
+                <Button
+                  size="small"
+                  icon={<UnorderedListOutlined />}
+                  onClick={() =>
+                    showJobList(
+                      marketReport.jobs || [],
+                      `职位列表（${(marketReport.jobs || []).length}）· 关键词「${marketReport.keyword}」`,
+                    )
+                  }
+                >
+                  查看职位列表
+                </Button>
+              }
             />
             <Row gutter={16}>
               <Col xs={24} sm={8}>
@@ -745,7 +811,10 @@ const Job: React.FC = () => {
               <>
                 <Divider style={{ margin: '12px 0' }} />
                 <Paragraph strong style={{ marginBottom: 8 }}>市场行情</Paragraph>
-                <MarketSection data={marketReport.market as Record<string, any>} />
+                <MarketSection
+                  data={marketReport.market as Record<string, any>}
+                  onShowJobs={(trackName) => showTrackJobs(marketReport.jobs || [], trackName)}
+                />
               </>
             )}
 
@@ -1032,6 +1101,35 @@ const Job: React.FC = () => {
                   width={560}
                 >
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <div>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        从缓存职位库选填（可选，自动填入公司 / 岗位 / 链接）
+                      </Text>
+                      <Select
+                        showSearch
+                        allowClear
+                        style={{ width: '100%' }}
+                        placeholder={
+                          planJobOptions.length > 0
+                            ? `缓存中有 ${planJobOptions.length} 个职位，可搜索选择`
+                            : '缓存职位库为空（先到「职位收集」采集职位）'
+                        }
+                        value={planPickedJob}
+                        optionFilterProp="label"
+                        options={planJobOptions}
+                        onChange={(v) => {
+                          setPlanPickedJob(v);
+                          const picked = planJobOptions.find((o) => o.value === v);
+                          if (!picked) return;
+                          setPlanForm((prev) => ({
+                            ...prev,
+                            company: picked.job.company || prev.company,
+                            title: picked.job.title || prev.title,
+                            url: picked.job.job_url || prev.url,
+                          }));
+                        }}
+                      />
+                    </div>
                     <Row gutter={12}>
                       <Col span={12}>
                         <Text type="secondary" style={{ fontSize: 12 }}>公司</Text>
@@ -1122,20 +1220,35 @@ const Job: React.FC = () => {
         onCancel={() => setReportDetail(null)}
         footer={
           reportDetail ? (
-            <Button
-              icon={<DownloadOutlined />}
-              onClick={() => {
-                const blob = new Blob([reportDetail.markdown], { type: 'text/markdown;charset=utf-8' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `${reportDetail.title || '报告'}.md`;
-                a.click();
-                URL.revokeObjectURL(url);
-              }}
-            >
-              下载 Markdown
-            </Button>
+            <Space>
+              {reportDetail.type === 'batch' && Array.isArray(reportDetail.report?.jobs) && reportDetail.report.jobs.length > 0 && (
+                <Button
+                  icon={<UnorderedListOutlined />}
+                  onClick={() =>
+                    showJobList(
+                      (reportDetail.report?.jobs || []) as FetchedJob[],
+                      `职位列表（${reportDetail.report?.jobs?.length || 0}）· ${reportDetail.title || ''}`,
+                    )
+                  }
+                >
+                  查看职位列表（{reportDetail.report.jobs.length}）
+                </Button>
+              )}
+              <Button
+                icon={<DownloadOutlined />}
+                onClick={() => {
+                  const blob = new Blob([reportDetail.markdown], { type: 'text/markdown;charset=utf-8' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${reportDetail.title || '报告'}.md`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                下载 Markdown
+              </Button>
+            </Space>
           ) : null
         }
         width={860}
@@ -1175,7 +1288,12 @@ const Job: React.FC = () => {
                     <>
                       <Divider style={{ margin: 0 }} />
                       <Paragraph strong style={{ marginBottom: 0 }}>市场行情</Paragraph>
-                      <MarketSection data={reportDetail.report.market as Record<string, any>} />
+                      <MarketSection
+                        data={reportDetail.report.market as Record<string, any>}
+                        onShowJobs={(trackName) =>
+                          showTrackJobs((reportDetail.report?.jobs || []) as FetchedJob[], trackName)
+                        }
+                      />
                     </>
                   )}
                   {reportDetail.report.knowledge_iteration && !isEmptyValue(reportDetail.report.knowledge_iteration) && (
@@ -1207,6 +1325,14 @@ const Job: React.FC = () => {
           </div>
         ) : null}
       </Modal>
+
+      {/* 职位列表弹框（批量分析 / 历史报告 / 赛道热力共用） */}
+      <JobListModal
+        open={jobListModal.open}
+        onClose={() => setJobListModal((s) => ({ ...s, open: false }))}
+        jobs={jobListModal.jobs}
+        title={jobListModal.title}
+      />
     </div>
   );
 };
