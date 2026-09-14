@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-09-14（基础设施：自托管 Gitea 版本管理底座 + 发布链路切换）
+
+- **背景**：GitHub 在国内访问不稳、且 JobCopilot 独立仓库需要权威源，按 RFC D-02/D-08/D-09 自建 Gitea 作为版本管理底座。
+- **服务**（`docker-compose.monitoring.yml`）：新增 `gitea` 服务（`gitea/gitea:1.27.3`，SQLite 单机，512M/0.5cpu，健康检查 `/api/healthz`），端口 `3000:3000` / `2222:22`，独立网络 `sekb_gitea_net` 与数据卷 `sekb_gitea_data`；关闭注册（`DISABLE_REGISTRATION=true`）、锁安装（`INSTALL_LOCK=true`）。
+- **仓库**：`bo/sekb`（私有，SEKB 权威源）、`bo/jobcopilot` / `bo/jobcopilot-prompts` / `bo/jobcopilot-dsh-plugin`（公开，JobCopilot 三仓）。
+- **发布链路切换**：原「本地 `git bundle` → `scp` → 服务器 `fetch`+`merge`」**已废弃**，改为 `Mac: git push gitea main` → `服务器: git pull`（服务器 `main` 已 track `gitea/main`）；远端 URL 一律不带凭据。
+- **备份**：`scripts/backup_kb.sh` 纳入 `sekb_gitea_data`（版本管理权威源必须备份），恢复时自动拉起 `backend` + `gitea`。
+- **文档**：新增 `docs/ops/12-GITEA.md`（拓扑 / 仓库清单 / 凭据位置 / 日常运维 / 推镜像 / 备份恢复 / 排障），`00-README.md` 索引登记第 12 行。
+- **凭据纪律**：token/PAT 只落盘到 `/home/bo/`（`600`），**不进版本库、不写进 remote URL、不写进文档**。
+- **已知阻塞**：Gitea → GitHub 单向推送镜像已配置（`sync_on_commit`，8h 间隔），但 GitHub 账号邮箱未验证导致 `403 You must verify your email address`；验证后镜像即自动补齐，JobCopilot 三个 GitHub 仓库的创建同样等待该验证。
+- 验证：Gitea 容器 healthy（约 101 MiB）、`/api/healthz` 200、Gitea 卷备份实测 1.9M 且恢复后服务正常、Mac `push gitea main` 与服务器 `git pull` 双向实测通过。
+
+---
+
 ## 2026-09-14（新功能：职位列表联动三增强）
 
 - **背景**：投递计划录入职位要手打、批量分析/历史报告看不到原始职位、赛道热力的「招聘 N 个」是死数字——三处都缺「职位列表」的联动入口。
