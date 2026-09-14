@@ -6,7 +6,51 @@
 
 ---
 
-## 2026-09-14（重构：招聘分析内核抽到 jobcopilot 独立包 · P0）
+## 2026-09-14（修复：部署前数据备份从未真正执行 + 预检永久失败）
+
+第一次跑完整 `deploy.sh` 时暴露两个「一直红着但没人追」的问题：
+
+- **部署前数据备份从未真正执行**（日志只写「数据备份失败（非致命）」）：
+  1. `deploy.sh` 把备份日志重定向到 `/var/log/sekb-deploy-backup.log`，而部署用户 `bo`
+     对 `/var/log` **无写权限** → 重定向即失败，脚本根本没跑起来；
+  2. `deploy/backup.sh` 写死 `/backup` 目录，`bo` 同样无权限
+     （实测 `mkdir: cannot create directory '/backup/…': Permission denied`）；
+  3. 该脚本还把 `.env.prod` **明文打进备份并 sync 到 S3**（安全审查 SEC-09），
+     且**不覆盖 `sekb_gitea_data`**（RFC D-02 起是版本管理权威源）。
+  - **修复**：改用维护中的 `scripts/backup_kb.sh`（覆盖 `sekb_data` + `sekb_gitea_data`，
+    带 `EXIT trap` 兜底重启服务），日志落到 gitignore 的 `logs/deploy-backup.log`；
+    `deploy/backup.sh` 标记废弃并写明三条原因。实测：`EXIT=0`，产出 112M + 2.2M 两份备份。
+- **部署前检查第 6 节永久失败**：`prom/alertmanager` 镜像的 ENTRYPOINT 是 `/bin/alertmanager`，
+  所以 `docker run prom/alertmanager:latest amtool check-config …` 会把 `amtool` 当成
+  alertmanager 的参数，报 `unexpected amtool, try --help` → 整个预检不通过。
+  - **修复**：加 `--entrypoint amtool`。实测 `SUCCESS`（global config / route / 1 inhibit rules / 3 receivers）。
+- **结果**：`deploy.sh` 首次完整跑通（`EXIT=0`），七阶段全绿；构建阶段正确打印内核查 commit
+  （`a4b1885 version = "0.0.1"`），阶段 7 的缓存上限也确认生效。
+
+---
+
+
+
+- **P-1 阻塞全部解除**：
+  - GitHub 邮箱验证完成后，SEKB 推送镜像一次补齐落后的 **119 个 commit**（GitHub 上已是 `db6f1f9`）；
+  - JobCopilot 三个 GitHub 仓库创建成功（`HTTP 201`），四个仓库的 push mirror 全部 ✅ 正常。
+  - **踩坑**：在邮箱验证**之前**创建的 mirror 配置会持续报 `OpenSSL SSL_read: unexpected eof`
+    （网络实测正常、`git ls-remote` 也通）。**删除镜像配置后重建即恢复** —— 配置早于前置条件的残留，重建比排查快。
+- **jobcopilot 从「gitignore 的独立检出」改为 git 子模块**：
+  - 原状态别扭：物理上在仓库内却被 gitignore，还带自己的 `.git`；新机器 clone 完 SEKB 直接构建会失败，
+    必须有人口头告诉你"还要再 clone 一个仓库到根目录"——**隐藏知识**。
+  - 改为子模块后：SEKB 记录内核的**固定 commit**（此前服务器 `pull` 会拿到 main 上任意版本，部署不可复现）、
+    新机器 `git clone --recurse-submodules` 一次到位、构建零改动（子模块就是普通目录）。
+  - 服务器用**全局 URL 重写**走 HTTP（不写进 `.gitmodules`，避免弄脏跟踪文件）：
+    `git config --global url."http://localhost:3000/".insteadOf "ssh://git@100.71.24.105:2222/"`
+  - `deploy.sh` 缺内核时的提示改为 `git submodule update --init`，并在构建前打印子模块实际 commit 便于溯源。
+- **代价（已知并接受）**：每次改内核后必须回 SEKB 提交一次子模块指针，忘了会部署到旧内核
+  （deploy.sh 会打印实际 commit 便于发现）；P4 切 MCP 后本耦合消失，`git submodule deinit` 一行移除。
+- 验证：SEKB 715 passed、jobcopilot 78 passed、`docker compose config` 正常解析命名上下文、服务器完整部署跑通。
+
+---
+
+
 
 - **背景**：招聘助手要作为独立产品发布，先做「抽内核」——把分析能力从 SEKB 里剥出来，SEKB 改为**直接依赖**该包。
 - **新仓库 `jobcopilot`**（Gitea 主 + GitHub 镜像）：零宿主耦合、**零第三方依赖**的 Python 包。
