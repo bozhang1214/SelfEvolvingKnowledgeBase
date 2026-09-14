@@ -90,6 +90,42 @@ Push Mirror 地址正确且最近同步全部成功、`sekb` 为 private、`back
 
 ---
 
+## 2026-09-15（JobCopilot P1：提示词职能分层 + Eval 骨架）
+
+内核查升到 `340144a`（子模块指针同步更新）。**SEKB 侧行为不变**——SEKB 仍用自己的
+`prompt/job`（本地目录优先级最高），且包内 base 提示词一字未改。
+
+**提示词 pack（只写差异章节）**
+- 新增章节级合并：pack 里写到的标题覆盖 base 同名标题，其余原样继承，
+  **JSON 输出骨架永远来自 base**（防 schema 漂移）；匹配按标题序号，pack 可自由改写文案；
+- 内置三个职能 pack：`presales`（客户/云厂商赛道 + 年包口径）、`product`（产品线赛道 +
+  端云协同/评测体系 + 车载标注）、`engineering`（技术职能 + 框架源码深度）；
+- `jobcopilot pull` 把**合并后的完整提示词**拉到本地目录（可直接改、立即生效）。
+
+**Eval 骨架（三层）**
+- L1 程序化断言（零 LLM）：结构 / job_count / **stats 精确比对** / 段落非空 /
+  **输出与提示词声明的 JSON 骨架一致**；
+- L2 基线回归（零 LLM）：**提示词指纹** + 指标不得低于基线；
+- L3 LLM-as-Judge：覆盖度 / 如实性 / 可执行性 / 赛道 / 薪资依据；
+- 黄金数据集：3 组批量（研发 8 / 售前 6 / 产品 6）+ 3 条单职位用例；
+- **守门员方案 B**：CI 只跑 L1+L2（无需 Key、零成本）。L2 的提示词指纹把
+  「改了提示词就必须重新基线化」变成零成本强制。
+
+**CLI**：`jobcopilot pull / pack / eval / doctor`。
+
+**可追溯性**：批量报告新增 `prompt_meta`（pack / 指纹 / 覆盖章节），
+可从缓存或存档报告反查提示词版本。
+
+**修掉两个真 bug**
+1. **伪 JSON 骨架导致断言假绿**：提示词骨架用裸词占位（`"job_count": 招聘量`），
+   严格 `json.loads` 必然失败 → 两条最重要的批量提示词**静默跳过校验**；
+2. **`to_dict` 返回内部 dict 引用**：调用方一改就污染报告本身，使差异比对静默失效。
+
+**验证**：jobcopilot 143 passed / ruff 全绿 / mypy strict 零错误（26 文件）；
+SEKB 721 passed / ruff 全绿 / mypy 门禁 300 ≤ 310；**P0 逐字段回归比对仍全等**。
+
+---
+
 ## 2026-09-14（运维：GitHub token 轮换 + 镜像同步跑通）
 
 - **Token 轮换**：旧 PAT 实测已失效（`curl /user` 返回 `Bad credentials` ✅）；
@@ -170,7 +206,7 @@ job 数都是 0**（工作流 active、YAML 合法、Actions 已启用），与�
 
 ---
 
-
+## 2026-09-14（工程：jobcopilot 转为 git 子模块 + GitHub 镜像打通）
 
 - **P-1 阻塞全部解除**：
   - GitHub 邮箱验证完成后，SEKB 推送镜像一次补齐落后的 **119 个 commit**（GitHub 上已是 `db6f1f9`）；
@@ -191,7 +227,7 @@ job 数都是 0**（工作流 active、YAML 合法、Actions 已启用），与�
 
 ---
 
-
+## 2026-09-14（重构：招聘分析内核抽到 jobcopilot 独立包 · P0）
 
 - **背景**：招聘助手要作为独立产品发布，先做「抽内核」——把分析能力从 SEKB 里剥出来，SEKB 改为**直接依赖**该包。
 - **新仓库 `jobcopilot`**（Gitea 主 + GitHub 镜像）：零宿主耦合、**零第三方依赖**的 Python 包。
