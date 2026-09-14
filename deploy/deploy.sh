@@ -342,6 +342,20 @@ info "清理悬挂镜像..."
 run "docker image prune -f 2>/dev/null || true"
 success "清理完成"
 
+# 限制构建缓存上限（防止 buildkit 缓存无限增长撑爆磁盘）
+# 背景：2026-09-14 排查发现构建缓存堆到 20.2G，占满 59G 磁盘的 1/3，
+#       直接导致部署前检查「需要 ≥20G 空闲」反复告警。缓存只影响重建速度，不影响功能。
+info "限制构建缓存上限（2GB）..."
+if [ "$DRY_RUN" = false ]; then
+    if docker builder prune -af --max-used-space 2GB >/dev/null 2>&1; then
+        success "构建缓存已收敛到 2GB 以内"
+    else
+        # 旧版 Docker 不支持 --max-used-space，退化为整体清理（同样安全）
+        docker builder prune -af >/dev/null 2>&1 || true
+        warn "Docker 版本不支持缓存上限参数，已改为整体清空构建缓存"
+    fi
+fi
+
 # 清理超过 7 天的备份配置文件
 info "清理旧备份配置文件（保留 7 天）..."
 if [ "$DRY_RUN" = false ]; then

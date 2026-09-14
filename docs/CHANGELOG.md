@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-09-14（运维：服务器磁盘回收 19.5G + 部署脚本加固）
+
+- **背景**：`deploy.sh` 反复报「磁盘需 ≥20G 空闲」预检不过，排查发现真凶是 Docker 构建缓存。
+- **实测回收**：
+  - `docker builder prune -af`：构建缓存 `20.2G → 1.16G`，**回收 19.05G**；磁盘 `39G/69% → 25G/43%`（可用 18G→33G）；
+  - journal 限容（`SystemMaxUse=200M` / `SystemKeepFree=1G` / `MaxRetentionSec=2week`）+ `apt-get clean`：`/var/log` `378M → 146M`。
+- **内存结论（反直觉，已固化为判读方法）**：内存**从未紧张** —— PSI `memory some avg10=0.03`、`vmstat si/so=0/0`、available 1.6G；swap 里 649M 是 rsshub / playwright / dockerd 的冷页，属正常。**今后先看 `docker system df`，不要先看 `free`**。
+- **内存小优化**：停用云主机上的无用常驻服务 `fwupd`（+ `fwupd-refresh.timer`，static 需 mask）与 `multipathd`（实测 `/dev/mapper/` 仅 control，无多路径设备），释放约 57M，PSI 归零。
+- **根因加固**：`deploy/deploy.sh` 阶段 7 新增 `docker builder prune -af --max-used-space 2GB`（保留 2G 热缓存，旧版 Docker 自动退化为整体清空），防止缓存再次无限增长。
+- **新增文档**：`docs/ops/13-DISK-MEMORY.md`（体检三命令 / 清理清单 / PSI 判读 / 加固说明 / 一键巡检脚本），索引登记第 13 行。
+- **遗留隐患（待确认）**：7 份备份仍在**同一块磁盘**上，`backup_kb.sh` 无任何 cos/oss/rclone/rsync 上传逻辑 —— 磁盘损坏即数据+备份同时丢失，建议接入腾讯云 COS 做异地副本。
+
+---
+
 ## 2026-09-14（基础设施：自托管 Gitea 版本管理底座 + 发布链路切换）
 
 - **背景**：GitHub 在国内访问不稳、且 JobCopilot 独立仓库需要权威源，按 RFC D-02/D-08/D-09 自建 Gitea 作为版本管理底座。
