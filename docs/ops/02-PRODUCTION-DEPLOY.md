@@ -202,14 +202,39 @@ cd /opt/self-evolving-kb/SelfEvolvingKnowledgeBase
 git submodule update --init
 ```
 
-**URL 重写的必要性**：`.gitmodules` 里记的是 Gitea 的 Tailscale SSH 地址
-（`ssh://git@100.71.24.105:2222/bo/jobcopilot.git`），而服务器平时走 HTTP。
-不要在子模块里改 URL（那会弄脏 `.gitmodules` 这个跟踪文件，导致每次 pull 冲突），
-用**全局 URL 重写**：
+**URL 重写的必要性**：`.gitmodules` 里记的是**公开**的 GitHub 地址
+（`https://github.com/bozhang1214/jobcopilot.git`，任何人 clone 都能直接拉到），
+服务器想走自托管 Gitea 就用**全局 URL 重写**。不要在子模块里改 URL
+（那会弄脏 `.gitmodules` 这个跟踪文件，导致每次 pull 冲突）：
 
 ```bash
-git config --global url."http://localhost:3000/".insteadOf "ssh://git@100.71.24.105:2222/"
+# 服务器
+git config --global url."http://localhost:3000/bo/".insteadOf "https://github.com/bozhang1214/"
+# Mac（走 Gitea SSH）
+git config --global url."ssh://git@100.71.24.105:2222/bo/".insteadOf "https://github.com/bozhang1214/"
 ```
+
+### 3.1.2 内核状态在四个时机都可见（子模块防「静默过期」）
+
+子模块最大的风险是**静默过期**：`git pull` 完 SEKB 子模块纹丝不动、改完内核忘了回
+SEKB 提交指针、新机器不知道还要拉子模块——全都不报错。为此把状态在四个时机显性化：
+
+| 时机 | 手段 | 你能看到什么 |
+|---|---|---|
+| **首次接触** | `bash scripts/check_kernel.sh` | 是否初始化 / commit 是否与钉住的一致 / 工作区是否干净 / 提示词是否完整 / 异常时给可直接复制的修复命令 |
+| **部署前** | `deploy/pre-deploy-check.sh` 第 2.1.1 节 ＋ `deploy.sh` **硬闸门** | 未初始化、commit 不符、工作区脏 → **直接中止部署**（不再静默部署非钉住版本的内核）。紧急绕过 `SKIP_KERNEL_CHECK=1` |
+| **运行时** | `GET /api/v1/health/` 的 `kernel` 字段 ＋ 容器启动日志 | `version` / `commit` / `prompts` / `prompt_source`（提示词实际从 local 还是包内 base 生效）/ `healthy` |
+| **CI** | `lint` job 前置 `check_kernel.sh --strict` | 指针失效或子模块脏 → 直接红，挡在合并前 |
+
+一键核对线上内核：
+
+```bash
+git submodule status jobcopilot | cut -c2- | awk '{print substr($1,1,7)}'   # SEKB 钉住的
+curl -s http://localhost:8000/api/v1/health/ | python3 -c \
+  "import sys,json; print(json.load(sys.stdin)['kernel'])"                  # 线上跑的
+```
+
+两者 commit 一致 ⇒ 线上跑的就是钉住的那份内核。
 
 **日常维护要点**：
 
@@ -222,7 +247,8 @@ git config --global url."http://localhost:3000/".insteadOf "ssh://git@100.71.24.
 
 > **子模块的价值**：SEKB 记录的是 jobcopilot 的**固定 commit**，部署可复现。
 > 发布顺序：**先推 jobcopilot → 再回 SEKB 更新子模块指针并推 → 服务器 `git pull` + `git submodule update`**。
-> 忘了第二步的后果是「部署用的还是旧内核」——`deploy.sh` 会打出实际 commit 便于发现。
+> 忘了第二步的后果是「部署用的还是旧内核」——部署日志会打出实际 commit，
+> `/health` 也能随时核对。
 
 ### 3.2 配置环境变量
 

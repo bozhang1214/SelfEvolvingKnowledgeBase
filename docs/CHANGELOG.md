@@ -6,6 +6,43 @@
 
 ---
 
+## 2026-09-14（工程：内核子模块状态在四个时机全部显性化）
+
+**要解决的问题**：子模块最大的风险是**静默过期**——`git pull` 完 SEKB 子模块纹丝不动、
+改完内核忘了回 SEKB 提交指针、新机器不知道还要拉子模块，**全都不报错**。
+
+- **0）`.gitmodules` 改用公开 GitHub 地址**（原为 Tailscale 私网 `ssh://git@100.71.24.105:2222/...`）。
+  这意味着**任何人从 GitHub clone SEKB 都拉不到子模块**——比「不知道是不是最新」更严重。
+  本机/服务器用**全局 URL 重写**走自托管 Gitea，不动 `.gitmodules`（避免弄脏跟踪文件）。
+- **1）首次接触**：新增 `scripts/check_kernel.sh`，一条命令看清
+  是否初始化 / commit 是否与 SEKB 钉住的一致 / 工作区是否干净 / 提示词是否完整 /
+  能否被 Python 导入，异常时给出**可直接复制**的修复命令。`--strict` 让警告也致命，`--quiet` 供 CI。
+- **2）部署前硬闸门**：`deploy.sh` 从「目录存在」升级为 `check_kernel.sh --strict`——
+  未初始化 / commit 不符 / 工作区脏 → **直接中止**，不再「静默部署非钉住版本的内核」；
+  紧急绕过 `SKIP_KERNEL_CHECK=1`。`pre-deploy-check.sh` 接入同一脚本，标准一致。
+- **3）运行时可见**：内核 commit 在构建期烧进镜像（build arg → ENV），
+  容器启动日志打印，并在 `GET /api/v1/health/` 新增 `kernel` 字段
+  （`version` / `commit` / `prompts` / `prompt_source` / `prompt_dir` / `healthy`）。
+  线上一条命令即可核对：`git submodule status` 的 commit 与 `/health` 的 `kernel.commit` 一致 ⇒ 跑的就是钉住的那份。
+- **4）CI**：给需要后端的 5 个 job 补 `submodules: true`
+  （**此前我引入子模块后 CI 必挂**），`lint` job 前置 `check_kernel.sh --strict` 闸门。
+
+**踩到的两个真坑**（都写进了代码注释）：
+1. BSD（macOS）的 `tr -d '+-U'` 会把 `+-U` 当成 **ASCII 区间**（`+`=43 到 `U`=85，**含全部数字**），
+   结果把 commit SHA 里的数字全删光（`a4b1885f...` → `abfcdfacdebaac`）→ 改用 `sed` 精确去首字符；
+2. `pre-deploy-check.sh` 是 `set -euo pipefail`，写成 `VAR="$(失败命令)"` 再判 `$?` 会让脚本
+   **直接退出**——门禁失败反而变成静默中断整个预检 → 必须写成 `if VAR="$(cmd)"; then`。
+
+**顺带发现（未修，另案）**：GitHub Actions **从 2026-08-20 起 0/30 全部失败，且每次运行
+job 数都是 0**（工作流 active、YAML 合法、Actions 已启用），与本次改动无关，是又一个
+「一直红着但没人追」的问题。
+
+- 验证：SEKB 715 → **721 passed**；ruff 全绿；mypy 300 ≤ 基线 310；
+  `deploy.sh` 完整跑通（EXIT=0，含新的内核硬闸门与部署前备份）；
+  线上 `/health` 报 `commit=a4b1885...`，与 `git submodule status` 钉住的完全一致。
+
+---
+
 ## 2026-09-14（修复：部署前数据备份从未真正执行 + 预检永久失败）
 
 第一次跑完整 `deploy.sh` 时暴露两个「一直红着但没人追」的问题：
