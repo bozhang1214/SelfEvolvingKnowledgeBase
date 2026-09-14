@@ -79,5 +79,5 @@ resume/
 # ============ 临时草稿文档（本地留存，不进版本库）============
 docs/tmp/
 
-# ============ JobCopilot 独立仓库（嵌套工作副本，不进 SEKB 版本库）============
-jobcopilot/
+# 注：jobcopilot 是 git **子模块**（见 .gitmodules），由 git 管理，不能再进 gitignore。
+# 构建期需要它存在于仓库根：git submodule update --init

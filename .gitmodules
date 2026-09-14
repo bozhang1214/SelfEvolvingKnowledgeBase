@@ -1,0 +1,3 @@
+[submodule "jobcopilot"]
+	path = jobcopilot
+	url = ssh://git@100.71.24.105:2222/bo/jobcopilot.git
