@@ -36,6 +36,8 @@ class NewsScheduler:
     #: 错过触发后的宽限时间（秒）。默认只有 1 秒 —— 容器恰好在 08:00 前后重启时，
     #: 这次运行会被**静默跳过**（周一没生成周报很可能就是这个原因），因此放宽到 1 小时。
     MISFIRE_GRACE_S = 3600
+    #: 启动补跑的延迟（秒）：等 embedding/MCP 预热完再补，避免和启动抢 CPU
+    CATCH_UP_DELAY_S = 60
 
     def _status_path(self) -> Path:
         return Path(self._config.report_dir) / self.STATUS_FILE
@@ -136,9 +138,97 @@ class NewsScheduler:
             weekly_cron=self._config.weekly_cron,
             timezone=self._config.timezone,
         )
+        self._schedule_catch_up()
+
+    # ---------------- 启动补跑（错过的计划不再永久丢失） ----------------
+
+    def _schedule_catch_up(self) -> None:
+        """启动后台补跑任务（不阻塞应用启动）。"""
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # 理论上 start() 总在事件循环里调用（lifespan）；真没有就放弃补跑，
+            # 绝不能因为「补跑排不进去」把应用启动搞挂。
+            logger.warning("没有事件循环，跳过启动补跑（不影响定时调度）")
+            return
+
+        async def _run_later() -> None:
+            # 等一会再补：让 embedding/MCP 预热完成，别和启动抢 CPU
+            await asyncio.sleep(self.CATCH_UP_DELAY_S)
+            try:
+                await self.catch_up_missing()
+            except Exception as e:  # noqa: BLE001 - 补跑是旁路能力，绝不影响主流程
+                logger.warning("启动补跑异常", error=f"{type(e).__name__}: {str(e)[:200]}")
+
+        self._catch_up_task = loop.create_task(_run_later())  # 持强引用，避免被 GC
+
+    def _daily_time_passed(self, now: datetime | None = None) -> bool:
+        """现在是否已过「今天该跑日报」的时间点。
+
+        为什么日报必须判时间：`refresh()` 的窗口是滚动 24 小时，凌晨补跑会生成一份
+        几乎只有昨天内容的「今天的日报」。周报/月报不用判 —— 它们的 period 恒为
+        **已结束**的自然周/月，缺了就补没有歧义。
+        """
+        from zoneinfo import ZoneInfo
+
+        tz: Any
+        try:
+            tz = ZoneInfo(self._config.timezone)
+        except Exception:  # noqa: BLE001
+            tz = timezone.utc
+        now = now or datetime.now(tz)
+        parts = self._config.daily_cron.split()
+        # 只在「每天固定时刻」这种简单表达式下补跑；带星期/日期限制的复杂表达式不猜
+        if len(parts) != 5 or not parts[0].isdigit() or not parts[1].isdigit():
+            return False
+        if parts[2] != "*" or parts[4] != "*":
+            return False
+        return (now.hour, now.minute) >= (int(parts[1]), int(parts[0]))
+
+    async def catch_up_missing(self) -> list[str]:
+        """补跑**缺失**的报告，返回实际补跑的类型列表。
+
+        为什么必须有：定时任务在计划时刻错过超过 misfire 宽限（容器恰好正在部署/重启，
+        2026-09-15 的日报与上周周报都是这么丢的）后，APScheduler 直接跳过，
+        **这一天/这一期就永远不会再生成**，只能靠人发现或手动点一次。
+        补跑是幂等的：只补「该有但现在没有」的那份，跑完就写状态（失败会触发告警）。
+        """
+        if not self._config.enabled:
+            return []
+
+        ran: list[str] = []
+
+        # 日报：到点 + 今天没有 → 补（refresh 自身也有存在性检查，双保险）
+        if self._daily_time_passed():
+            day = self._agent.expected_period("daily")
+            if self._agent.read_report(day) is None:
+                logger.info("启动补跑：今日日报缺失，补一次", day=day)
+                await self._run_guarded("daily", lambda: self._agent.refresh())
+                ran.append("daily")
+
+        # 周报/月报：期望的 period 恒为已结束的周期，缺了就补
+        for kind in ("weekly", "monthly"):
+            label = self._agent.expected_period(kind)
+            if self._agent.read_periodic(kind, label) is None:
+                logger.info("启动补跑：周期报告缺失，补一次", kind=kind, period=label)
+                await self._run_guarded(
+                    kind, lambda k=kind: self._agent.generate_periodic(k)
+                )
+                ran.append(kind)
+
+        if ran:
+            logger.info("启动补跑完成", kinds=ran)
+        else:
+            logger.info("启动补跑：没有缺失的报告")
+        return ran
 
     def shutdown(self) -> None:
         """关闭调度器。"""
+        task = getattr(self, "_catch_up_task", None)
+        if task is not None and not task.done():
+            task.cancel()
         if self._scheduler.running:
             self._scheduler.shutdown(wait=False)
             logger.info("科技资讯调度已关闭")

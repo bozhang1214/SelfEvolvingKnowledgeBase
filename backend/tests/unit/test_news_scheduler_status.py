@@ -153,3 +153,145 @@ def test_agent_read_status_corrupt_file(tmp_path) -> None:
     agent = NewsAgent.__new__(NewsAgent)
     agent._config = _config(tmp_path)
     assert agent.read_status() is None
+
+
+# ---------- 启动补跑：错过的计划不再永久丢失 ----------
+
+
+class _FakeAgent:
+    """记录调用、可控「哪份报告已存在」的假 Agent。"""
+
+    def __init__(self, *, daily_exists: bool = False, missing: set[str] | None = None) -> None:
+        self.daily_exists = daily_exists
+        self.missing = missing if missing is not None else {"weekly", "monthly"}
+        self.calls: list[str] = []
+        self.labels = {"daily": "2026-09-15", "weekly": "2026-09-07", "monthly": "2026-08"}
+
+    def expected_period(self, kind: str) -> str:
+        return self.labels[kind]
+
+    def read_report(self, day: str):  # noqa: ANN201
+        return {"md": "x"} if self.daily_exists else None
+
+    def read_periodic(self, kind: str, period: str):  # noqa: ANN201
+        return None if kind in self.missing else {"md": "x"}
+
+    async def refresh(self, force: bool = False):  # noqa: ANN201
+        self.calls.append("daily")
+        return {"period": self.labels["daily"]}
+
+    async def generate_periodic(self, kind: str, period: str | None = None):  # noqa: ANN201
+        self.calls.append(kind)
+        return {"period": self.labels[kind]}
+
+
+def _scheduler_with(tmp_path, agent, cron_daily: str = "0 8 * * *") -> NewsScheduler:
+    cfg = _config(tmp_path)
+    cfg.daily_cron = cron_daily
+    s = NewsScheduler(cfg, news_agent=agent)
+    s.RETRY_DELAY_S = 0
+    return s
+
+
+def test_daily_time_passed(tmp_path) -> None:
+    """日报必须过了当天计划时间才补：否则凌晨会生成一份几乎只有昨天内容的「今天的日报」。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("Asia/Shanghai")
+    s = _scheduler_with(tmp_path, _FakeAgent())
+    assert s._daily_time_passed(datetime(2026, 9, 15, 9, 0, tzinfo=tz)) is True
+    assert s._daily_time_passed(datetime(2026, 9, 15, 7, 59, tzinfo=tz)) is False
+    assert s._daily_time_passed(datetime(2026, 9, 15, 8, 0, tzinfo=tz)) is True
+
+
+def test_daily_time_passed_skips_complex_cron(tmp_path) -> None:
+    """带星期/日期限制的表达式不猜（宁可不补，也不要补错时间）。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    s = _scheduler_with(tmp_path, _FakeAgent(), cron_daily="0 8 * * 1")
+    assert s._daily_time_passed(datetime(2026, 9, 15, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))) is False
+
+
+@pytest.mark.asyncio
+async def test_catch_up_generates_missing_reports(tmp_path, monkeypatch) -> None:
+    agent = _FakeAgent(daily_exists=False, missing={"weekly", "monthly"})
+    s = _scheduler_with(tmp_path, agent)
+    monkeypatch.setattr(s, "_daily_time_passed", lambda now=None: True)
+
+    ran = await s.catch_up_missing()
+    assert ran == ["daily", "weekly", "monthly"]
+    assert agent.calls == ["daily", "weekly", "monthly"]
+
+
+@pytest.mark.asyncio
+async def test_catch_up_skips_existing_reports(tmp_path, monkeypatch) -> None:
+    """已经有的不重跑（补跑必须幂等，否则每次重启都会白烧一遍 LLM）。"""
+    agent = _FakeAgent(daily_exists=True, missing=set())
+    s = _scheduler_with(tmp_path, agent)
+    monkeypatch.setattr(s, "_daily_time_passed", lambda now=None: True)
+
+    assert await s.catch_up_missing() == []
+    assert agent.calls == []
+
+
+@pytest.mark.asyncio
+async def test_catch_up_before_daily_time_only_periodic(tmp_path, monkeypatch) -> None:
+    """还没到日报时间点：只补周期报告，不补日报。"""
+    agent = _FakeAgent(daily_exists=False, missing={"weekly"})
+    s = _scheduler_with(tmp_path, agent)
+    monkeypatch.setattr(s, "_daily_time_passed", lambda now=None: False)
+
+    assert await s.catch_up_missing() == ["weekly"]
+    assert agent.calls == ["weekly"]
+
+
+@pytest.mark.asyncio
+async def test_catch_up_disabled(tmp_path, monkeypatch) -> None:
+    agent = _FakeAgent()
+    s = _scheduler_with(tmp_path, agent)
+    s._config.enabled = False
+    monkeypatch.setattr(s, "_daily_time_passed", lambda now=None: True)
+    assert await s.catch_up_missing() == []
+    assert agent.calls == []
+
+
+@pytest.mark.asyncio
+async def test_catch_up_failure_is_recorded_not_raised(tmp_path, monkeypatch) -> None:
+    """补跑失败：记状态（进而推告警），不把启动流程搞挂。"""
+    agent = _FakeAgent(daily_exists=False, missing=set())
+
+    async def boom(force: bool = False):  # noqa: ANN201
+        raise RuntimeError("SSLError: 连接被重置")
+
+    agent.refresh = boom  # type: ignore[method-assign]
+    s = _scheduler_with(tmp_path, agent)
+    monkeypatch.setattr(s, "_daily_time_passed", lambda now=None: True)
+
+    assert await s.catch_up_missing() == ["daily"]
+    data = json.loads((tmp_path / "news" / "last_status.json").read_text(encoding="utf-8"))
+    assert data["ok"] is False and "SSLError" in data["error"]
+
+
+def test_expected_period_labels(tmp_path) -> None:
+    """`expected_period` 决定「该不该有一份报告」，标签错就会一直补跑或一直漏。"""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from app.agents.news.service import NewsAgent
+
+    agent = NewsAgent.__new__(NewsAgent)
+    agent._config = _config(tmp_path)
+    agent._config.timezone = "Asia/Shanghai"
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    assert agent.expected_period("daily") == today.isoformat()
+    # 周报=本周一 - 7 天（上一整周）
+    assert agent.expected_period("weekly") == (
+        today - timedelta(days=today.weekday() + 7)
+    ).isoformat()
+    # 月报=上个月
+    assert agent.expected_period("monthly") == (
+        today.replace(day=1) - timedelta(days=1)
+    ).strftime("%Y-%m")
+

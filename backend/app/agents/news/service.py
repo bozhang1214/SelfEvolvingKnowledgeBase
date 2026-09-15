@@ -353,8 +353,10 @@ class NewsAgent:
             raise
 
     def _period_label(self, report_type: str, period: str | None) -> str:
-        """计算周期标签（文件名用）：周报=周一日期，月报=YYYY-MM。"""
+        """计算周期标签（文件名用）：日报=今天日期（本地时区），周报=周一日期，月报=YYYY-MM。"""
         today = datetime.fromisoformat(self._today_local()).date()
+        if report_type == "daily":
+            return today.isoformat()
         if report_type == "weekly":
             if period:
                 return period
@@ -364,6 +366,13 @@ class NewsAgent:
             return period
         first_this_month = today.replace(day=1)
         return (first_this_month - timedelta(days=1)).strftime("%Y-%m")  # 上月
+
+    def expected_period(self, report_type: str) -> str:
+        """**当前该有**的那一期的标签（日报=今天；周报=上周一；月报=上月）。
+
+        给调度器的启动补跑用：判断「这份报告到底该不该存在」，避免它去猜命名规则。
+        """
+        return self._period_label(report_type, None)
 
     @staticmethod
     def _item_to_dict(item: Any) -> dict:
