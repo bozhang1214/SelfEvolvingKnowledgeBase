@@ -1,5 +1,10 @@
 # 火山引擎 HiAgent / 方舟 Ark 接入自定义 MCP Server 调研
 
+> **本文与接入指南的关系**：本文是「调研过程 + 完整证据 + 抓取方法」的长文档；
+> 面向用户的**精简接入指南**在 jobcopilot 仓库
+> [`jobcopilot/docs/integrations/hiagent.md`](../../jobcopilot/docs/integrations/hiagent.md)。
+> 两者不重复：本文留证据与可复用的抓取脚本，那份留「怎么接」。
+
 > 调研日期：2026-09-15。所有「查证过」结论均来自**实际抓取到的原文**，不是搜索摘要。
 >
 > **抓取方法（重要，可复用）**：`docs.volcengine.com` 页面是 JS 渲染的空壳，但文档中心有后端 JSON API，直接返回完整 Markdown：
