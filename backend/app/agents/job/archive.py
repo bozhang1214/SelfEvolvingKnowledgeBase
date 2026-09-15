@@ -200,12 +200,13 @@ def _dedupe_batch(
     kept: list[dict[str, Any]] = []
     removed: list[str] = []
     for x in index:
-        same_group = (
-            x.get("type") == "batch"
-            and x.get("user_id") == user_id
-            and x.get("keyword") == keyword
-            and x.get("city") == city
-        )
+        same_group = False
+        if x.get("type") == "batch" and x.get("user_id") == user_id:
+            _backfill_entry_meta(x)  # 旧条目补元数据，否则会漏掉而留下重复
+            same_group = (
+                x.get("keyword") == keyword
+                and str(x.get("city") or "") == str(city or "")
+            )
         if same_group and x.get("id") != keep_id:
             removed.append(str(x.get("id")))
             continue
@@ -219,13 +220,35 @@ def _remove_files(report_id: str) -> None:
     (_DIR / f"{report_id}.json").unlink(missing_ok=True)
 
 
+def _backfill_entry_meta(entry: dict[str, Any]) -> None:
+    """旧索引缺 ``keyword``/``city`` 时，从报告 JSON 补齐（原地修改）。
+
+    背景：``keyword``/``city`` 是后加的字段，早期条目没有；若不去补，去重时
+    这些条目会因关键词为空而被误判成「同一组」。
+    """
+    if entry.get("type") != "batch" or entry.get("keyword"):
+        return
+    json_path = _DIR / f"{entry.get('id')}.json"
+    if not json_path.exists():
+        return
+    try:
+        rep = json.loads(json_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    entry["keyword"] = rep.get("keyword") or ""
+    entry["city"] = rep.get("city") or ""
+
+
 def dedupe_batch_reports(user_id: str) -> dict[str, Any]:
     """对已有历史做一次性清理：同「关键词 + 城市」的批量报告只留最新一份。
 
-    不依赖索引顺序——显式按 ``created_at`` 取每组最新（索引被外部改动过也安全）。
+    两条安全约束：
+    1. 先用 :func:`_backfill_entry_meta` 补齐旧索引缺失的 keyword/city，
+       避免「元数据为空」的条目被误并入同一组；
+    2. **关键词为空且补不出来的条目不参与去重**（无法判定分组，宁可不删）。
 
     Returns:
-        ``{"removed": N, "kept": M, "groups": {组: 保留数}}``
+        ``{"removed": N, "kept": M, "groups": {组: 1}}``
     """
     index = _load_index()
 
@@ -233,7 +256,10 @@ def dedupe_batch_reports(user_id: str) -> dict[str, Any]:
     for x in index:
         if x.get("type") != "batch" or x.get("user_id") != user_id:
             continue
-        gk = (str(x.get("keyword") or ""), str(x.get("city") or ""))
+        _backfill_entry_meta(x)
+        if not x.get("keyword"):
+            continue  # 无法判定分组 → 不参与去重
+        gk = (str(x.get("keyword")), str(x.get("city") or ""))
         created = str(x.get("created_at") or "")
         if gk not in newest or created > newest[gk][0]:
             newest[gk] = (created, str(x.get("id")))
@@ -243,14 +269,15 @@ def dedupe_batch_reports(user_id: str) -> dict[str, Any]:
     removed: list[str] = []
     for x in index:
         is_ours_batch = x.get("type") == "batch" and x.get("user_id") == user_id
-        if is_ours_batch and str(x.get("id")) not in keep_ids:
+        # 只有「能判定分组且不是该组最新」的才删
+        if is_ours_batch and x.get("keyword") and str(x.get("id")) not in keep_ids:
             removed.append(str(x.get("id")))
             continue
         kept.append(x)
 
     for rid in removed:
         _remove_files(rid)
-    if removed:
+    if removed or any(x.get("keyword") for x in index):
         _save_index(kept[:_MAX_REPORTS])
 
     groups = {f"{gk[0]}|{gk[1]}": 1 for gk in newest}

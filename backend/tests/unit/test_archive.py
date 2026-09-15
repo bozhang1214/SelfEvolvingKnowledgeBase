@@ -151,3 +151,32 @@ class TestLegacyKeywordFallback:
         archive.save_report("u1", "batch", "标题", _batch_report())
         raw = json.loads(archive._INDEX_FILE.read_text(encoding="utf-8"))
         assert isinstance(raw, list) and raw
+
+    def test_dedupe_does_not_merge_entries_without_keyword(self):
+        """旧索引缺 keyword 且报告 JSON 也读不到 → 不应并入同一组被误删。"""
+        archive._save_index([
+            {"id": "a1", "user_id": "u1", "type": "batch", "title": "1",
+             "created_at": "2026-09-13T00:00:00+00:00"},
+            {"id": "a2", "user_id": "u1", "type": "batch", "title": "2",
+             "created_at": "2026-09-14T00:00:00+00:00"},
+        ])
+        res = archive.dedupe_batch_reports("u1")
+        assert res["removed"] == 0  # 无法判定分组 → 宁可不删
+        assert len(archive.list_reports("u1")) == 2
+
+    def test_dedupe_backfills_legacy_keyword_then_groups(self):
+        """旧索引缺 keyword 但报告 JSON 在 → 补齐后按真实关键词分组去重。"""
+        rid_a = archive.save_report("u1", "batch", "A", _batch_report(keyword="Agent"))
+        rid_b = archive.save_report("u1", "batch", "B", _batch_report(keyword="另一个"))
+        # 抹掉索引里的 keyword/city，模拟历史遗留
+        index = archive._load_index()
+        for x in index:
+            x.pop("keyword", None)
+            x.pop("city", None)
+        archive._save_index(index)
+
+        # 再写一条 Agent（最新），触发去重：应只删旧的 Agent，保留「另一个」
+        rid_c = archive.save_report("u1", "batch", "C", _batch_report(keyword="Agent"))
+        remaining = {r["id"] for r in archive.list_reports("u1")}
+        assert remaining == {rid_b, rid_c}
+        assert archive.get_report("u1", rid_a) is None
