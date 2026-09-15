@@ -237,6 +237,36 @@ else
         fail "缺少内核包子模块 jobcopilot/" "git submodule update --init"
     fi
 
+    # ---------- 构建前腾磁盘：这一步不能省 ----------
+    # 为什么放在**构建前**而不是只在阶段 7 收尾清：构建过程中 buildkit 缓存会
+    # 持续增长（一次全量构建可增十几 G），而阶段 7 的清理发生在最后——
+    # 磁盘不够时会在构建中途 `no space left on device`，留下半成品状态。
+    # （2026-09-15 实际发生过一次：后端镜像构建失败，生产卡在旧版本。）
+    #
+    # 策略：余量够就保留缓存（构建快），不够才整体清掉（构建慢但一定成）。
+    # 构建峰值实测约需 25G（旧镜像 + 新镜像 + 缓存增长）。
+    NEED_MB=25000
+    PRUNE_BELOW_MB=32000
+    FREE_MB="$(df -Pm / | awk 'NR==2{print $4}')"
+    if [ "$DRY_RUN" = false ]; then
+        if [ "${FREE_MB:-0}" -lt "$PRUNE_BELOW_MB" ]; then
+            info "磁盘可用 ${FREE_MB}MB < ${PRUNE_BELOW_MB}MB，构建前清理 Docker 构建缓存..."
+            docker builder prune -af >/dev/null 2>&1 || true
+            FREE_MB="$(df -Pm / | awk 'NR==2{print $4}')"
+            success "清理后可用 ${FREE_MB}MB"
+        else
+            info "磁盘可用 ${FREE_MB}MB，保留构建缓存（构建更快）"
+        fi
+        if [ "${FREE_MB:-0}" -lt "$NEED_MB" ]; then
+            fail "磁盘空间不足以完成构建（可用 ${FREE_MB}MB，峰值约需 ${NEED_MB}MB）" \
+"先腾空间再重试：
+    docker builder prune -af          # 清构建缓存
+    docker image prune -a -f          # 清未被容器使用的镜像（旧版本镜像常有数 G）
+    df -h /                           # 确认可用 ≥ 25G
+详见 docs/ops/13-DISK-MEMORY.md"
+        fi
+    fi
+
     # 构建前网络预检测：测试镜像源连通性
     info "检测镜像源连通性..."
     if curl -sf --connect-timeout 5 -o /dev/null https://mirrors.cloud.tencent.com/ 2>/dev/null; then
