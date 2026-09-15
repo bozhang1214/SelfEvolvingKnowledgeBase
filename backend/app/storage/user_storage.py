@@ -30,8 +30,11 @@ class UserStorage:
         self._initialized = True
 
     def _save(self) -> None:
-        with open(self._users_file, "w") as f:
+        # 原子写：先写临时文件再 os.replace，避免崩溃截断导致用户表损坏（全站无法登录）
+        tmp = self._users_file.with_name(self._users_file.name + ".tmp")
+        with open(tmp, "w") as f:
             json.dump(self._users, f, indent=2, default=str)
+        tmp.replace(self._users_file)
 
     def find_by_email(self, email: str) -> User | None:
         self._ensure_initialized()

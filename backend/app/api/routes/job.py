@@ -395,7 +395,10 @@ async def save_job_cache(body: SaveCacheReq, user_id: str = Depends(get_current_
     _require_job_agent()
     from app.agents.job.job_cache import cache_key, make_search_id, save_cached_jobs
 
-    keyword = (body.keyword or "").strip() or "Agent"
+    # 默认关键词与 fetch/batch 分支同源（config.job.default_keyword），
+    # 此前硬编码 "Agent"，改配置后 search_id 与其它分支算成不同值 → 职位串档/丢失
+    ctx = get_app_context()
+    keyword = (body.keyword or "").strip() or ctx.config.job.default_keyword
     city = (body.city or "").strip()
     if city in ("不限", "全部", "全国"):
         city = ""

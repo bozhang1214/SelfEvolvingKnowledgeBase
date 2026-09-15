@@ -38,8 +38,11 @@ class TestParseLlmGuard:
     def test_false(self):
         assert parse_llm_guard('{"injection": false}') is False
 
-    def test_bare_true(self):
-        assert parse_llm_guard("判断结果：true") is True
+    def test_bare_true_returns_none(self):
+        # 修复：解析失败不再做 "true" 子串猜测——用户输入"这段代码 if true 会怎样"
+        # 会被误判成注入。裸 "true" 无 JSON 字段 → 返回 None（未拦截）。
+        assert parse_llm_guard("判断结果：true") is None
+        assert parse_llm_guard("这段代码 if true 会怎样") is None
 
     def test_unparseable_returns_none(self):
         assert parse_llm_guard("无法判断") is None

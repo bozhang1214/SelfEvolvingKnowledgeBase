@@ -55,14 +55,12 @@ def parse_llm_guard(text: str) -> bool | None:
     if not text:
         return None
     s = text.strip().lower()
-    # 简单解析：优先匹配 "injection" 字段，其次整串是否含 true/false
+    # 简单解析：只认 JSON 字段 `"injection": true/false`
     m = re.search(r'"injection"\s*:\s*(true|false)', s)
     if m:
         return m.group(1) == "true"
-    if "true" in s:
-        return True
-    if "false" in s:
-        return False
+    # 解析失败不再做子串猜测：用户输入"这段代码 if true 会怎样"会被 `"true" in s`
+    # 误判成注入。失败按「未拦截」处理（None），由调用方决定是否告警。
     return None
 
 
