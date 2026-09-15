@@ -7,10 +7,9 @@
 
 | 工作流 | 负责人 | 涉及文件（重点） | 开始时间 |
 |---|---|---|---|
-| 科技资讯告警接线 + 飞书网关卡片（本会话） | DSH Agent | `backend/app/core/alerts.py`、`backend/app/agents/news/service.py`、`deploy/feishu-webhook/feishu_gateway.py`、`deploy/deploy.sh`、`docs/ops/07-*` | 2026-09-15 20:36 |
 
-> 注：2026-09-15 的 JobCopilot P1–P7 与「招聘分析」轮次均已收工（P1–P7 详情见
-> `docs/changelog.d/` 与 `docs/ops/15-MCP-ENDPOINT.md`）。
+> 注：2026-09-15 的 JobCopilot P1–P7、招聘分析、科技资讯告警接线与限流读写分离
+> 等轮次均已收工（详情见 `docs/changelog.d/`）。
 
 ## 共享文件（改前先查上表）
 
