@@ -6,6 +6,43 @@
 
 ---
 
+## 2026-09-15（JobCopilot P3：提示词分发端点 + 三级回退）
+
+内核查升到 `a24c7af`。SEKB 侧新增 nginx `/prompts/` 静态分发端点。
+
+**端点**：`https://bos-studio.tech/prompts/manifest.json` 可访问（证书正常）；
+`autoindex off`（不列目录）、`access_log off`（少一份可用于画像的访问记录）、
+一律按 `text/plain` 返回。内容由 `deploy.sh` 用**一次性容器**跑
+`jobcopilot publish` 生成到 `prompts-dist/`，宿主机无需装 Python 依赖。
+
+**消费端三级回退**：自建主源 → jsDelivr CDN / GitHub raw → 包内兜底。
+实测国内到 `raw.githubusercontent.com` **间歇性读写超时**（同一小时内既有 0.59s 成功、
+也有读超时），故把 jsDelivr 排在 raw 之前；代价是 jsDelivr 对 `@main` 有缓存
+（可能滞后数小时），但 manifest 与文件来自同一份缓存，内部始终自洽。
+
+**完整性校验**：manifest 带每个文件的 sha256，不一致即**中止同步**——
+提示词会被注入 LLM，被篡改的后果比下载失败严重得多。
+
+**发布闸门**：`jobcopilot publish` 会**拒绝**任何破坏 base JSON 输出骨架的 pack。
+成因值得记：章节块的边界是「到下一个标题为止」，pack 若覆盖**最后一个标题**，
+它后面的非标题内容（很可能正是 JSON 输出骨架）会被整块替换——组合结果看着正常，
+实际已丢掉输出契约。发布是所有消费方上游，在这里拦住代价最小。
+`version` 由内容决定，发布幂等。
+
+**修掉的问题**
+1. **中文文件名未做 URL 编码**：真实 HTTPS 下 urllib 抛
+   `UnicodeEncodeError: 'ascii' codec can't encode`。`file://` 不走那条路径，
+   本地单测**发现不了**——已补专门断言。
+2. **发布脚本容器权限**：镜像默认以 appuser(uid 1000) 运行，挂载出的目录属部署用户
+   → `PermissionError`。改为 `--user "$(id -u):$(id -g)"`。
+3. macOS 常缺 CA 导致 `CERTIFICATE_VERIFY_FAILED` → 优先用 certifi 的 CA 包。
+4. 重构时把「本地目录留 manifest」写丢了 → 补回（记录来源与版本，排障用）。
+
+**验证**：jobcopilot 206 passed / ruff 全绿 / mypy strict 32 文件零错误；
+SEKB 721 passed 无回归。DoD 三项：端点可访问 ✅、主源挂→备源 ✅、全挂→包内 ✅。
+
+---
+
 ## 2026-09-15（JobCopilot P2：MCP Server + CLI run）
 
 内核查升到 `3b441c3`（子模块指针同步）。**SEKB 侧未接入 MCP（P4 才切），行为完全不变。**
