@@ -245,7 +245,9 @@ else
     # 用后端镜像跑一次性容器：只有它装了 jobcopilot，宿主机无需再装一套依赖。
     info "发布 JobCopilot 提示词到 ./prompts-dist（自建分发源）..."
     mkdir -p prompts-dist
-    if docker run --rm -v "$PWD/prompts-dist:/out" \
+    # ⚠️ 必须带 --user "$(id -u):$(id -g)"：镜像默认以 appuser(uid 1000) 运行，
+    #    而挂载出来的 ./prompts-dist 属当前部署用户（未必是 1000）→ 写入会 PermissionError。
+    if docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/prompts-dist:/out" \
             --entrypoint jobcopilot "self-evolving-kb-backend:${TAG:-latest}" \
             publish --out /out >/dev/null 2>&1; then
         PROMPT_VER="$(python3 -c "import json;print(json.load(open('prompts-dist/manifest.json'))['version'])" 2>/dev/null || echo '?')"
