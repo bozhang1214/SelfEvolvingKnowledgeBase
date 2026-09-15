@@ -18,7 +18,9 @@ _TTL_SECONDS = 14 * 24 * 3600  # 14 天
 
 
 def _cache_key(user_id: str, jd_text: str) -> str:
-    digest = hashlib.md5((jd_text or "").strip()[:3000].encode("utf-8")).hexdigest()
+    # 全文哈希，不做 [:3000] 截断：前 3000 字相同、后续不同的 JD 会命中同一缓存，
+    # 返回错误分析。md5 摘要长度固定，全文哈希开销可忽略。
+    digest = hashlib.md5((jd_text or "").strip().encode("utf-8")).hexdigest()
     return f"{user_id}:{digest}"
 
 
