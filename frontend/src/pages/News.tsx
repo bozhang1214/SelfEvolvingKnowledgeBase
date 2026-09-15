@@ -33,10 +33,19 @@ const News: React.FC = () => {
   const [current, setCurrent] = useState<NewsReport | null>(null);
   const [currentDate, setCurrentDate] = useState<string>('');
 
-  // 周报/月报
-  const [pReports, setPReports] = useState<PeriodicReportMeta[]>([]);
-  const [pCurrent, setPCurrent] = useState<PeriodicReport | null>(null);
-  const [pPeriod, setPPeriod] = useState<string>('');
+  // 周报/月报：列表、当前期、详情都**按类型分开存**。
+  // 为什么必须分开：原来共用一个 pReports/pCurrent/pPeriod，而 onTabChange 用 loadedTabs
+  // 去重「切回已加载的 tab 不发请求」——于是切回周报时，pReports 里还是上一次月报的数据，
+  // 界面就显示「月报的列表」（反之亦然）。按类型分存后，切 tab 只改渲染取哪个 key，天然不错位。
+  const [pReports, setPReports] = useState<Record<PeriodicType, PeriodicReportMeta[]>>({
+    weekly: [], monthly: [],
+  });
+  const [pCurrent, setPCurrent] = useState<Record<PeriodicType, PeriodicReport | null>>({
+    weekly: null, monthly: null,
+  });
+  const [pPeriod, setPPeriod] = useState<Record<PeriodicType, string>>({
+    weekly: '', monthly: '',
+  });
 
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -84,13 +93,14 @@ const News: React.FC = () => {
     try {
       const data = await withRetry(() => listPeriodic(type));
       loadedTabs.current.add(type as TabKey);
-      setPReports(data);
-      if (data.length > 0 && (!pPeriod || autoSelectLatest)) {
+      setPReports((prev) => ({ ...prev, [type]: data }));
+      const cur = pPeriod[type];
+      if (data.length > 0 && (!cur || autoSelectLatest)) {
         const latest = data[0].period;
-        setPPeriod(latest);
+        setPPeriod((prev) => ({ ...prev, [type]: latest }));
         loadPeriodicDetail(type, latest);
       } else if (data.length === 0) {
-        setPCurrent(null);
+        setPCurrent((prev) => ({ ...prev, [type]: null }));
       }
     } catch (e: any) {
       message.error(describeError(e, '加载周期报告列表失败'));
@@ -101,13 +111,13 @@ const News: React.FC = () => {
 
   const loadPeriodicDetail = async (type: PeriodicType, period: string) => {
     setLoadingDetail(true);
-    setPPeriod(period);
+    setPPeriod((prev) => ({ ...prev, [type]: period }));
     try {
       const data = await getPeriodic(type, period);
-      setPCurrent(data);
+      setPCurrent((prev) => ({ ...prev, [type]: data }));
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '加载周期报告失败');
-      setPCurrent(null);
+      setPCurrent((prev) => ({ ...prev, [type]: null }));
     } finally {
       setLoadingDetail(false);
     }
@@ -252,10 +262,10 @@ const News: React.FC = () => {
     meta: NewsReportMeta | PeriodicReportMeta;
   }[] = isDaily
     ? reports.map((r) => ({ key: r.date, label: r.date, meta: r }))
-    : pReports.map((r) => ({ key: r.period, label: r.period, meta: r }));
+    : (pReports[tab as PeriodicType] ?? []).map((r) => ({ key: r.period, label: r.period, meta: r }));
 
-  const activeKey = isDaily ? currentDate : pPeriod;
-  const activeDetail = isDaily ? current : pCurrent;
+  const activeKey = isDaily ? currentDate : (pPeriod[tab as PeriodicType] ?? '');
+  const activeDetail = isDaily ? current : (pCurrent[tab as PeriodicType] ?? null);
   const detailTitle = 'AI 科技资讯';
 
   return (
