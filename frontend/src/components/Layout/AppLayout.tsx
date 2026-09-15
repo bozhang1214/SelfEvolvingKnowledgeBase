@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layout, Menu, Avatar, Dropdown, Typography, Space } from 'antd';
+import { Layout, Menu, Avatar, Dropdown, Typography, Space, Alert } from 'antd';
 import {
   MessageOutlined,
   FileOutlined,
@@ -11,7 +11,7 @@ import {
   SolutionOutlined,
   HomeOutlined,
 } from '@ant-design/icons';
-import { useNavigate, useLocation, Routes, Route, Navigate } from 'react-router-dom';
+import { useNavigate, useLocation, Routes, Route } from 'react-router-dom';
 import { useUserStore } from '@/stores/user';
 import Home from '@/pages/Home';
 import Chat from '@/pages/Chat';
@@ -36,6 +36,19 @@ const menuItems = [
 
 // 预览账号可访问的菜单项（仅功能说明 + 科技资讯）
 const PREVIEW_MENU_KEYS = new Set(['/', '/news']);
+
+/** 预览账号访问受限页面时展示的明确提示（替代原来无提示的静默跳回首页）。 */
+const NoAccess: React.FC = () => (
+  <div style={{ padding: 48, textAlign: 'center' }}>
+    <Alert
+      type="warning"
+      showIcon
+      style={{ maxWidth: 560, margin: '0 auto', textAlign: 'left' }}
+      message="当前为预览账号，此功能需完整权限"
+      description="你的账号仅开放「科技资讯」浏览。如需使用 AI 对话、文件、知识库、职位分析等完整功能，请联系管理员将你的邮箱加入白名单。"
+    />
+  </div>
+);
 
 const AppLayout: React.FC = () => {
   const navigate = useNavigate();
@@ -88,14 +101,22 @@ const AppLayout: React.FC = () => {
       </Sider>
       <Layout>
         <Content style={{ padding: 0, overflow: 'auto' }}>
+          {isPreview && (
+            <Alert
+              type="info"
+              showIcon
+              banner
+              message="当前为预览账号：仅开放科技资讯浏览，完整功能请联系管理员将你的邮箱加入白名单。"
+            />
+          )}
           <Routes>
             <Route index element={<Home />} />
-            <Route path="chat" element={isPreview ? <Navigate to="/" replace /> : <Chat />} />
-            <Route path="files" element={isPreview ? <Navigate to="/" replace /> : <Files />} />
-            <Route path="knowledge" element={isPreview ? <Navigate to="/" replace /> : <Knowledge />} />
+            <Route path="chat" element={isPreview ? <NoAccess /> : <Chat />} />
+            <Route path="files" element={isPreview ? <NoAccess /> : <Files />} />
+            <Route path="knowledge" element={isPreview ? <NoAccess /> : <Knowledge />} />
             <Route path="news" element={<News />} />
-            <Route path="job" element={isPreview ? <Navigate to="/" replace /> : <Job />} />
-            <Route path="settings" element={isPreview ? <Navigate to="/" replace /> : <Settings />} />
+            <Route path="job" element={isPreview ? <NoAccess /> : <Job />} />
+            <Route path="settings" element={isPreview ? <NoAccess /> : <Settings />} />
           </Routes>
         </Content>
       </Layout>
