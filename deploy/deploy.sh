@@ -437,7 +437,10 @@ else
     step "阶段 5/7：启动监控栈"
 
     info "启动监控服务（Prometheus + Grafana + Loki + Alertmanager + feishu-webhook）..."
-    if run "docker compose -f docker-compose.monitoring.yml up -d"; then
+    # ⚠️ 必须带 --env-file .env.prod：监控栈里的 feishu-webhook 依赖
+    # ${FEISHU_WEBHOOK_URL} 插值；不带 env-file 时会被解析成**空串**，
+    # 于是「部署前检查显示飞书已配置」而容器里实际是空的 → 告警发不出去。
+    if run "docker compose -f docker-compose.monitoring.yml --env-file .env.prod up -d"; then
         success "监控栈启动完成"
         if [ "$DRY_RUN" = false ]; then
             sleep 10

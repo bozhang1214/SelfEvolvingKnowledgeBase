@@ -106,3 +106,22 @@ def test_filter_keeps_items_without_timestamp() -> None:
     until = datetime(2026, 9, 8, tzinfo=timezone.utc)
     kept = NewsFilter(since=since, until=until).filter([_item("", "no-ts")])
     assert [i.link for i in kept] == ["no-ts"]
+
+
+# ---------- _period_label（实例方法：需要 self 取本地日期）----------
+
+
+def test_period_label_weekly_is_last_monday() -> None:
+    """周报标签=上周一。⚠️ 这条同时防一个真 bug：该方法曾是 @staticmethod，
+    改成用 self._today_local() 后若忘记去掉 staticmethod，会在生成周报时 NameError。
+    """
+    agent = NewsAgent.__new__(NewsAgent)
+    agent._today_local = lambda: "2026-09-15"  # type: ignore[method-assign]
+    assert agent._period_label("weekly", None) == "2026-09-07"
+    assert agent._period_label("weekly", "2026-08-31") == "2026-08-31"   # 显式指定优先
+
+
+def test_period_label_monthly_is_previous_month() -> None:
+    agent = NewsAgent.__new__(NewsAgent)
+    agent._today_local = lambda: "2026-09-15"  # type: ignore[method-assign]
+    assert agent._period_label("monthly", None) == "2026-08"

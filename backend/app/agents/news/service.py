@@ -333,8 +333,7 @@ class NewsAgent:
             )
             raise
 
-    @staticmethod
-    def _period_label(report_type: str, period: str | None) -> str:
+    def _period_label(self, report_type: str, period: str | None) -> str:
         """计算周期标签（文件名用）：周报=周一日期，月报=YYYY-MM。"""
         today = datetime.fromisoformat(self._today_local()).date()
         if report_type == "weekly":
