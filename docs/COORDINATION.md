@@ -7,6 +7,7 @@
 
 | 工作流 | 负责人 | 涉及文件（重点） | 开始时间 |
 |---|---|---|---|
+| 打通 AI 对话↔职位分析（search_jobs 工具） | DSH Agent | `backend/app/agents/executor.py`、`backend/app/agents/prompts/templates.py`、`backend/tests/unit/test_executor_job_search.py` | 2026-09-15 22:10 |
 
 > 注：2026-09-15 的 JobCopilot P1–P7、招聘分析、科技资讯告警接线与限流读写分离
 > 等轮次均已收工（详情见 `docs/changelog.d/`）。

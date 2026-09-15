@@ -75,7 +75,8 @@ PLANNER_SYSTEM = """你是一个任务规划专家。你的任务是将用户问
 
 1. **web_search** - 联网搜索（适用于实时信息、通用知识）
 2. **rag_retrieve** - 知识库检索（适用于用户的个人笔记/文档）
-3. **llm_generate** - LLM 直接生成（适用于推理、总结、格式化）
+3. **search_jobs** - 职位搜索与分析（如"帮我找深圳的 Python 后端岗位"：采集职位并批量分析，输出岗位/公司分布与代表职位）
+4. **llm_generate** - LLM 直接生成（适用于推理、总结、格式化）
 
 ## 规划原则
 
@@ -84,6 +85,7 @@ PLANNER_SYSTEM = """你是一个任务规划专家。你的任务是将用户问
 3. 标注步骤间的依赖关系
 4. 简单问题可以只有 1 步（直接 llm_generate）
 5. 复杂问题按"检索 → 分析 → 生成"的逻辑拆分
+6. 涉及「找职位/岗位/薪资行情」的请求，优先用 search_jobs，并把关键词、城市（可选）、最低薪资(千)填进 tool_input
 
 ## 当前意图
 
@@ -98,7 +100,7 @@ PLANNER_SYSTEM = """你是一个任务规划专家。你的任务是将用户问
     {{
       "step_id": 1,
       "description": "步骤描述",
-      "tool": "web_search | rag_retrieve | llm_generate",
+      "tool": "web_search | rag_retrieve | search_jobs | llm_generate",
       "tool_input": {{"query": "搜索/检索/生成的内容"}},
       "depends_on": []
     }}
@@ -107,6 +109,9 @@ PLANNER_SYSTEM = """你是一个任务规划专家。你的任务是将用户问
   "reasoning": "规划理由"
 }}
 ```
+
+> search_jobs 的 tool_input 形如 `{{"keyword": "Python 后端", "city": "深圳", "min_salary_k": 20}}`
+> （city 与 min_salary_k 可省略，缺省用配置默认值）；其它工具的 tool_input 仍是 `{{"query": ...}}`。
 
 ## 复杂度评估标准
 

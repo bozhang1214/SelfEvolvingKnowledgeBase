@@ -3,7 +3,7 @@
 
 ExecutorAgent 负责按计划执行任务步骤并生成草稿答案：
 - 遍历 task_steps，按依赖顺序执行
-- 根据 step.tool 调用对应工具（web_search / rag_retrieve / llm_generate）
+- 根据 step.tool 调用对应工具（web_search / rag_retrieve / search_jobs / llm_generate）
 - 记录每个工具调用的 ToolCallRecord
 - 将所有工具结果拼接为 execution_context
 - 调用 EXECUTOR_PROMPT 生成草稿答案
@@ -107,6 +107,7 @@ class ExecutorAgent(BaseAgent):
                 try:
                     output = await self._dispatch_tool(
                         tool_name, tool_input, user_input,
+                        user_id=user_id,
                         pre_retrieval_results=state.get("pre_retrieval_results", []),
                     )
                     output_str = (
@@ -200,15 +201,17 @@ class ExecutorAgent(BaseAgent):
         tool_name: str,
         tool_input: dict[str, Any],
         user_input: str,
+        user_id: str = "default",
         pre_retrieval_results: list[dict[str, Any]] | None = None,
     ) -> str:
         """
         根据工具名分派到对应工具执行。
 
         Args:
-            tool_name: 工具名（web_search / rag_retrieve / llm_generate）
+            tool_name: 工具名（web_search / rag_retrieve / search_jobs / llm_generate）
             tool_input: 工具输入参数
             user_input: 用户原始输入（兜底用）
+            user_id: 当前用户 ID（职位分析按用户画像 + 缓存隔离）
             pre_retrieval_results: RAG 预检索结果（由 graph 的 rag_retrieval 节点注入）
 
         Returns:
@@ -244,6 +247,11 @@ class ExecutorAgent(BaseAgent):
             self.logger.info("rag_retrieve 无预检索结果（知识库未启用或无匹配）")
             return "（知识库中暂无相关信息）"
 
+        elif tool_name == "search_jobs":
+            # 打通「AI 对话 → 职位分析」：复用招聘分析 Agent 的「搜索 + 批量分析」流水线
+            # （market.analyze_market），按用户画像 + 城市/关键词搜索职位并出市场报告。
+            return await self._search_jobs(tool_input, user_id)
+
         elif tool_name == "llm_generate":
             query = str(tool_input.get("query", user_input))
             return await self._llm_generate(query)
@@ -256,6 +264,46 @@ class ExecutorAgent(BaseAgent):
             )
             query = str(tool_input.get("query", user_input))
             return await self._llm_generate(query)
+
+    async def _search_jobs(self, tool_input: dict[str, Any], user_id: str) -> str:
+        """职位搜索 + 批量分析，返回给 Executor LLM 的紧凑摘要。
+
+        这是招聘分析 Agent 的**同一套流水线**（不是另起炉灶）：采集职位 →
+        内核 analyze_jobs_batch 分析 → 结构化报告。因此与「招聘分析」页面共享
+        缓存、画像与成本统计口径。
+        """
+        from app.agents.job.market import analyze_market
+        from app.agents.job.profile import load_user_profile
+        from app.core.bootstrap import get_app_context
+
+        ctx = get_app_context()
+        cfg = ctx.config.job
+        keyword = str(tool_input.get("keyword") or "").strip() or cfg.default_keyword
+        city = str(tool_input.get("city") or "").strip() or cfg.default_city
+        try:
+            min_salary_k = int(tool_input.get("min_salary_k") or cfg.default_min_salary_k or 0)
+        except (TypeError, ValueError):
+            min_salary_k = int(cfg.default_min_salary_k or 0)
+
+        try:
+            result = await analyze_market(
+                ctx=ctx,
+                user_id=user_id,
+                keyword=keyword,
+                city=city,
+                llm_factory=ctx.llm_factory,
+                user_profile=load_user_profile(user_id),
+                min_salary_k=min_salary_k,
+            )
+        except Exception as e:
+            raise ToolError(
+                f"职位搜索分析失败: {e}",
+                tool_name="search_jobs",
+            ) from e
+
+        report = result.get("report") or {}
+        return _format_market_report(report)
+
 
     async def _llm_generate(self, query: str) -> str:
         """
@@ -393,3 +441,81 @@ class ExecutorAgent(BaseAgent):
         except Exception as e:
             self.logger.warning("答案重写失败，返回原草稿", error=str(e))
             return draft_answer
+
+
+# ============================================================
+# 职位分析报告 → 给 Executor LLM 的紧凑摘要
+# ============================================================
+
+#: 摘要里最多放多少字的市场行情正文（报告正文可能很长，喂给 Executor 前必须截断）
+_MARKET_BODY_MAX_CHARS = 4000
+#: 摘要里最多列多少个职位（只给代表样本，完整报告在「招聘分析」页看）
+_JOBS_PREVIEW_MAX = 15
+
+
+def _flatten_text(obj: Any, out: list[str], depth: int = 0) -> None:
+    """把嵌套 dict/list 里的所有字符串值拍平收集（市场行情是 LLM 生成的 JSON，键名不固定）。"""
+    if depth > 4 or obj is None:
+        return
+    if isinstance(obj, str):
+        if obj.strip():
+            out.append(obj.strip())
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _flatten_text(v, out, depth + 1)
+    elif isinstance(obj, list):
+        for v in obj:
+            _flatten_text(v, out, depth + 1)
+
+
+def _format_market_report(report: dict[str, Any]) -> str:
+    """把批量分析报告压缩成 Executor 能直接引用的文本摘要。"""
+    keyword = str(report.get("keyword") or "")
+    city = str(report.get("city") or "")
+    jobs = report.get("jobs") or []
+    job_count = int(report.get("job_count") or len(jobs))
+    stats = report.get("stats") or {}
+
+    lines: list[str] = [
+        f"职位分析结果：{keyword or '未指定'} · {city or '全国'}，共 {job_count} 个职位。"
+    ]
+
+    roles = stats.get("role_distribution") or []
+    if roles:
+        top = "、".join(f"{r.get('name', '')}×{r.get('count', 0)}" for r in roles[:8] if r.get("name"))
+        if top:
+            lines.append(f"角色/方向分布：{top}")
+
+    companies = stats.get("company_distribution") or []
+    if companies:
+        top = "、".join(f"{c.get('name', '')}×{c.get('count', 0)}" for c in companies[:8] if c.get("name"))
+        if top:
+            lines.append(f"公司分布：{top}")
+
+    hot = stats.get("hot_keywords") or []
+    if hot:
+        kws = "、".join(str(k.get("keyword", "")) for k in hot[:10] if k.get("keyword"))
+        if kws:
+            lines.append(f"热点关键词：{kws}")
+
+    body_parts: list[str] = []
+    for key in ("market", "knowledge_iteration"):
+        _flatten_text(report.get(key), body_parts)
+    body = "\n".join(body_parts)
+    if body:
+        lines.append(f"分析正文：\n{body[:_MARKET_BODY_MAX_CHARS]}")
+
+    if jobs:
+        lines.append("代表职位：")
+        for j in jobs[:_JOBS_PREVIEW_MAX]:
+            title = str(j.get("title") or "").strip()
+            company = str(j.get("company") or "").strip()
+            salary = str(j.get("salary") or "").strip()
+            jcity = str(j.get("city") or "").strip()
+            url = str(j.get("job_url") or "").strip()
+            fields = " | ".join(x for x in (title, company, salary, jcity) if x)
+            if url:
+                fields += f" | {url}"
+            lines.append(f"- {fields or '(无标题职位)'}")
+
+    return "\n".join(lines)
