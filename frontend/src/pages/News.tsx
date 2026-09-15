@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Layout, List, Button, Typography, Tag, Spin, Empty, message, Card, Space, Tabs, Alert,
 } from 'antd';
@@ -44,6 +44,9 @@ const News: React.FC = () => {
   // 都显示 loading、分不清是哪个任务在跑。
   const [generatingKey, setGeneratingKey] = useState<TabKey | null>(null);
   const [taskStatus, setTaskStatus] = useState<NewsTaskStatus | null>(null);
+  // 已经加载过的 tab：切回来不再重复请求（每次切换都发「列表+详情」会打满网关配额，
+  // 实测被打成 429 → 页面报「加载周期报告列表失败」）
+  const loadedTabs = useRef<Set<TabKey>>(new Set());
 
   const loadReports = async (autoSelectLatest = false) => {
     setLoadingList(true);
@@ -79,7 +82,8 @@ const News: React.FC = () => {
   const loadPeriodic = async (type: PeriodicType, autoSelectLatest = false) => {
     setLoadingList(true);
     try {
-      const data = await listPeriodic(type);
+      const data = await withRetry(() => listPeriodic(type));
+      loadedTabs.current.add(type as TabKey);
       setPReports(data);
       if (data.length > 0 && (!pPeriod || autoSelectLatest)) {
         const latest = data[0].period;
@@ -89,7 +93,7 @@ const News: React.FC = () => {
         setPCurrent(null);
       }
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '加载周期报告列表失败');
+      message.error(describeError(e, '加载周期报告列表失败'));
     } finally {
       setLoadingList(false);
     }
@@ -107,6 +111,35 @@ const News: React.FC = () => {
     } finally {
       setLoadingDetail(false);
     }
+  };
+
+  /** 把 axios 错误翻译成用户能懂的话。
+   *
+   *  为什么需要：429 是**网关限流**（切 tab 会瞬时打满 /api 的共享配额），
+   *  原来的通用文案「加载周期报告列表失败」让人以为是功能坏了。
+   */
+  const describeError = (e: any, fallback: string): string => {
+    const status = e?.response?.status;
+    if (status === 429) return '请求过于频繁（网关限流），已自动重试，请稍候再试';
+    if (status === 409) return e?.response?.data?.detail || '任务正在生成中，请稍候';
+    if (status === 502 || status === 503 || status === 504) return '服务正在重启或过载，请稍后重试';
+    return e?.response?.data?.detail || fallback;
+  };
+
+  /** 对 429/5xx 做一次退避重试（网关限流与部署重启都是瞬时的）。 */
+  const withRetry = async <T,>(fn: () => Promise<T>, times = 2, delayMs = 1500): Promise<T> => {
+    let lastErr: any;
+    for (let i = 0; i < times; i += 1) {
+      try {
+        return await fn();
+      } catch (e: any) {
+        lastErr = e;
+        const st = e?.response?.status;
+        if (st !== 429 && !(st >= 500 && st < 600)) throw e;
+        if (i < times - 1) await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+      }
+    }
+    throw lastErr;
   };
 
   /** 轮询任务状态：等到「最近一次任务完成时间」变化（或超时）。
@@ -152,14 +185,21 @@ const News: React.FC = () => {
     const prev = taskStatus?.finished_at;
     try {
       const result = await refreshNews(true);
-      if ((result as { skipped?: boolean }).skipped) {
+      if (result.accepted === false) {
         message.info('今日日报已生成，无需重复生成');
         await loadReports(true);
       } else {
-        await finishTask('daily', prev, `日报生成完成（采集 ${result.fetched} 条）`);
+        // 接口已改为「提交任务，立即返回」：结果靠轮询 /status 获取
+        message.info('已提交日报生成任务，正在后台生成…');
+        await finishTask('daily', prev, '日报生成完成');
       }
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '生成日报失败');
+      if (e?.response?.status === 409) {
+        message.info(describeError(e, '日报正在生成中'));
+        await finishTask('daily', prev, '日报生成完成');
+      } else {
+        message.error(describeError(e, '生成日报失败'));
+      }
     } finally {
       setGeneratingKey(null);
     }
@@ -172,9 +212,15 @@ const News: React.FC = () => {
     try {
       // 后端会在生成完成后把结果写进状态文件；这里只负责提交 + 轮询
       await generatePeriodic(type);
-      await finishTask(type as TabKey, prev, `${label}生成完成（${prev ? '' : ''}请查看列表）`);
+      message.info(`已提交${label}生成任务，正在后台生成…`);
+      await finishTask(type as TabKey, prev, `${label}生成完成，请查看列表`);
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || `生成${label}失败`);
+      if (e?.response?.status === 409) {
+        message.info(describeError(e, `${label}正在生成中`));
+        await finishTask(type as TabKey, prev, `${label}生成完成，请查看列表`);
+      } else {
+        message.error(describeError(e, `生成${label}失败`));
+      }
     } finally {
       setGeneratingKey(null);
     }
@@ -189,8 +235,10 @@ const News: React.FC = () => {
   const onTabChange = (key: string) => {
     const k = key as TabKey;
     setTab(k);
+    if (loadedTabs.current.has(k)) return;      // 已加载过：不重复请求
+    loadedTabs.current.add(k);
     if (k === 'daily') {
-      if (reports.length === 0) loadReports(true);
+      loadReports(true);
     } else {
       loadPeriodic(k, true);
     }

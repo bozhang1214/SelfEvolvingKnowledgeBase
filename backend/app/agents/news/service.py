@@ -56,7 +56,7 @@ class NewsAgent:
         force=False（默认，调度器用）：今日已生成则跳过（幂等），避免多 worker 重复生成。
         force=True（手动「重新生成」）：无论是否已生成都重新跑。
         """
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day = self._today_local()
         if not force and self._storage.daily_exists(day):
             logger.info("今日日报已存在，跳过生成", day=day)
             return {"type": "daily", "period": day, "skipped": True, "fetched": 0, "filtered": 0}
@@ -66,12 +66,26 @@ class NewsAgent:
         if lock is None:
             logger.warning("获取日报生成锁超时，跳过", day=day)
             return {"type": "daily", "period": day, "skipped": True, "fetched": 0, "filtered": 0}
+        started = datetime.now(timezone.utc)
         try:
             # 拿到锁后二次检查（可能在等待锁期间已被别的 worker 生成）
             if not force and self._storage.daily_exists(day):
                 logger.info("今日日报已存在（锁内二次检查），跳过", day=day)
                 return {"type": "daily", "period": day, "skipped": True, "fetched": 0, "filtered": 0}
-            return await self._generate_report("daily")
+            result = await self._generate_report("daily")
+            self.write_status(
+                "daily", ok=True, period=str(result.get("period") or day),
+                started_at=started.isoformat(),
+                duration_s=(datetime.now(timezone.utc) - started).total_seconds(),
+            )
+            return result
+        except Exception as e:  # noqa: BLE001 - 记状态后继续抛，调用方仍能感知
+            self.write_status(
+                "daily", ok=False, period=day, error=f"{type(e).__name__}: {str(e)[:200]}",
+                started_at=started.isoformat(),
+                duration_s=(datetime.now(timezone.utc) - started).total_seconds(),
+            )
+            raise
         finally:
             self._release_lock(lock)
 
@@ -161,7 +175,7 @@ class NewsAgent:
         #    ⚠️ 必须先算标签：周报/月报的窗口要按 period 算**自然周期**，
         #    而不是「生成时刻往前 N 小时」（否则标签写上周、内容却含本周）。
         if report_type == "daily":
-            period_label = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            period_label = self._today_local()
             window = None
         else:
             period_label = self._period_label(report_type, period)
@@ -219,6 +233,49 @@ class NewsAgent:
             "report": report,
         }
 
+    def _today_local(self) -> str:
+        """当天日期（**配置时区**，不是 UTC）。
+
+        为什么不能用 UTC：北京时间 00:00–08:00 之间生成时，UTC 还停在前一天，
+        日报标签会**差一天**（曾被用户察觉「今天的日报日期不对」）。
+        """
+        from zoneinfo import ZoneInfo
+
+        try:
+            tz = ZoneInfo(self._config.timezone)
+        except Exception:  # noqa: BLE001 - 时区名异常时退回 UTC，不影响生成
+            tz = timezone.utc
+        return datetime.now(tz).strftime("%Y-%m-%d")
+
+    def is_running(self, kind: str) -> bool:
+        """该类型报告是否正在生成（以文件锁为准，供接口做并发保护）。"""
+        lock = self._storage._dir / f".lock_{kind}"
+        if not lock.exists():
+            return False
+        # 超过锁超时的视为残留（进程被杀会留锁），与 _acquire_lock 的判定保持一致
+        return (time.time() - lock.stat().st_mtime) <= 600
+
+    def write_status(self, kind: str, *, ok: bool, period: str = "", error: str = "",
+                     started_at: str = "", duration_s: float = 0.0) -> None:
+        """记录一次生成任务的结果（**手动触发与定时触发都要记**）。
+
+        手动触发以前不写状态：请求被浏览器掐断（499）后服务端还在跑，
+        用户既看不到进度也看不到失败原因 —— 只能反复点。
+        """
+        import json as _json
+
+        payload = {
+            "kind": kind, "ok": ok, "period": period, "error": error,
+            "started_at": started_at, "finished_at": datetime.now(timezone.utc).isoformat(),
+            "duration_s": round(duration_s, 1),
+        }
+        try:
+            path = self._storage._dir / "last_status.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as e:
+            logger.warning("写入任务状态失败", error=str(e)[:200])
+
     def read_status(self) -> dict | None:
         """读取最近一次定时任务的执行状态（供接口/前端展示「今天为什么没生成」）。"""
         import json
@@ -258,12 +315,28 @@ class NewsAgent:
         """生成周报/月报（与日报同格式，时间跨度为一周/一个月）。supplement 保留兼容但已不使用。"""
         if report_type not in ("weekly", "monthly"):
             raise ValueError(f"未知报告类型: {report_type}")
-        return await self._generate_report(report_type, period)
+        started = datetime.now(timezone.utc)
+        try:
+            result = await self._generate_report(report_type, period)
+            self.write_status(
+                report_type, ok=True, period=str(result.get("period") or ""),
+                started_at=started.isoformat(),
+                duration_s=(datetime.now(timezone.utc) - started).total_seconds(),
+            )
+            return result
+        except Exception as e:  # noqa: BLE001
+            self.write_status(
+                report_type, ok=False,
+                error=f"{type(e).__name__}: {str(e)[:200]}",
+                started_at=started.isoformat(),
+                duration_s=(datetime.now(timezone.utc) - started).total_seconds(),
+            )
+            raise
 
     @staticmethod
     def _period_label(report_type: str, period: str | None) -> str:
         """计算周期标签（文件名用）：周报=周一日期，月报=YYYY-MM。"""
-        today = datetime.now(timezone.utc).date()
+        today = datetime.fromisoformat(self._today_local()).date()
         if report_type == "weekly":
             if period:
                 return period

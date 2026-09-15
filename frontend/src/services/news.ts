@@ -18,11 +18,11 @@ export interface NewsReport extends NewsReportMeta {
   markdown?: string;
 }
 
-export interface NewsRefreshResult {
-  date: string;
-  fetched: number;
-  filtered: number;
-  path: string;
+// 生成改为「提交任务」：接口立即返回，结果由 /news/status 轮询获取
+// （周报/月报实测约 10 分钟，同步请求会让浏览器先超时并留下 499）
+export interface NewsTaskAccepted {
+  accepted: boolean;
+  kind: 'daily' | 'weekly' | 'monthly' | string;
 }
 
 /** 列出历史日报（元信息）。 */
@@ -38,9 +38,8 @@ export async function getReport(date: string): Promise<NewsReport> {
 }
 
 /** 手动触发一次日报生成（force=true 重新生成，忽略当日缓存）。 */
-export async function refreshNews(force = true): Promise<NewsRefreshResult> {
-  const res = await apiClient.post<NewsRefreshResult>('/news/refresh', { force });
-  logger.info('news_refresh_triggered', { force });
+export async function refreshNews(force = true): Promise<NewsTaskAccepted> {
+  const res = await apiClient.post<NewsTaskAccepted>('/news/refresh', { force });
   return res.data;
 }
 
@@ -71,8 +70,11 @@ export async function getPeriodic(type: PeriodicType, period: string): Promise<P
 }
 
 /** 生成周报/月报（缺省上一周期）。 */
-export async function generatePeriodic(type: PeriodicType): Promise<{ type: string; period: string }> {
-  const res = await apiClient.post(`/news/${type}`);
+export async function generatePeriodic(
+  type: PeriodicType,
+  period?: string,
+): Promise<NewsTaskAccepted> {
+  const res = await apiClient.post<NewsTaskAccepted>(`/news/${type}`, period ? { period } : {});
   return res.data;
 }
 

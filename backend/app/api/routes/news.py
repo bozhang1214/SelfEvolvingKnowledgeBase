@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 
 from app.core.access import require_full_access
 from app.core.auth import get_current_user
@@ -31,20 +31,37 @@ def _require_news_agent() -> Any:
     return ctx.news_agent
 
 
+async def _run_in_background(agent: Any, kind: str, factory: Any) -> None:
+    """后台执行生成任务。
+
+    为什么改成后台执行：周报/月报实测约 10 分钟，同步请求会让浏览器/网关先超时
+    （日志里能看到 `POST /news/refresh` 返回 **499** 客户端断开），而服务端还在跑、
+    用户既看不到进度也看不到结果，只能反复点。现在提交后立即返回，前端轮询
+    ``/api/v1/news/status`` 取结果。
+    """
+    try:
+        await factory()
+    except Exception as e:  # noqa: BLE001 - agent 已写状态，这里只兜底日志
+        logger.error("后台生成任务失败", type=kind, error=str(e)[:200], exc_info=True)
+
+
 @router.post("/refresh")
 async def refresh_news(
+    background: BackgroundTasks,
     body: dict | None = Body(None),
     user_id: str = Depends(require_full_access),
 ):
-    """手动触发一次日报生成。force=true（默认）表示「重新生成」；false 表示今日已生成则跳过。"""
+    """提交一次日报生成（**立即返回**，结果由 /status 汇报）。
+
+    force=true（默认）表示「重新生成」；false 表示今日已生成则跳过。
+    已在生成中时返回 409，前端据此提示「正在生成中」，而不是当成失败。
+    """
     agent = _require_news_agent()
     force = bool((body or {}).get("force", True))
-    try:
-        result = await agent.refresh(force=force)
-    except Exception as e:
-        logger.error("手动触发日报失败", error=str(e), exc_info=True)
-        raise HTTPException(500, f"日报生成失败: {e}")
-    return result
+    if agent.is_running("daily"):
+        raise HTTPException(409, "日报正在生成中，请稍候（可在页面查看进度）")
+    background.add_task(_run_in_background, agent, "daily", lambda: agent.refresh(force=force))
+    return {"accepted": True, "kind": "daily"}
 
 
 @router.get("/reports")
@@ -86,6 +103,7 @@ async def news_status(user_id: str = Depends(get_current_user)):
 @router.post("/{report_type}")
 async def generate_periodic(
     report_type: str,
+    background: BackgroundTasks,
     body: dict | None = Body(None),
     user_id: str = Depends(require_full_access),
 ):
@@ -94,15 +112,18 @@ async def generate_periodic(
         raise HTTPException(400, "report_type 只支持 weekly 或 monthly")
     agent = _require_news_agent()
     body = body or {}
-    try:
-        return await agent.generate_periodic(
-            report_type,
-            period=body.get("period"),
-            supplement=body.get("supplement"),
-        )
-    except Exception as e:
-        logger.error("周期报告生成失败", type=report_type, error=str(e), exc_info=True)
-        raise HTTPException(500, f"周期报告生成失败: {e}")
+    if agent.is_running(report_type):
+        label = "周报" if report_type == "weekly" else "月报"
+        raise HTTPException(409, f"{label}正在生成中，请稍候（可在页面查看进度）")
+    period = body.get("period")
+    supplement = body.get("supplement")
+    background.add_task(
+        _run_in_background,
+        agent,
+        report_type,
+        lambda: agent.generate_periodic(report_type, period=period, supplement=supplement),
+    )
+    return {"accepted": True, "kind": report_type, "period": period or ""}
 
 
 @router.get("/{report_type}")
