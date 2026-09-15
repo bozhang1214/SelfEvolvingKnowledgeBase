@@ -6,6 +6,49 @@
 
 ---
 
+## 2026-09-15（JobCopilot P5：DSH 接入，L1 配置+文档）
+
+内核查升到 `2631ee3`。交付物在 `jobcopilot-dsh-plugin` 仓库（**零 TypeScript**）。
+
+**DoD 三项全部通过**（headless profile + 真 LLM 实测）
+1. 工具注册：`mcp__jobcopilot__analyze_job` 等 **6 个工具全部出现**
+2. 真实对话：贴 JD → **7 段全部非空**
+3. 批量：`source_path` 读本地 jobs.json → `job_count=4`、market 5 字段、
+   knowledge_iteration 6 字段，**16 秒**返回（`toolCallTimeoutMs=180000`）
+
+### 🔴 最重要的发现：计划里的 DSH 配置写法**不会生效**
+
+DSH 的 profile 补丁层是**「按 id 覆盖已有条目」**的语义（读 DSH 源码确认），
+直接写 `- id: mcp-jobcopilot` 会被当成覆盖一个不存在的条目，日志只留一句
+`patch: entry "mcp-jobcopilot" not found` 然后**静默跳过**——配置看着写对了，
+插件完全不加载。**新增插件必须用 `insert:` 包裹**。文档与配置模板已按正确写法交付。
+
+> **我差点被自己的验证脚本骗过去**：脚本第 3 步用
+> `dsh --dump-config | grep -q "mcp-jobcopilot"` 判定「配置已生效」，
+> 实际命中的是**那句 not found 警告本身**（也含条目名）→ 假阳性通过。
+> 真正暴露问题的是第 4 步「让模型列出工具名」——模型说没有。
+> 教训已记入计划文档：**配置类断言要断言目标对象真的存在，而不是输出里出现过这个名字**。
+
+### 其他踩坑
+
+- **DSH 版本不一致**：全局 npm 的 `dsh` 是 0.1.0-rc.7，运行中的 GUI 用本地 checkout
+  0.1.5-rc.2；前者不认识当前凭据文件格式（`version must be a string`）而起不来，
+  验证必须用本地 checkout 的 dsh。
+- **profile 需先装包**：`@deepseek-ai/dsh-mcp-client` 不在默认 bundle 里，
+  要先 `dsh plugin --profile <p> add ...`，否则条目解析不到、同样静默跳过。
+
+### 顺带修掉的可用性问题（jobcopilot）
+
+内核原先「没配 LLM Key 就启动即退出」，在 MCP 客户端里表现为**工具列表一片空白**——
+用户完全看不出是缺 Key，而且连 `list_prompt_packs` 这类**不需要 LLM** 的工具也用不了。
+改为：照常启动 + 调用需要 LLM 的工具时给可操作错误（并提前识别占位 LLM，
+避免配置错误被「逐步降级」吞掉变成「7 段全空」）。
+
+**验证**：jobcopilot 214 passed / ruff 全绿 / mypy strict 32 文件零错误 / eval 基线一致；
+DSH headless 三项 DoD 实测通过；验证后已把 headless profile 补丁层还原为空数组。
+
+---
+
 ## 2026-09-15（JobCopilot P4：SEKB 分析链路切到 MCP）
 
 内核查升到 `6c5f7cd`。**这是第一个动到 SEKB 生产分析链路的阶段。**
