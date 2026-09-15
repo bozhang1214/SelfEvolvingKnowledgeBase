@@ -6,6 +6,1012 @@
 
 ---
 
+## 2026-09-15（科技资讯周报/月报列表错位：按类型分仓状态）
+
+- **背景**：owner 报——日报→周报→月报顺序切换，列表都正常；但**切回周报**时展示的是
+  月报列表；周报里点「刷新」后再切月报又展示周报列表。
+
+- **根因**：`News.tsx` 里周报/月报**共用一个** `pReports/pCurrent/pPeriod`，而
+  `onTabChange` 用 `loadedTabs` 去重「切回已加载的 tab 不发请求」。于是切回周报时，
+  `pReports` 里还留着上一次月报的数据（去重短路了重新渲染），界面就张冠李戴；反向同理。
+
+- **改动**：`frontend/src/pages/News.tsx` 把周报/月报的列表、当前期、详情改成
+  **按类型分仓**的 `Record<PeriodicType, ...>`；`loadPeriodic/loadPeriodicDetail` 只写
+  自己那一仓；渲染时按当前 `tab` 取对应仓。去重（`loadedTabs`）保留——切回已加载的 tab
+  依然不发请求，但展示的是**该类型自己的**数据。
+
+- **验证**：新增 `frontend/tests/news.test.tsx` 2 条回归测试（切回周报显示周报列表、
+  反复横跳各自列表请求只发一次），旧实现下会失败；前端全量 **68 passed**、`tsc --noEmit`
+  无错误。
+
+## 2026-09-15（打通 AI 对话与职位分析：聊天新增 search_jobs 工具）
+
+- **背景**：此前 AI 对话只能 `web_search` / `rag_retrieve` / `llm_generate`，职位分析
+  是独立 Agent + API + 前端页，两者断开。owner 提出「能不能在对话里直接让职位分析
+  搜索并分析职位」。
+
+- **改动**：
+  - `backend/app/agents/executor.py`：`_dispatch_tool` 新增 `search_jobs` 分支（并把
+    `user_id` 传入分派）；`_search_jobs` 复用 `market.analyze_market`（与「招聘分析」页
+    **同一套**「采集 → 内核批量分析 → 报告」流水线，共享缓存/画像/成本统计口径），
+    按对话里的 keyword/city/min_salary_k 触发，缺省回落到 `config.job` 默认值；
+    `_format_market_report` 把可能很大的报告压成紧凑摘要（截断正文、只给代表职位）。
+  - `backend/app/agents/prompts/templates.py`：Planner 提示词的工具清单加 `search_jobs`
+    及 tool_input 示例，并提示「找职位/岗位/薪资行情」类请求优先用该工具。
+  - 未知工具仍兜底 `llm_generate`，新增工具不影响既有降级。
+
+- **验证**：新增 `test_executor_job_search.py` 8 条（调度路由、调用 analyze_market 参数
+  正确、缺省回落到配置、失败抛 ToolError、未知工具仍兜底、报告摘要含关键事实/截断超长
+  正文/空报告不崩）；全量 **840 passed**、ruff 全过、mypy 306 ≤ 310；Planner 模板
+  渲染校验通过。
+
+- **备注（待 owner 确认）**：`min_salary_k` 在 `analyze_market` 里只进了缓存键，
+  采集时仍用 `cfg.default_min_salary_k`（历史行为，招聘分析页亦如此）——是否要真按
+  对话里给的薪资过滤，见收尾疑问清单。
+
+## 2026-09-15（启动补跑：错过的日报/周报/月报不再永久丢失）
+
+- **背景**：9/15 的日报在 08:00 触发时因 SSL 错误中断、上周周报也没按时出来，
+  只能靠人发现 + 手动点一次「重新生成」。排查后确认一个**机制性**缺口：APScheduler
+  的 `misfire_grace_time` 只能兜住「错过了但还在宽限内」的运行；容器恰好在计划时刻
+  **正在部署/重启**（本仓库早上 6~10 点常有部署，见 nginx 备份文件名）时，这次运行
+  被跳过且**永远不会再补**。失败重试 + 状态落盘 + 飞书告警都只对「运行了但失败」有效，
+  对「根本没运行」无效 —— 于是「今天日报缺失」依旧要靠肉眼。
+
+- **改动**：
+  - `backend/app/scheduler/scheduler.py`：新增 `catch_up_missing()` —— 应用启动后延迟
+    60s（等 embedding/MCP 预热完）后台补跑**缺失**的报告：日报（过了当天计划时间且今天
+    还没有）、周报/月报（期望的上一周期文件缺失）。幂等：只补「该有但现在没有」的那份，
+    跑完写状态、失败照常推告警。带星期/日期限制的复杂 cron 不猜、不补。
+  - `backend/app/agents/news/service.py`：`_period_label` 补上 `daily` 分支，并新增公开
+    `expected_period(kind)` 让调度器不必去猜命名规则。
+
+- **验证**：新增 10 条单测（`_daily_time_passed` 边界/复杂 cron 跳过、补跑只补缺失、
+  已存在不重跑、未到日报时间只补周期、disabled 不补、补跑失败记状态不炸启动、expected_period 标签）；
+  全量 832 passed、ruff 全过、mypy 306 ≤ 310。
+
+## 2026-09-15（限流可被一个请求头绕过：nginx 透传客户端伪造的 X-Forwarded-For）
+
+- **背景**：验证限流修复时顺手测了「换个假 IP 还会不会被限」，结果**线上实测可绕过**：
+  连打 10 次 `POST /api/v1/news/refresh`，每次带一个不同的
+  `X-Forwarded-For: 9.9.9.N` → **10 次全部 401，一次 429 都没有**
+  （应用侧额度是 6 次/分钟，本该被限）。链路原因：
+  - nginx 用 `$proxy_add_x_forwarded_for` 是**追加**语义：客户端自己发的 XFF 会**原样保留**，
+    真实 IP 被追加在后面；
+  - backend 的 uvicorn 带 `--forwarded-allow-ips *`（`always_trust`），
+    `get_trusted_client_address()` 在该模式下直接取 XFF 的**最左**值作为 `scope["client"]`
+    （见 uvicorn 0.52.3 `middleware/proxy_headers.py`）；
+  - 于是应用侧限流按「调用方随便填的字符串」分桶 → 额度形同虚设，
+    日志/审计里的来源 IP 也不可信。
+
+- **改动**：`deploy/nginx.conf` 4 处 `proxy_set_header X-Forwarded-For` 由
+  `$proxy_add_x_forwarded_for` 改为 **`$remote_addr`（覆盖）**，并在文件头写清原因与
+  「将来前面加 CDN 要改用 real_ip 模块」的前提。本部署是单层 nginx 入口
+  （backend 只绑 `127.0.0.1`），所以真实客户端就是 `$remote_addr`。
+
+- **验证**：修复前线上实测 10 次伪造 IP 全通（见上）；修复后同一条命令应变成
+  6×401 + 4×429（10 个请求全落到真实 IP 那一个桶）。nginx `limit_req_status 429` 与新配置
+  经 `docker exec sekb-frontend grep` 确认已加载，部署 7 阶段全绿。
+
+## 2026-09-15（部署卡在 90 秒健康检查而中止（放宽容差）+ 线上自称 development + 429 文案）
+
+- **背景**：限流修复那次部署在**阶段 3/7「启动后端」**判定 `✗ backend 健康检查超时` 后直接中止，
+  阶段 4–7（前端 nginx 重载、监控栈、端点验证）全都没跑，留下半成品状态 ——
+  但事后看后端**完全正常**：`L1 短期记忆` 初始化一步就花了 **107 秒**（21:16:14 → 21:18:01，
+  构建刚结束 CPU 被抢），加上 MCP 预热/LangGraph 构建，整体超过原来的 90 秒窗口。
+  也就是说「假超时」的代价不只是多等，而是把一次健康部署判成失败并中断后续步骤。
+  顺带发现两个小问题：线上 `/health` 与启动日志一直自称 `environment: development`
+  （`config.yaml` 写死），以及前端把 429 的原因写死成「网关限流」（实际常态是应用侧限流）。
+
+- **改动**：
+  - `deploy/deploy.sh`：后端就绪等待 18×5s(90s) → **60×5s(300s)**；
+    超时前先打印 `docker logs --tail 20 backend`，让「还在加载」与「启动就崩」能一眼分开；
+    失败提示给出分情况的操作建议。
+  - `backend/config.yaml`：`environment: development` → `${ENVIRONMENT:-development}`
+    （compose 里 backend 有 `ENVIRONMENT=production`）；纯展示字段，无行为分支。
+  - `frontend/src/pages/News.tsx`：429 文案不再断言是「网关限流」，
+    改为「请求过于频繁，已自动重试；仍失败请等 1 分钟再试」（与应用侧 60s 窗口一致）。
+
+- **验证**：`ENVIRONMENT=production` 下 `get_config().app.environment == "production"`；
+  前端 `tsc --noEmit` 无错误；`bash -n deploy/deploy.sh` 通过；
+  改动前已实测后端健康后一切正常（读额度 100/100 通过，见同批 changelog）。
+
+## 2026-09-15（资讯 429 真凶是应用侧限流（读被生成额度限死）：读写分离 + 方法级分组）
+
+- **背景**：上一轮把 429 归因于 nginx（`api_limit` 10r/s 被资讯页打满），按此加了
+  `news_limit 30r/s + burst 60`。部署后实测**仍然 429**：走 https 连打 100 次
+  `GET /sekb/api/v1/news/status` → 10 次 401 后 90 次 429。查 nginx error log：
+  这 100 次里**没有任何** `limiting requests`（限流记录只有 `api_limit` 打健康检查的 21 条），
+  且被拒请求的 `urt=0.001`（上游真回过）→ **429 是后端自己返回的**。
+  真因：`RateLimitConfig.news_per_minute = 10` 覆盖整个 `/api/v1/news/` 前缀，
+  把**读**（列表/正文/`status` 轮询）和**生成**（调 LLM）放在同一个 10 次/分钟的桶里；
+  前端生成期间每 15s 轮询状态 + 切 tab 读列表正文，几下就把额度用光 ——
+  这才是 owner 报的「加载周期报告列表失败 / 点第二次就失败」。
+  另有 `docs/tech/05-API-REFERENCE.md` §1.3 写着「限流中间件未挂载、所有端点无生效限流」，
+  与实际（`enabled: true` 自 2026-09-10）不符，是这次误判的直接原因。
+
+- **改动**：
+  - `backend/app/api/middleware.py`：路由组键支持**带方法**（`"POST /api/v1/news/"`），
+    带方法的组优先于同前缀的纯前缀组；方法未知时不匹配方法组（避免被塞进小额度组误限）。
+  - `backend/app/core/config.py` + `backend/config.yaml`：`news_per_minute: 10 → 120`（读），
+    新增 `news_generate_per_minute: 6`（写）；`server.py` 注册两条组。
+  - `deploy/nginx.conf`：显式 `limit_req_status 429;`（nginx 默认 503，前端会显示成
+    「服务不可用」，与「请求过于频繁」是完全不同的用户结论）。
+  - `docs/tech/05-API-REFERENCE.md`：§1.3 重写为真实的限流表（含两道闸与 429/503 区别），
+    §15 漂移项 2 更正，并给出「怎么判断是 nginx 还是应用侧限流」的判据。
+
+- **验证**：`test_rate_limit_middleware.py` 新增 6 条（POST 走方法组、GET 回落前缀组、
+  未知方法不误入方法组、同种组内最长前缀仍优先、**生成额度用满不影响读**）；
+  限流相关 48 passed；ruff 全过；`get_config()` 实测 `news=120 / news_generate=6`。
+
+## 2026-09-15（应用侧告警真正接上：资讯失败推飞书（此前是死代码）+ 网关卡片/按钮/自测端点）
+
+- **背景**：上一个提交（`4a715f3`）声称「在 `write_status` 失败时 fire-and-forget 推飞书」，
+  但复核 diff 发现 `service.py` 只改了 `_period_label` 的 staticmethod —— `send_alert`
+  **被定义却从未被调用**，是死代码：任务失败时一条告警都不会发。同时查
+  `deploy/feishu-webhook/feishu_gateway.py` 还发现两个「改了不生效」的坑：
+  网关是本地构建镜像，`docker compose up -d` 不带 `--build` 时同名 tag 不会重建；
+  compose 用 `${VAR:-默认}` 时**空串会被解析成默认值**，所以「设空串=关闭告警」这条
+  约定在容器里根本不成立。
+
+- **改动**：
+  - `backend/app/agents/news/service.py`：`write_status(ok=False)` 里真正调用
+    `send_alert("科技资讯{日报|周报|月报}生成失败", 原因, source="news", severity="critical")`
+    —— 手动触发与定时触发都收口在 `write_status`，一处接线两条路径全覆盖。
+  - `backend/app/core/alerts.py`：加同故障去重（`DEDUP_WINDOW_S=300`，调度器重试/连点
+    只推一张卡片）、`fire_and_forget`（无事件循环时只记日志不抛、持有 task 强引用
+    避免发送前被 GC）、明确关闭开关 `off/none/0/disabled/no`（因为空串会被 compose
+    解析成默认值）、`severity` 默认改为 Alertmanager 标准的 `critical`（红卡片）。
+  - `deploy/feishu-webhook/feishu_gateway.py`：卡片展示 `来源: {source}`；按
+    `source` 给「这是什么/建议」释义（原标题是动态中文，查不到原释义表）；
+    `source=news` 时给「查看资讯」按钮（而不是点了没用的「查看对话记录」）；
+    新增 `POST /test` 一键发自测卡片。
+  - `deploy/deploy.sh`：监控栈启动改 `up -d --build`（否则改了网关代码部署完还是旧行为）。
+  - `docker-compose.prod.yml`：backend 透传 `NEWS_ALERT_WEBHOOK_URL`（默认同网网关）。
+  - `deploy/.env.prod.example`、`docs/ops/07-ALERTING-TROUBLESHOOTING.md`：补告警字段
+    约定表、字段对应卡片效果、新增「故障 7：应用侧告警没收到」四个真实坑 + 一键自测。
+
+- **验证**：`backend/tests/unit/test_alerts.py` 新增 20 条（载荷契约、去重、HTTP 500/连接
+  异常不抛、关闭开关、`write_status` 失败**确实**调到告警 / 成功不调）；
+  news 相关 54 passed；本地按网关代码渲染 news 卡片，标题红、含来源与释义、
+  三个按钮 URL 正确（`/sekb/news`）。
+
+## 2026-09-15（资讯失败推飞书告警 + 修监控栈漏传 env-file（飞书地址实际为空））
+
+- **背景**：owner 要求「资讯任务失败要推飞书」。查既有实现发现 `deploy/feishu-webhook`
+  是现成的网关（`POST /webhook`，接受 Alertmanager 载荷并渲染飞书卡片），
+  但**只被 Alertmanager 使用**，应用侧没接。
+
+- **⚠️ 顺带查出一个真问题**：`FEISHU_WEBHOOK_URL` 确实写在 `.env.prod` 里
+  （部署前检查也正是 grep 它，所以一直显示「飞书 webhook 已配置」），
+  但 `deploy/deploy.sh` 启动监控栈时是
+  `docker compose -f docker-compose.monitoring.yml up -d`——**没带 `--env-file`**，
+  于是 compose 插值 `${FEISHU_WEBHOOK_URL:-}` 得到**空串**，
+  实测容器内该变量长度为 0 → **告警根本发不出去**。
+  这是「检查项通过但运行时没生效」的典型：检查查的是文件，运行时读的是容器环境。
+
+- **改动**：
+  1. **新增 `backend/app/core/alerts.py`**：`send_alert()` 复用飞书网关
+     （默认 `http://sekb-feishu-webhook:5001/webhook`，实测 backend 可解析且 `/health` 200），
+     载荷用 Alertmanager 形状；**绝不抛异常**（旁路能力，发不出去不能影响生成）；
+     `NEWS_ALERT_WEBHOOK_URL` 可覆盖，设为空串即关闭；
+  2. **接线**：`NewsAgent.write_status()` 在 `ok=False` 时 fire-and-forget 推
+     「科技资讯日报/周报/月报生成失败：<原因>」——手动触发与定时触发都会推；
+  3. **修 `deploy/deploy.sh`**：监控栈 compose 加 `--env-file .env.prod`，
+     让 `${FEISHU_WEBHOOK_URL}` 正确注入（否则网关永远收不到地址）。
+
+- **修掉一个我自己引入的严重 bug（被 ruff 抓到）**：`_period_label` 原本是
+  `@staticmethod`，我此前改成用 `self._today_local()` 却忘了去掉装饰器 →
+  **生成周报/月报时会 `NameError` 崩溃**；测试没覆盖到该方法，是 **ruff F821** 拦下的。
+  已改为实例方法，并补 2 条测试（周报=上周一、月报=上月）防回归。
+
+- **验证**：后端 **799 passed**、ruff 全过、mypy 门禁 **306 ≤ 310**；
+  `deploy.sh` 语法校验通过。部署后需实测：网关容器内 `FEISHU_WEBHOOK_URL` 非空、
+  并故意触发一次失败看飞书是否收到。
+
+## 2026-09-15（资讯三问题根因修复：nginx 限流 429 + 生成改异步提交 + 日报标签本地时区）
+
+- **根因（nginx 访问日志实测）**：owner 报的「切 tab 报加载周期报告列表失败」与
+  「再次点重新生成日报失败」**是同一个根因 —— 网关限流 429**：
+
+  ```
+  14  GET  /sekb/api/v1/news/weekly   429
+  10  GET  /sekb/api/v1/news/monthly  429
+   2  POST /sekb/api/v1/news/refresh  429   ← 连「生成日报」都被限流
+  ```
+
+  `/sekb/api/` 用的是一条**全站共享**的限流（`zone=api_limit rate=10r/s burst=30`）；
+  资讯页切 tab 会瞬时发「列表 + 详情」多个请求，很容易打满 → 429。前端把 429 当成
+  一般失败（响应没有 `detail`）就显示默认文案，看起来像功能坏了。
+
+- **改动**：
+
+  1. **nginx**：新增 `zone=news_limit rate=30r/s burst=60` 与
+     `location /sekb/api/v1/news/`（更长前缀优先），资讯页不再挤占全站 API 配额；
+  2. **生成改异步提交**（`routes/news.py`）：`POST /news/refresh`、`POST /news/{type}`
+     用 `BackgroundTasks` **立即返回** `{accepted:true}`；已在生成中返回 **409**
+     （明确文案「正在生成中，请稍候」）。原因：周报/月报实测约 10 分钟，同步请求会让
+     浏览器先超时（日志里 `POST /news/refresh` 出现 **499** 客户端断开），而服务端还在跑、
+     用户既没进度也没结果，只能反复点；
+  3. **状态记录下沉到 agent**（`service.py`）：手动触发也写 `last_status.json`
+     （原来只有定时任务写），因此「提交后轮询」对手动生成同样有效；
+     并新增 `is_running()`（依据文件锁 + 600 秒残留判定）供并发保护；
+  4. **日报标签改用配置时区**：原来用 `datetime.now(timezone.utc)`，
+     北京时间 00:00–08:00 生成时标签会**差一天**（owner 已察觉日期疑问）；
+  5. **前端**（`News.tsx` / `services/news.ts`）：适配「提交 + 轮询」；
+     新增 `describeError()`（429 → 「请求过于频繁（网关限流），已自动重试」、
+     409 → 「正在生成中」、5xx → 「服务正在重启或过载」）与 `withRetry()`
+     （429/5xx 退避重试一次）；切 tab **去重**（已加载过不再重复请求）。
+
+- **验证**：前端 `tsc --noEmit` 无错误；后端 **797 passed**；nginx 配置经
+  `nginx -t` 校验（部署前）。部署后需人工确认：反复切 tab 不再报加载失败、
+  连点生成第二次提示「正在生成中」而非失败、失败时顶部横幅显示原因。
+
+## 2026-09-15（科技资讯：按钮独立 loading + 提交后轮询 + 失败横幅；backend 内存上限降到 2.5G）
+
+- **背景**（owner 报的问题）：「点生成周报后，日报/周报/月报三个按钮都在 loading」。
+  查证：前端只有**一个** `generating` 布尔值被三个 tab 共用（切 tab 只换按钮文案），
+  所以确实会「三个都在转」；而根因是**请求真的没返回**——实测周报生成耗时约 10 分钟，
+  中途还有 LLM 超时重试，浏览器/网关容易先超时，界面就一直转圈。
+
+- **改动 1：按钮 loading 独立**（`frontend/src/pages/News.tsx`）
+  `generating: boolean` → `generatingKey: 'daily'|'weekly'|'monthly'|null`；
+  按钮 `loading={generatingKey === tab}`，**只显示当前 tab 的运行状态**；
+  其他 tab 的按钮置灰（避免同时起三个重任务把后端拖垮）。
+
+- **改动 2：提交 + 轮询**（同文件）
+  提交后**立即返回**，由新加的 `pollTask()` 每 15 秒读一次 `/api/v1/news/status`，
+  等「最近一次任务的 `finished_at` 变化」即判定本轮结束（最多 30 分钟），
+  再按 `ok` 提示成功或**带原因的失败**，并刷新列表。这样界面不再假死。
+
+- **改动 3：失败横幅**（同文件 + `services/news.ts` 加 `getNewsStatus()` 与
+  `NewsTaskStatus` 类型）
+  挂载时读一次状态；若最近一次任务 `ok=false`，顶部显示 `Alert`：
+  「最近一次 X 生成任务失败：<原因>（完成时间 …）」——用户不必再靠「咦今天怎么没日报」发现。
+
+- **改动 4：backend 内存上限 4G → 2.5G**（`docker-compose.prod.yml`）
+  宿主机总共 3.6G，原先 4G 上限等于没有上限；资讯任务/embedding 冲高时会把同机其他
+  服务（含 SSH）一起拖慢。**注**：本次 9/15 日报失败已确认**不是 OOM**
+  （内核 OOM 记录 0 条、容器 `OOMKilled=false`），这是独立的加固项。
+
+- **验证**：前端 `tsc --noEmit` **无错误**；后端 797 passed / ruff / mypy 门禁 305 ≤ 310
+  （后端代码本轮未改）。部署后需人工在页面确认：切 tab 只转对应按钮、失败横幅能显示。
+
+- **仍待办**：飞书告警（需接 webhook）；#4「月报 tab 列表加载失败」待 owner 复现确认。
+
+## 2026-09-15（定时任务不再静默失败：失败重试 + 状态落盘 + /status 接口 + misfire 宽限）
+
+- **背景**（owner 报的两个问题）：① 没有自动生成周报；② 9/15 的日报没出来。
+  查日志后确认**两者都不是「没触发」，而是跑了但失败/静默跳过**：
+
+  - 9/15 08:00（北京）日报任务**确实触发**（00:00:06Z 就有 RSS 抓取日志），
+    但 APScheduler 记录 `Job "科技资讯（每日）" raised an exception`，
+    traceback 首段是 `anyio/streams/tls.py` 的 SSL 读错误；磁盘上**没有**
+    `daily_2026-09-15.md`。**失败只在服务端日志里留了一行，用户完全看不到。**
+  - 周一 9/14 的周报：磁盘与日志里**都没有**任何 weekly 记录/文件
+    （唯一的 `weekly_2026-09-07.md` 是 owner 手动点出来的，mtime 今天 17:59）。
+    三个任务都**没设 `misfire_grace_time`（APScheduler 默认仅 1 秒）**——
+    容器若恰好在触发时刻前后重启，这次运行会被**静默跳过**。
+
+- **改动**（`app/scheduler/scheduler.py`、`app/api/routes/news.py`、`app/agents/news/service.py`）：
+
+  1. **失败重试**：任务失败后自动重试 1 次（间隔 60 秒）——网络/TLS 抖动是实测
+     最常见的失败原因；
+  2. **状态落盘**：每次任务执行（成功也记）写 `data/news/last_status.json`
+     （`kind/ok/period/error/started_at/finished_at/duration_s`），
+     落盘失败也不影响任务本身；
+  3. **接口可见**：新增 `GET /api/v1/news/status`（**声明在 `/{report_type}` 之前**，
+     否则会被 catch-all 匹配成 report_type —— 这一点单独写了测试守着）；
+  4. **misfire 宽限**：`misfire_grace_time=3600`（1 小时）+ `coalesce=True` +
+     `max_instances=1`，容器重启导致的小延迟不会再被静默丢掉。
+
+- **验证**：新增 `tests/unit/test_news_scheduler_status.py` **10 条**用例
+  （状态落盘成功/失败/不可写目录、失败重试后成功、重试用尽记为失败、
+  misfire 参数、**路由顺序不被 catch-all 吃掉**、状态文件缺失/损坏不报错）；
+  全量 **797 passed**、ruff 全过、mypy 门禁 **305 ≤ 310**。
+
+- **仍未做（下一轮）**：
+  - 前端展示 `/status`（现在接口有了，页面还没读）；飞书告警也还没接；
+  - #3「生成周报时三个按钮一直 loading」—— 需要把生成改为「提交任务 + 轮询状态」
+    或至少给前端加超时（实测周报耗时约 10 分钟且中途有 LLM 超时重试）；
+  - #4「月报 tab 列表加载失败」**未能复现**（容器内 `list_periodic('monthly')` 正常、
+    路由存在），怀疑是今天多次部署期间请求撞上重启窗口，待 owner 复现确认。
+
+## 2026-09-15（周报/月报改为按自然周期取数（修复期号与内容不一致））
+
+- **背景**（owner 报的 bug）：「点击生成周报后没有正确生成上周的周报」。
+  实测：生成的期号是 `2026-09-07`（**正好是上周一**，期号没错），但内容覆盖的是
+  **最近 7 天（含本周）** —— 因为采集窗口来自 `time_window_hours`，它只能表达
+  「相对当前时刻往前 N 小时」。周二生成周报时，「往前 7×24 小时」= 上周二~本周二，
+  于是标签写「上周」、内容却是跨周混合。月报同理（往前 30 天 ≠ 自然月）。
+
+- **改动**：
+  - `NewsFilter` 支持显式起止时间 `since`/`until`（**优先于** `time_window_hours`，
+    左闭右开）；
+  - `NewsAgent._period_window()`：按 **period 标签**算自然周期
+    （weekly：上周一 00:00 → +7 天；monthly：该月 1 日 → 次月 1 日；含跨年边界），
+    返回**本地时区**的 aware datetime（自然周/月是本地日历概念，转 UTC 再渲染会差一天
+    —— 这是实现过程中实测踩到的）；
+  - `_generate_report` 调整为**先算周期标签、再按标签算窗口**，把窗口交给过滤器；
+  - 新增 `time_span_override`：把**真实日期区间**（如 `2026-09-07 ~ 2026-09-13`）写进
+    提示词上下文，替换固定的「过去一周 / 本周」措辞（并把「本周」换成中性的「本期」），
+    避免模型按错误的周期口径写作。
+
+- **验证**：新增 `tests/unit/test_news_period_window.py` **9 条**用例
+  （自然周窗口、自然月窗口、**12 月跨年**、日报返回 None、坏标签不抛异常、区间文案、
+  过滤器左闭右开、显式区间优先于一年小时窗口的反证、无时间条目仍保留）；
+  全量 **787 passed**、ruff 全过、mypy 门禁 **301 ≤ 310**。
+
+- **⚠️ 已知残留**：`_PERIOD_CONTEXTS` 里 weekly/monthly 的 `forecast_horizon` 等固定措辞
+  仍在，只覆盖了 `time_span` 与 `period_label`；若要彻底口径一致，需要把整段周期语境
+  参数化（下一轮可做）。
+
+## 2026-09-15（响应体异常可界定：出站体检 + self_check 自检工具（限长暂缓））
+
+- **背景**：owner 决定**限长相关功能暂缓**（不做事后裁剪、暂不做精简版报告），改为要求
+  「**能清楚地界定问题边界**」——若响应体异常，要么是我们的代码问题（必须报错暴露），
+  要么是平台行为（先不管）。
+
+- **一个重要的事实澄清（也是暂缓的依据）**：限长这件事的**原始依据是二手的**——
+  Dify 一条**社区 issue**（#18731，已 closed）称响应超约 68000 字符时工具响应变空；
+  千帆是**API 节点**文档写「返回内容 ≤ 1M」（不是我们走的 MCP-SSE 节点）；
+  扣子/百炼**没查到**量化限制。而且我此前把它写成「最可能踩坑」**强于证据**。
+
+  随后实测把猜测变成数字（**200 个职位 + 真 LLM**）：
+
+  | 单次职位数 | 报表总长 | 其中 `jobs` 回显 |
+  |---|---|---|
+  | 12–22 | 4.5–8 KB | 68–76% |
+  | **200** | **65 KB** | **85%** |
+
+  即：几十个职位完全不接近任何阈值；两百个职位才刚好贴到那条 68K；而大头是
+  **`jobs` 回显（不是模型产出，`max_chars` 管不到）**。所以限长被暂缓、且后续若要
+  处理，应优先考虑「不回显 jobs」而非限长。
+
+- **改动**（内核 `jobcopilot`，指针 → `e7592f7`）：
+
+  1. **出站体检**（`inspect_response`，每次工具调用执行）：记录返回字节数 + 校验 JSON
+     合法性；无法序列化或超过 8MB 自设上限时**显式报错**，错误信息明确写
+     「**不是平台限制，是我们的输出过大**」并带确切数字 —— 防止反向误判。
+  2. **`self_check` 工具**：固定 <1KB 响应（版本 / 内核 commit / 提示词来源 / 传输 /
+     路径前缀）。它是「体积」变量的**对照组**：它能通而 `analyze_*` 不通 → 差异在体积
+     （平台侧）；它也不通 → 链路问题（地址/令牌/Host/网络）。
+  3. **`docs/ops/15-MCP-ENDPOINT.md` §5.5**：5 步判定表，把边界钉死
+     （链路 → 我们的日志 → 是否超我们自设上限 → 反代是否截断 → 剩下才算平台侧）。
+
+- **顺带修掉两处脆弱断言**：测试里写死「工具数 == 6」，加工具就假失败 → 改为断言
+  「关键工具都在」；`test_mcp_server.py` 的 `EXPECTED_TOOLS` 契约补上 `self_check`。
+
+- **验证**：274 passed / 1 skipped、ruff 全过、mypy strict 34 文件、L1+L2 与基线一致；
+  部署后从公网调 `self_check` 验证（见部署记录）。
+
+## 2026-09-15（classify_role 两级判定 + max_chars 输出长度约束（交 LLM，不裁剪））
+
+- **背景**：两项按 owner 确认的方案实现——① `classify_role` 归类优先级（owner 选 A+C，
+  **不新增桶**）；② 云端响应体积改为**把限长交给 LLM**（owner 明确：不做事后裁剪）。
+
+- **1) `classify_role`：职能名词优先于领域词**（内核指针 → `b9a186f`）
+
+  原实现是单表「首个命中即归类」，而「算法/模型」排在「产品经理」之前，于是**领域词
+  抢走了职能判定**。改为两级：先看「这个人干什么」（职能名词），再看「什么方向」（领域词）。
+  实测 **5 条归类被修正**：
+
+  | 标题 | 改前 | 改后 |
+  |---|---|---|
+  | 大模型产品经理（评测方向） | 算法/模型 | **产品经理** |
+  | 大模型应用产品经理 | 算法/模型 | **产品经理** |
+  | 大模型平台架构师（专家岗） | 算法/模型 | **架构师/Leader** |
+  | 技术售前顾问（数据平台） | 运营/策略 | **其他**（不再被「数据」这个极宽的词带走） |
+  | 数据智能体工程师 | 运营/策略 | **其他** |
+
+  **⚠️ 口径变化（用户可见）**：桶名集合**没有变**（仍是 7 桶 + 其他），但报告里
+  `role_distribution` 的**数字会变**。基线不受影响（它只存通过率与提示词指纹），
+  已实跑 L1+L2 确认与基线一致。
+
+  **C（契约化）**：51 条数据集职位全部加 `expected_role` 标注，并由
+  `tests/test_stats.py` 断言；另加一条「桶名集合不得变化」的断言，把「不新增桶」
+  这个决定变成需要显式修改测试才能推翻的事。标注放在数据集里是安全的——
+  `build_job_summaries` 只取 title/company/salary/jd_text，不会泄进提示词。
+
+- **2) `max_chars`：把长度预算交给模型**（新增 `core/prompts/budget.py`）
+
+  按 owner 明确要求：**不做事后裁剪**（按字节裁剪会产出非法 JSON，模型必然解析失败）。
+  改为把预算写进提示词，由模型自己写短；并在指令里要求
+  **JSON 键结构必须完整保留**（不得删键/截断），避免模型为了短而破坏结构。
+
+  - 单职位 7 段均摊、批量 2 路均摊；`max_chars` 校验 300..200000，非法给可操作错误；
+  - **安全系数 0.8**（实测依据见下）。
+
+- **真 LLM 实测（DeepSeek，批量两路）**：
+
+  | 配置 | 实际输出长度 |
+  |---|---|
+  | 不设限 | 5539 字符 |
+  | `max_chars=3000`（直告模型） | 3291 字符（**+10%**，超限） |
+  | `max_chars=3000`（加 0.8 安全系数后） | 3188 字符（**+6%**，仍超但明显收敛） |
+
+  **结论：模型对精确字符数不精确**，这印证了之前的预警；安全系数能收敛但不能保证。
+
+- **⚠️ 更重要的发现（需 owner 决定）**：`max_chars` 只管**模型产出**，而报表里
+  `jobs` 回显 + `stats` **不是模型输出**，实测占比很高：
+
+  | 数据集 | 职位数 | 总长 | jobs 回显 | 占比 |
+  |---|---|---|---|---|
+  | agent_dev | 22 | 7938 | 6105 | **76%** |
+  | product | 17 | 5441 | 4073 | **74%** |
+  | presales | 12 | 4538 | 3091 | **68%** |
+
+  因此**大批量时单靠 `max_chars` 可能仍撑不进平台上限**（Dify 68K / 千帆 1M）。
+  两个候选方案（待 owner 选）：① 加「不回显 jobs」开关（调用方本来就持有这些数据）；
+  ② 分配预算前先扣掉非模型开销（`stats` + 回显 + prompt_meta），只把剩下的给模型。
+
+## 2026-09-15（后端镜像改用 CPU-only torch（去掉 3.2GB CUDA 死重量））
+
+- **背景**：服务器的后端镜像里 torch 是 `2.14.0+cu130`（CUDA 构建），但**这台机器没有
+  GPU**（`torch.cuda.is_available()` 为 False）。CUDA 构建额外拖进 **19 个 nvidia-* 包**，
+  实测 `site-packages/nvidia` 占 **3.2GB** —— 纯死重量，而且显著抬高每次构建的磁盘峰值
+  （曾把 59G 磁盘挤到构建失败，只能靠 `docker builder prune` 临时腾空间）。
+
+- **根因**：torch 不是 `requirements.txt` 的直接依赖，而是被 **sentence-transformers
+  传递**拉进来的；PyPI（及其国内镜像）上的 Linux torch 默认就是 CUDA 构建。
+
+- **改动**（`backend/Dockerfile`）：在装 `requirements.txt` **之前**插入一步，
+  从 PyTorch 官方 CPU 索引装 `torch==2.14.0+cpu`：
+  - **顺序是关键**：先装 `+cpu`，后面 pip 看到 `torch>=x` 已满足就不会再拉 CUDA 版；
+  - `--extra-index-url ${PIP_INDEX}`：torch 的运行时依赖（sympy/networkx/jinja2 等）
+    不在 PyTorch 索引上，必须能回落到常规源解析；
+  - 写死 `+cpu` 本地版本号：它只存在于 PyTorch 官方索引，不会与镜像源歧义。
+
+- **实测依据（改之前查证）**：
+  - CPU 索引有 cp311 x86_64 的 `torch-2.14.0+cpu` 轮子，**196MB**（对比 3.2GB nvidia 包）；
+  - 服务器可直连 `download.pytorch.org`（HTTP 200，0.85s），实际下载 5.6MB/s 成功。
+
+- **验证**（部署后实测，见部署记录）：镜像内 `torch.__version__` 为 `+cpu`、
+  `nvidia` 目录消失、**本地 embedding 仍可用**（sentence-transformers 实际编码一次）、
+  镜像体积下降。这条必须验——本地 Embedding（L3 知识库）依赖 torch。
+
+- **⚠️ 第一版没成功（值得记下来）**：我先用「在装 requirements **之前**单独装一次
+  `torch==2.14.0+cpu`」的办法。构建日志显示那一步确实装了 CPU 轮子（196MB），
+  但紧接着装 `requirements.txt` 时 pip **又拉了 CUDA 版**：
+
+  ```
+  #16 Collecting torch==2.14.0+cpu            ← 我的步骤
+  #16 Downloading torch-2.14.0+cpu...whl (196.2 MB)  ✅
+  #17 Collecting torch>=2.2 (from sentence-transformers>=3.0.0)
+  #17 Downloading torch-2.14.0-cp311...whl (554.6 MB) ← 又装回 CUDA 版
+  ```
+
+  **根因**：Dockerfile 用 `pip install --prefix=/install`，而 `--prefix` 目标**不在
+  sys.path 上**，所以后一步 pip 看不见前一步装的东西，会重新解析依赖树。结果
+  `nvidia-*` 照旧被装进来，镜像反而从 10.9GB 涨到 **11.1GB**。
+
+  **正确做法**：改用 **约束文件**（`backend/constraints-image.txt` 写死
+  `torch==2.14.0+cpu`），在同一次解析里钉住版本，并加
+  `--extra-index-url https://download.pytorch.org/whl/cpu` 让 `+cpu` 轮子可被命中。
+  改完先用 `pip install --dry-run` 在容器里验证（输出 `Would install torch-2.14.0+cpu`、
+  计划里无任何 nvidia 包），再重建镜像 —— 避免又花 15 分钟才发现。
+
+  经验：`--prefix` 安装 + 多步 pip 是不可靠组合；**能用约束解决的，不要靠步序**。
+
+- **⚠️ 第二版也失败了一次（根因不同，记下来）**：改用「约束 + `--extra-index-url
+  https://download.pytorch.org/whl/cpu`」后，构建**超时**失败。日志显示
+  `networkx` 下载速度只有 **36.5 kB/s**（第 17 步跑满 1002 秒后撞上构建的 20 分钟上限）。
+
+  **根因**：加了 `--extra-index-url` 后 pip 会对**所有包**都去查那个境外索引，
+  把普通依赖的下载也拖慢。
+
+  **最终做法**（已验证）：分两步，让境外索引只被用来取那一颗轮子——
+  1. `pip download --no-deps -d /torch-wheel --index-url <CPU 索引> torch==2.14.0+cpu`
+     （196MB，实测 ~35 秒）；
+  2. 主安装步骤改用 `--find-links /torch-wheel` + `-c constraints-image.txt`，
+     torch 由**本地轮子**满足，其余依赖仍走国内镜像，**不引入任何境外索引**。
+
+  改前同样先用 `pip install --dry-run` 在容器里验证：输出 `Would install
+  torch-2.14.0+cpu`、无 nvidia 包、无报错。
+
+- **✅ 最终实测结果（已上线）**：
+
+  | 指标 | 改前 | 改后 |
+  |---|---|---|
+  | 后端镜像 | **10.9GB** | **3.34GB**（省 **7.5GB**） |
+  | 容器内 torch | `2.14.0+cu130` | **`2.14.0+cpu`**（`cuda.is_available()` False） |
+  | `site-packages/nvidia` | 3.2GB（19 个包） | **不存在** |
+  | 服务器可用磁盘 | 16–24GB（每次部署要清缓存） | **32.7GB** |
+
+  **功能回归**（本地 Embedding 依赖 torch，必须验）：
+  - `SentenceTransformer` 真实编码成功，输出 384 维向量（模型走本地缓存，不需要重新下载）；
+  - `/api/v1/health/` status=ok，内核 `f037c97` v0.1.0 healthy；
+  - 全部端点正常；MCP 容器内存仅 45MB（复用同一镜像，未新增镜像）。
+
+  附带收益：以后每次部署不再需要靠 `docker builder prune` 临时腾磁盘（这正是之前部署
+  反复被磁盘卡住的根源）。
+
+## 2026-09-15（修正 SSE 子路径下消息路由未带前缀（客户端 404））
+
+- **现象**：对外暴露后，公网客户端连 `https://bos-studio.tech/jobcopilot/sse` 能收到
+  `event: endpoint`（内容是 `/jobcopilot/sse/messages/?session_id=...`），但照着该
+  地址 POST 回来是 **404**。
+
+- **根因**：MCP SDK 的 `sse_app(mount_path=...)` **只改「对外声明的消息端点」路径，
+  不移动实际注册的路由**（路由取的是 `settings.message_path`）。我原先只设了
+  `mount_path`，于是「声明带前缀、路由停在 `/messages`」。
+
+- **修法**（内核 `jobcopilot`，指针 → `f037c97`）：直接设置
+  `settings.message_path = "<前缀>/sse/messages/"`，`mount_path` 用 `/`，
+  让**声明与路由一致**（前缀由 nginx 原样透传，不需要靠 `mount_path` 拼）。
+
+- **我的测试原本也漏了这一层**（值得记一笔）：原用例只断言 endpoint 事件里的字符串，
+  没断言真实路由，所以「声明对、路由错」能通过测试。已补强为两条：
+  1. `test_base_path_sse_routes_are_actually_registered` —— 断言**真实注册的路由**
+     里有 `/jobcopilot/sse/messages`；
+  2. `test_base_path_sse_full_session_works` —— 跑**完整** SSE 会话
+     （initialize + list_tools，带 30s 硬超时），因为「消息端点路径对不对」只有真
+     POST 一次才知道。
+
+- **验证**：本地实测完整 SSE 会话成功（POST 消息端点得 202，ListTools 返回 6 个工具）；
+  内核 254 passed / ruff / mypy strict 全过；L1+L2 与基线一致。
+
+## 2026-09-15（对外暴露 JobCopilot MCP 端点（/jobcopilot/mcp 与 /sse，供云端平台接入））
+
+- **背景**：云端平台（扣子/百炼/千帆/Dify/HiAgent）**只认 HTTP**，而 SEKB 用的内核
+  MCP Server 是 backend 容器内的 **stdio 子进程**，外部访问不到。owner 已批准在既有
+  限制下开放 HTTP/HTTPS，并选定**子路径**形式（免加 DNS 记录）。
+
+- **改动**：
+
+  | 位置 | 内容 |
+  |---|---|
+  | `jobcopilot`（内核，指针 → `9fff941`） | 新增 `JOBCOPILOT_HTTP_BASE_PATH` 支持路径前缀；`build_http_app` 用前缀注册 `<前缀>/mcp` 与 `<前缀>/sse`，并把 SSE 的 message 端点写成 `<前缀>/sse/messages/` |
+  | `docker-compose.prod.yml` | 新增 `jobcopilot-mcp` 服务：**复用 backend 镜像**（不新增镜像、不重新构建、不占新磁盘），`--http --port 8765`，端口只绑 `127.0.0.1`，`read_only: true`，内存上限 1G |
+  | `deploy/nginx.conf` | 新增 `upstream sekb_jobcopilot_mcp` + `location /jobcopilot/`：**proxy_pass 不带 URI**（原样透传前缀）、`Host $host`（内核据此做白名单）、SSE 关缓冲 + 300s 读超时 |
+  | `deploy/deploy.sh` | 新增阶段 3.5：在 frontend **之前**启动 MCP（nginx 解析不到 `jobcopilot-mcp` 会启动失败）；部署后端点检查加入 MCP（401/200 均算通过）；`warn` 补上第二个参数（原先提示被静默丢弃） |
+
+- **安全设计（都写进了注释，不是默认值凑巧）**：
+  - **容器内刻意不配任何 LLM Key** → 公网端点必须 BYOK，每个调用方带自己的 Key，
+    没人能花这台服务器的额度；
+  - `JOBCOPILOT_HTTP_TOKEN` 未设时内核**拒绝启动**并打印可操作提示（安全闸）；
+  - `JOBCOPILOT_HTTP_ALLOWED_HOSTS=bos-studio.tech`，否则平台会收到 421；
+  - `read_only: true`：`save_profile` 在共享端点上用不了是**有意的**
+    （画像会串到别人身上，调用方应改用 `user_profile` 按请求传）；
+  - 端口只绑回环，对外一律经 nginx（TLS + 令牌），不新开公网端口。
+
+- **验证**：见部署后实测（本轮记录）——从本机经公网用官方 MCP 客户端连
+  `https://bos-studio.tech/jobcopilot/mcp` 列工具；无令牌 401；SSE 的 endpoint 事件
+  带 `/jobcopilot` 前缀。内核侧另有 2 条单测守着前缀行为（含「不带前缀的老路径返回
+  404」，防止「配了前缀其实没生效」）。
+
+## 2026-09-15（Eval L3 首次真跑：5 个评审维度均分 + 抓到一个 stub 测不出的失败）
+
+- **背景**：评估骨架的 L3（LLM 评审）此前**从未真跑过**（缺 Key），报告里只有 L1+L2。
+  计划 §3.5 明确「全量 L3 ≈ 180 次调用，成本不到 1 元」，属于发版前该做的动作，
+  因此用服务器 `.env.prod` 里的 DeepSeek Key 真跑了一次。
+
+- **实测**（`jobcopilot eval --level 123 --provider deepseek`，**275 秒**，约百次调用）：
+
+  | L3 维度 | 均分（满分 5） |
+  |---|---|
+  | `actionability`（建议可执行性） | **4.67** |
+  | `groundedness`（是否编造） | **4.33** |
+  | `jd_coverage`（覆盖 JD 关键要求） | 4.00 |
+  | `track_coverage`（赛道划分合理性） | 4.00 |
+  | `salary_anchored`（薪资有据） | **3.67**（最低，符合预期：数据集有 4 条故意不给薪资） |
+
+- **真跑抓到 stub 永远测不出的失败**：8 个单职位用例里 1 个失败——
+  `single-无薪资` 的 `interview_qa` 段落为空。核对代码后确认这是**设计内的降级**：
+  单步 LLM 调用失败/返回脏 JSON → 该步产出空结构并记 error 日志
+  （`core/analyzers/single.py`），工具层把空段落汇总成 `warnings` 返回
+  （`mcp/tools.py`），全部为空才报 `ToolError`。即系统行为正确，是
+  L1 的 `sections_complete` 在真模型下抓到了质量信号。
+
+- **由此写明两个容易误导人的事实**（已写进 `docs/eval-report.md` §2.2 与局限段）：
+
+  1. **L1+L2 的 100% 是构造性的**：CI 用 `SkeletonStubLLM`，它永远返回骨架，
+     所以 `sections_complete` 恒为 100%。**L1+L2 守的是「结构没回归」，不是「质量好」。**
+     质量信号只在 L3 出现——这正是「改提示词必须附 L3 报告」这条规则的理由。
+  2. **基线必须保持 stub 口径**：真 LLM 那次与基线比对会报「0.975 < 1.0」，
+     因为两者不可比。因此**刻意不用 `--update-baseline`**——那会把「允许 12.5%
+     段落缺失」固化进零成本门禁，反而把守门员放松了。真 LLM 分数只作趋势记录。
+
+- **内核指针**：`17136ce → 0855470`（本次只动 `docs/eval-report.md`）。
+
+## 2026-09-15（Eval 数据集扩到计划规模（22/12/17 + 8 个单用例，覆盖 8 个方向桶））
+
+- **背景**：计划 §3.3 写的数据集规模是 20/10/15，实际长期停在 **6/6/6**——
+  自己的评估报告把这条列为首要局限。数据集太小，`stats_exact_match`
+  这条「可精确断言」的核心检查接近白给（分布太简单，碰巧对上很容易）。
+
+- **改动**（内核 `jobcopilot`，指针 `44c399c → 17136ce`）：
+
+  | 数据集 | 变化 | 多样性（实测） |
+  |---|---|---|
+  | `agent_dev` | 6 → **22** 条 | 21 家公司 / 7 个方向桶 / 7 个热词 |
+  | `presales` | 6 → **12** 条 | 12 家公司 / 7 个方向桶 / 4 个热词 |
+  | `product` | 6 → **17** 条 | 16 家公司 / 3 个方向桶 / 3 个热词 |
+  | 单职位用例 | 3 → **8** 个 | 见下 |
+
+  - 三个批量集合计覆盖 `classify_role` 的**全部 8 个方向桶**；
+  - 单职位用例新增 5 个**结构变异**：极短 JD、超长 JD（20 条职责 + 15 条要求）、
+    中英混杂、只有任职要求（残缺结构）、无薪资信息；
+  - 批量集里也放了变异：缺公司/缺薪资、纯英文、超长 JD；
+  - **文件名不带条数**（计划写的是 `agent_dev_20.json` 那种形式）：实际条数多于计划
+    下限，带数字会让文件名与内容不符；规模下限改由测试断言守着。
+
+- **验证**：
+  - L1+L2：**11 个用例、通过率 100%、各断言 100%、与基线 `v1.json` 一致**
+    （基线只比提示词指纹与通过率、不比用例 id，所以扩容无需重新基线化）；
+  - 原 `test_load_datasets` 写死 `len(single) == 3`，一扩容就假失败 → 改为断言
+    「结构完好 + 达到计划下限 + case_id 唯一 + 每条至少能和统计口径对上」；
+  - 门禁：251 passed / 1 skipped、ruff 全过、mypy strict 33 文件无问题。
+
+- **顺带发现的已知行为（未改，已记入评估报告与疑问清单）**：`classify_role` 是
+  「首个命中即归类」，而「算法/模型」排在「产品经理」之前，所以
+  **「大模型产品经理」会被算成算法岗**。规则表被刻意冻结（改它会改变报告口径），
+  因此只记录不改。
+
+- **部署**：与本次指针更新一起部署上线（构建缓存可回收 8.21GB，清理后仍留约 12GB
+  可复用缓存，因此构建空间比上一次宽裕）。
+
+## 2026-09-15（JobCopilot P6+P7 上线：内核 44c399c（双传输/BYOK）与 v0.1.0）
+
+- **背景**：P6（云端平台适配）与 P7（开源发布）的代码此前已完成，但部署被磁盘卡住
+  （可用 24606MB 未达门禁 25000MB）。本次腾出空间后一次性上线两个阶段。
+
+- **上线内容**：
+  - 内核指针 `2631ee3 → 44c399c`：HTTP 形态支持按请求传 Key（BYOK）、访问令牌
+    （含 `?token=` 兜底）、Host/Origin 白名单、对外绑定安全闸、**同进程双传输
+    `/mcp` + `/sse`**（千帆只吃 SSE、火山 AgentKit 只吃 Streamable HTTP）；
+  - 内核版本号 `0.0.1 → 0.1.0`（P7 打包就绪的一部分）。
+
+- **腾空间的方式**：`docker builder prune -af` 回收 **11.82GB**（这次缓存里确有可回收
+  内容；此前多次为 0B——`docker system df` 的「可回收」在本机不可信，已在
+  `docs/ops/13-DISK-MEMORY.md` 记录）。
+
+- **部署过程中的三个脚本缺陷（都已修复并验证）**：
+  1. 子模块对齐排在部署前检查之后 → 指针一更新就被自己的检查拦住，只能 `--skip-check`
+     绕过（那等于跳过全部检查）；
+  2. 部署后端点检查一次性探测 → 监控栈重启未就绪就打 `grafana: 000 FAIL` 假失败；
+  3. 部署前检查自带 20GB 磁盘阈值，高于部署后稳态可用空间（~17.7GB）
+     → 「每次成功部署都把下一次拦住」的自锁。
+
+- **部署后验证（实测）**：
+  - 仓库钉住 `44c399c` == 运行内核 `44c399c`（`GET /api/v1/health/`）；
+  - `kernel.version = 0.1.0`、`healthy = true`、`prompts = 12`、`prompt_source = local`
+    （`prompt_dir = /app/prompt/job`，宿主热改目录按设计优先）；
+  - `bash scripts/check_kernel.sh` → ✅ 与钉住的 commit 完全一致；
+  - 端点 health 200 / metrics 200 / 前端 200，`https://bos-studio.tech/sekb` 200；
+  - 部署前自动备份 + 同天去重生效：备份目录 9 份，今天保留 2 份、`0908~0915` 每天各 1 份；
+  - 部署前检查：**通过 36 项 / 失败 0 项 / 警告 2 项**（两条警告均真实有用：
+    磁盘偏低、存在旧监控容器）。
+
+- **仍未完成**：P6 的「每平台跑通一次」需要各平台账号 + 公网 HTTPS 域名；
+  P7 的 PyPI 发布需要账号/token（产物体检 `twine check` 已 PASSED）。两条都已在
+  疑问清单中列出，不阻塞已上线内容。
+
+## 2026-09-15（部署验证可靠性：端点检查加重试 + 修两处假警告）
+
+一天之内连续两次部署都出现同一批「假 FAIL / 假警告」，会让部署验证输出失去可信度
+（人一旦习惯忽略它，真正的失败也会被忽略）。三处一起修。
+
+### 1. 部署后端点检查改带重试（`deploy/deploy.sh`）
+
+- **现象**：两次部署都打印 `grafana: 000 FAIL`，而**一分钟后 grafana 就是 healthy**。
+- **根因**：一次性 `curl` 探测；监控栈（尤其 Grafana）重启后要几十秒才就绪。
+- **修法**：抽出 `probe_endpoint`，每个端点最多重试 6 次 × 5 秒，并在结束时汇总
+  「N 个端点在重试窗口内未就绪」，而不是逐条打 FAIL。前端 `/` 同时接受 200/301
+  （nginx 会重定向到 `/sekb`）。
+- **验证**：从真实脚本抽取该函数实测 5 项全过——200 立即通过、200 在允许列表内通过、
+  404 重试 3 次后失败（耗时 ≥2s，证明确实重试）、端口关闭重试后失败并返回 1。
+  过程中还测出我自己引入的两个瑕疵并修掉：`printf` 里 `\n` 写成了字面量、
+  curl 失败时状态码被拼成 `000000`。
+
+### 2. 定时备份 cron 假警告（`deploy/pre-deploy-check.sh`）
+
+- **现象**：长期报「定时备份 cron 未配置」，而备份每天都在跑。
+- **根因有两个**：① 只查 **root** 的 crontab，而任务装在部署用户 **bo** 的 crontab 里；
+  ② grep 的模式是 `backup.sh`，而脚本名是 **`backup_kb.sh`**（中间的 `_kb` 让模式永远匹配不上）。
+- **修法**：同时查 root 与当前用户，模式改为 `backup_kb\.sh|backup\.sh`。
+- **验证**：服务器实测——新逻辑「✅ 已配置」；旧模式确认匹配不上（即假警告根因）；
+  修复后部署日志该项变为通过。
+
+### 3. Git remote 假警告（同文件）
+
+- **现象**：报「Git remote 未配置」，实际有两个 remote。
+- **根因**：只认名为 `origin` 的 remote，而本仓库是 `gitea` / `github`
+  （`origin` 指向 GitHub SSH，中国网络经常连不上）。
+- **修法**：有任意 remote 即通过，并把名字打印出来便于核对。
+- **验证**：服务器实测输出「✅ Git remote 已配置（gitea github）」。
+
+### 4. 部署前检查的磁盘阈值造成「成功即自锁」（同文件）
+
+- **现象**：部署成功后再跑部署前检查 → `✗ 磁盘空间不足: 17750MB`（要求 20GB），
+  即**每次成功部署都会把下一次部署拦住**。
+- **根因**：磁盘阈值有**三处且不一致**——pre-deploy-check 的 20GB（硬失败）、
+  `deploy.sh` 阶段 2 的 `NEED_MB=25000`（先清缓存再判定）、阶段 7 的缓存上限 14GB。
+  而这里的 20GB 恰好**高于**部署后的稳态可用空间（~17.7GB），于是形成自锁；
+  更糟的是它排在阶段 2 之前，让「先清缓存再判定」这条正确路径根本没机会执行。
+- **修法**：本项改为**告警**，判定权交给阶段 2 那唯一的门禁（它知道要先清构建缓存，
+  且失败时会给出可操作提示）。告警文案写明「峰值约需 17-18GB、阶段 2 会先清缓存」。
+- **验证**：服务器实测由 `失败：1 项` 变为 **`通过：36 项 / 失败：0 项 / 警告：2 项`**，
+  且剩下两条警告都是真实有用的（磁盘偏低、存在旧监控容器）。
+  （修改中我不小心把 `DISK_AVAIL` 的赋值行一起删掉，导致 `unbound variable`——
+   已在提交前修回并复测。）
+
+## 2026-09-15（部署脚本：子模块对齐提到检查之前（指针更新后不必再 --skip-check））
+
+- **背景**：内核指针更新（`2631ee3 → 44c399c`）后执行 `bash deploy/deploy.sh`，
+  在**阶段 0 就被拦住**：`✗ 内核 jobcopilot 子模块状态异常`。
+
+- **根因是顺序反了**：阶段 0 的 `pre-deploy-check.sh` 会校验内核子模块，而真正的
+  对齐在**阶段 2**（`git submodule update`）。`git pull` 又**不会**自动更新子模块，
+  所以「指针刚更新、子模块还停在旧 commit」是**预期状态**，却导致部署被自己拦住。
+  后果不是「多一步」，而是**逼人加 `--skip-check` 绕过——那等于连其他所有检查
+  一起跳过**（当天协作者部署时就是这么绕的）。
+
+- **改动**：在阶段 0 之前插入子模块对齐，且**仅在子模块工作区干净时**才自动对齐；
+  有本地改动则不动它，交由检查报错（不悄悄覆盖别人的改动）。
+
+- **验证**：
+  - 修复前：服务器上 `bash deploy/deploy.sh` 在阶段 0 失败（`失败：1 项`）；
+  - 修复后：同一命令直接进入阶段 1 并完成部署（内核 commit 从 `2631ee3` 变为 `44c399c`）；
+  - 顺带说明：本次之所以能一眼看出「期望 44c399c / 实际 2631ee3」，是因为同一天刚
+    修过 `check_kernel.sh` 取错期望值的问题——否则会打印「期望=实际 却说不一致」，
+    看起来像工具坏了，更容易被 `--skip-check` 糊过去。
+
+## 2026-09-15（修正两处验证工具：内核解耦测试误报 + mypy 门禁静默绿灯）
+
+全量验证时发现两个「工具本身不可靠」的问题——比代码 bug 更值得修，因为会误导判断。
+
+### 1. 解耦测试误报（`test_kernel_does_not_depend_on_sekb`）
+
+- **现象**：内核新增 HTTP 双传输后该测试失败，报「内核反向依赖 SEKB」。
+- **根因**：原实现判断源码里是否出现子串 `"app."`，而新代码里的普通变量名
+  `http_app.router` / `sse_app.routes` 恰好含这个子串。**内核并没有依赖 SEKB 的
+  `app` 包**，是启发式太粗。
+- **修法**：改为正则匹配真正的导入语句
+  （`^[ \t]*(?:from|import)[ \t]+app(?:[.\s]|$)`，含缩进以覆盖函数内延迟导入），
+  并在 docstring 里记下这次误报的原因。
+
+### 2. mypy 门禁静默绿灯（`backend/scripts/mypy_gate.sh`）
+
+- **现象**：脚本打印「✅ mypy 错误数 ≤ 基线（0 ≤ 310），无新增类型错误」。
+- **根因**：脚本内用 `python -m mypy`，在当前环境找不到 mypy 时命令整体失败、
+  错误行数为 0，于是 0 ≤ 310 判定通过——**门禁看起来是绿的，其实一次都没跑**。
+- **修法**：执行前先探 `python -m mypy --version`，不可用直接按失败处理并给出
+  激活环境的提示；另按 mypy 退出码语义（0=无错误 / 1=有类型错误 / >1=执行失败）
+  拦截「执行失败但错误行为 0」的情况。
+- **顺带确认真实口径**：`--ignore-missing-imports` 下当前 **301 ≤ 310 基线**，
+  即存量类型债没有增加（此前看到的 318 是我漏加该参数导致的误读）。
+
+### 验证
+
+- 无 mypy 的环境跑门禁 → **exit 1** 且给出可操作提示（修复前是绿灯 exit 0）；
+- 有 mypy 的环境跑门禁 → `301（基线 310）` 通过；
+- 解耦测试 11 项全过；
+- **SEKB 全量：778 passed / 0 failed**，ruff 全过。
+
+## 2026-09-15（修正 check_kernel.sh 的「期望 commit」取值（曾打印出「期望=实际却不一致」））
+
+- **背景**：部署内核指针后运行 `bash scripts/check_kernel.sh`，它打印出：
+
+  ```
+  期望 commit  2631ee3...  (SEKB 钉住的版本)
+  实际 commit  2631ee3...
+  ❌ 实际 commit 与 SEKB 钉住的不一致
+  ```
+
+  两个数字一样却判定不一致——看起来像工具坏了，实际是**期望值取错了源**。
+
+- **根因**：`EXPECTED_SHA` 取自 `git submodule status` 的输出，而这条命令报的是
+  **子模块当前检出的 commit**，不是父仓库索引里钉住的 gitlink。于是「期望」与
+  「实际」永远来自同一个值，标签还写着「SEKB 钉住的版本」，纯属误导。
+  （判定本身是对的：`+` 前缀确实表示子模块与索引不一致。）
+
+- **改动**：`EXPECTED_SHA` 改为 `git rev-parse HEAD:jobcopilot`（父仓库索引里的 gitlink），
+  并在脚本里写明这个坑。
+
+- **验证**：
+  - 服务器（仓库钉 44c399c、子模块停在 2631ee3）：现在正确显示
+    `期望 44c399c / 实际 2631ee3 → ❌ 不一致`，即「已前移但尚未部署」；
+  - 开发机（两者都是 44c399c）：显示 `✅ 与 SEKB 钉住的 commit 完全一致`；
+  - 这条自检在部署前用于确认「部署/运行的就是钉住的那份代码」，取值错了会让人误判
+    成工具故障，所以值得单独修。
+
+## 2026-09-15（JobCopilot P7：开源发布就绪（贡献指南 + CI 门禁 + 打包验证））
+
+- **背景**：P7 要把内核做成可对外开源的项目：许可、贡献指南、CI 门禁、打包发布、
+  eval 基线报告、三份接入文档。内核指针 `9bc394e → 44c399c`。
+
+- **改动**：
+
+  | 交付 | 位置 | 要点 |
+  |---|---|---|
+  | 贡献指南 | `CONTRIBUTING.md` | **把评估门禁写死**；说明为何 CI 只跑 L1+L2；「没有说明的基线更新一律不接受」 |
+  | CI 门禁 | `.github/workflows/ci.yml` | lint + mypy + pytest；**eval-gate（L1+L2 与基线一致）**；打包冒烟 |
+  | 打包 | `pyproject.toml` / `MANIFEST.in` | PEP 639 license 表达式、`project.urls`、版本 0.0.1 → **0.1.0**、sdist 带文档 |
+  | 接入文档 | `docs/integrations/dsh.md`、`sekb.md` | 补齐 P7 要求的三份（第三份扣子在 P6 已交付） |
+  | 评估报告 | `docs/eval-report.md` | 实测数据 + 复现方式 + **诚实的局限** |
+
+- **验证（可客观复现）**：
+
+  - `python -m build` 成功；**`twine check` 两个产物 PASSED**（wheel + sdist）；
+  - 干净 venv 装 wheel 后实测：`jobcopilot 0.1.0`、`jobcopilot-mcp 0.1.0`、
+    **`jobcopilot eval --level 12` 100% 且与基线一致**（这一步证明 package-data
+    真的随包发布，是 `CONTRIBUTING.md` 里标注「不能省」的那步）；
+  - 检查 wheel 内容：新模块 `mcp/request_keys.py`、16 份提示词、数据集与基线都在；
+  - CI 的打包 job 会把上面两条固化成自动化检查；
+  - 门禁：251 passed / 1 skipped、ruff 全过、mypy strict 33 文件无问题。
+
+- **构建期踩到的两个坑（已写进代码注释）**：
+
+  1. `[project.urls]` 放早了会把后面的 `dependencies` 吞进它自己的表里，报
+     `project.urls.dependencies must be string`——TOML 表作用域持续到下一个表头；
+  2. PEP 639 下用了 license 表达式后**必须删掉** `License :: OSI Approved :: ...`
+     classifier，否则 setuptools 直接拒绝构建。
+
+- **明确未做的部分**：**没有发布到 PyPI** —— 需要 PyPI 账号与 token（已列入疑问清单）。
+  当前状态是「产物已就绪且校验证通过」，`twine upload dist/*` 即可发布。
+
+- **未做的 DoD 项**：P7 要求的三份接入文档已齐（SEKB / DSH / 扣子），但**扣子那份的
+  「真实连一次」仍缺账号**（与 P6 同一个阻塞项）。
+
+## 2026-09-15（JobCopilot P6：云端平台适配（双传输 + BYOK + 五平台接入文档））
+
+- **背景**：P6 要让 JobCopilot 能接到扣子 / 百炼 / 千帆 / HiAgent / Dify。计划里写的是
+  「streamable HTTP + header 传 Key」，但**代码里只有环境变量传 Key**——模块文档早就写了
+  「云端必须 BYOK」，实现却没跟上；且 HTTP 形态**完全没有鉴权**。
+
+- **调研结论（决定了改造范围）**：五个平台的传输要求**互相冲突**，只做一条必挂一家——
+
+  | 平台 | 传输 | 关键限制 |
+  |---|---|---|
+  | 扣子 | Streamable HTTP / SSE | **不接受 IP，必须公网域名**；内网仅企业旗舰版私网插件 |
+  | 阿里百炼 | stdio / SSE / Streamable HTTP | `streamableHttp` 必须对应 `POST /mcp`；自签名证书报 `MCP_SSL_ERROR` |
+  | 百度千帆 | 🔴 **仅 SSE** | 配置 JSON **没有 headers 字段** → 凭据只能放查询串 |
+  | 火山 HiAgent | Streamable HTTP | 无公开文档（用官方 Go SDK 拿到字段级证据）；AgentKit 明确**不支持 SSE-only** |
+  | Dify | HTTP（两种都行） | 必须关 DCR；默认超时 60 秒需调大；嵌套 object 在 OpenAPI 路线会退化成 STRING |
+
+- **改动**（内核 `jobcopilot`，指针 `2631ee3 → 9bc394e`）：
+
+  1. **按请求传 Key（BYOK）**：`X-JobCopilot-Api-Key`（+ 可选的 `Provider`/`Model` 覆盖头），
+     带短哈希 LRU 缓存；服务端**未设**访问令牌时也接受 `Authorization: Bearer`（贴合两个
+     平台 UI 的惯例——否则用户把 Key 填在那里会被静默忽略、改用服务端 Key 花钱）。
+  2. **HTTP 安全闸**：非回环绑定**必须**设 `JOBCOPILOT_HTTP_TOKEN`，否则拒绝启动；
+     设了令牌但没配 `JOBCOPILOT_HTTP_ALLOWED_HOSTS` 也拒绝启动（否则平台只会收到
+     421，现场极难排障）。访问令牌支持 `?token=` 兜底（千帆没有 headers 字段）。
+  3. **两条传输同一进程**：`POST /mcp`（Streamable HTTP）+ `GET /sse` + `POST /sse/messages/`。
+     做法是合并两个子应用的 routes 并**组合 lifespan**——只合并 routes 会得到「连得上
+     但没有会话」的服务，故障表现隐蔽，代码里专门留了注释。
+  4. **平台兼容**：工具名匹配 `^[a-zA-Z0-9_-]{1,64}$`（有测试守着）；`analyze_jobs_batch`
+     的 `jobs` 额外接受 **JSON 字符串**（平台无法声明嵌套数组），且参数路径用**严格 JSON**
+     解析——原「像 JSON 但坏了就当纯文本 JD」的宽容逻辑对文件合理，对平台转发的参数
+     会把「JSON 烂了」变成「分析了一段乱码 JD」，调用方察觉不到。
+
+- **验证**：
+
+  - **先实验再实现**：`docs/tmp/probe_dual_transport.py` 证实同一进程两条传输都可用
+    （官方 sse_client 与 streamablehttp_client 各自列工具、调工具成功）；
+  - 测试夹具改用**生产路径** `build_http_app`；新增 32 条 HTTP 用例，其中最关键的一条
+    端到端证明 BYOK 生效：带 `X-JobCopilot-Api-Key` 调 `analyze_job` → 断言请求级 LLM
+    被构造且 Key 就是调用方传的、**服务端默认 LLM 一次都没被调用**（并配了不带该头的对照组）；
+  - 401（缺令牌 / 令牌错 / query 令牌错）、421（Host 不在白名单）、`/sse` 真的发出
+    `event: endpoint`、工具名正则、GET 不 5xx 均有断言；
+  - CLI 实测：对外绑定无令牌 → exit 2；有令牌无 Host 白名单 → exit 2；`/sse` 无令牌 401、
+    带令牌收到 endpoint 事件；`POST /mcp?token=` 进到协议层；
+  - 门禁：**251 passed / 1 skipped**、ruff check 全过、mypy strict 33 文件无问题；
+    SEKB 侧 stdio 相关 35 个单测全过（stdio 路径行为不变）；
+  - L1+L2 评估 100% 通过并与基线 `v1.json` 一致。
+
+- **文档**：新增 `docs/integrations/`（README 对照表 + PRIVACY + DEPLOY-HTTP +
+  coze/dify/bailian/qianfan/hiagent）。隐私提示按各平台条款差异写，不是套话——
+  例如千帆虽承诺「不用于训练」，但其协议明确「**不得提供保密信息……我们没有保密义务**」，
+  并把取得最终用户同意的责任压给开发者，这一点必须在接入文档里说清。
+
+- **⚠️ 未完成的 DoD**：P6 的验收是「**每平台至少跑通一次完整分析**」。这需要各平台账号
+  与一个**公网可达的 HTTPS 域名**，二者我都没有，因此**未能实测**。当前已具备的条件是
+  代码与文档全部就绪（含正确的传输/鉴权形态），只差对外暴露与账号。已在疑问清单中列出。
+
+## 2026-09-15（JobCopilot P5 上线：提示词自建分发源 + 内核版本可观测）
+
+- **背景**：P5 的 DSH 接入此前已验收（工具注册 / 7 段分析 / 批量 `job_count=4`），
+  但**部署一直被磁盘门禁挡住**（可用 24394MB < 25000MB）。本次把根因查清并上线。
+
+- **改动**：本次为**上线动作**，代码改动只有 `scripts/backup_kb.sh`（见另一条碎片）。
+  上线内容包括 P4/P5 的既有成果：
+
+  | 能力 | 说明 |
+  |---|---|
+  | 内核版本可观测 | `GET /api/v1/health/` 返回 `kernel{version,commit,prompts,prompt_source,prompt_dir,healthy}` |
+  | SEKB 走 MCP | `job.transport=mcp`，后端容器内以子进程方式拉起 `jobcopilot-mcp` |
+  | 提示词自建分发源 | `https://bos-studio.tech/prompts/`（nginx `/prompts/` → `prompts-dist/`），带 `manifest.json` + 每文件 sha256 |
+
+- **验证**（部署后实测）：
+
+  - `kernel.commit = 2631ee386edf…` == SEKB 子模块钉住的 commit（**部署产物与仓库一致**）；
+  - `healthy=true`、`prompts=12`、`prompt_source=local`（SEKB 的 `prompt/job` 热改目录按设计优先）；
+  - 后端容器内存在 `jobcopilot-mcp` 子进程（MCP 链路确实在跑，不只是配置对）；
+  - 自建主源 `manifest.json` HTTP 200，`version=6607d913a036`、3 packs / 15 files，
+    **15 个文件 sha256 与 manifest 全部一致**；中文文件名可取（此前会 500）；
+  - 前端容器已挂载 `/var/www/jobcopilot-prompts/`。
+
+- **磁盘卡点的根因（两条，都值得记住）**：
+
+  1. `docker system df` 的「可回收」在本机**是误报**：报 Images 可回收 10.71GB(64%)，
+     但 `docker image prune -a -f` 实测只回收 **1.013MB**。原因是 Docker 已启用 containerd
+     镜像存储，容器记录的 `.Image` 是平台 manifest digest，而 `docker images` 显示 index digest，
+     两者不匹配导致 Docker 把 10.9G 的后端镜像当成「无人使用」。**12 个镜像实际全被引用。**
+  2. 真凶是备份保留策略管不住**同一天的多份**（详见另一条碎片）：当天积了 9 份 ×112MB。
+     清理后释放 1003MB，加 journal/apt 共把可用空间从 24394MB 抬到 **25609MB**。
+
+  另实测出**构建真实峰值约 17.4GB**（最低可用降到 8208MB），印证 25000MB 门禁合理且偏保守。
+
+- **踩坑/待办**：
+  - 部署后验证报 `grafana: 000 FAIL` 是**监控栈刚重启的瞬时不可用**，随后即 `302`/healthy
+    —— 验证阶段缺重试，已列入疑问清单；
+  - 部署前检查有两处**假警告**（「定时备份 cron 未配置」「Git remote 未配置」），
+    实际 cron 在 `bo` 的 crontab 里、remote 名为 `gitea`/`github`，检查逻辑与实际部署方式不匹配。
+
+## 2026-09-15（招聘分析：搜索历史布局调整 + 历史报告去重 + 移除部分分析入口）
+
+- **背景**：
+  1. 「搜索历史」原放在主 Tabs 上方（全局），语义错位——它是「职位收集」的父选项；
+  2. 历史报告只增不减（5 个搜索攒了 15 份批量报告），同一关键词重复分析各留一份；
+  3. 「只分析部分职位」被判定为伪需求：它会让缓存报告 ≠ 职位列表，进而误报「报告已过期」。
+
+- **改动**：
+  - **布局**：搜索历史从主 Tabs 上方**移入「职位收集」tab 内**（采集筛选区上方）；「批量分析」tab 顶部新增「当前搜索：X（N 个职位）+ 切换搜索」信息行，点「切换」跳回职位收集。
+  - **移除「部分分析」入口**：删掉「前往批量分析（N）」按钮，以及表格多选 / 跨页全选 / `selectedRowKeys` 相关逻辑；职位收集工具栏改为单一的「对全部 N 条做批量分析」。**报告因此永远与职位列表严格一致，不会再出现误报「报告已过期」**。
+  - **历史报告去重**（`archive.py`）：批量报告按「用户 + 关键词 + 城市」**只保留最新一份**——`save_report` 写入后自动删除同组更旧报告（含 `.md`/`.json`）；新增 `dedupe_batch_reports()` 用于历史一次性清理（显式按 `created_at` 取最新，不依赖索引顺序）。单职位报告不参与去重。
+  - **删除报告同步清缓存**：存档索引新增 `search_id`（`save_report(..., search_id=)`）；`DELETE /job/reports/{id}` 删除存档后**同步删除对应搜索的缓存报告**，该搜索回到「未分析」状态（搜索条目保留，可通过历史搜索重新分析恢复）。旧索引无 `search_id` 时按关键词回退匹配，并在删除前从报告 JSON 补齐 keyword/city。
+
+- **验证**：后端 pytest **776 passed**（新增 `test_archive.py` 13 例：读写 / 批量去重 / 单职位不去重 / 跨用户隔离 / 删除返回元信息 / 旧索引 keyword 回退 / 一次性清理）；ruff 全绿、mypy 292≤310；前端 tsc 0 错、eslint 0 错误、vitest 66 passed。线上历史报告一次性清理：15 份批量报告 → 每关键词 1 份（5 份）。
+
+- **⚠️ 过程中的一次误删与修复**：首次执行历史清理时，旧索引的批量报告条目**没有 `keyword`/`city` 字段**（该字段是本次新加），导致 15 份被全部归入同一组，只留下 1 份（预期按关键词留 5 份）。
+  - **修复**：新增 `_backfill_entry_meta()`——条目缺 `keyword`/`city` 时从报告 JSON 补齐；`dedupe_batch_reports` 与 `_dedupe_batch` 都先回填再分组；并加安全护栏：**关键词为空且补不出来的条目一律不参与去重**（无法判定分组则宁可不删）。补 2 例回归测试。
+  - **数据恢复**：报告本体仍在报告缓存（按 `search_id` 存），据此重建存档 → 恢复为 5 份；再跑清理删除 0 份（幂等）。
+  - **另附验证**：删除存档报告后，`/job/searches` 对应搜索变为 `has_report=false`（搜索条目与职位数保留），再执行一次批量分析即恢复——即「删除报告 → 可在历史搜索中重新分析」的闭环。
+
+## 2026-09-15（备份保留策略：同天去重（磁盘被同日备份挤爆导致部署卡住））
+
+- **背景**：P5 部署卡在 `deploy.sh` 的构建前磁盘门禁上（可用 24394MB < 25000MB）。
+  排查发现两个互相误导的现象：
+
+  1. **Docker 的「可回收」是误报**：`docker system df` 报 Images 可回收 10.71GB(64%)，
+     但 `docker image prune -a -f` 只回收 **1MB**。根因是 Docker 已启用 containerd
+     镜像存储（`Storage Driver: overlayfs` + `driver-type: io.containerd.snapshotter.v1`），
+     镜像实体在 `/var/lib/containerd`（18.9G 快照 + 4.9G blob），而容器引用的是
+     **平台 manifest digest**、`docker images` 显示的是 **index digest**，两者不一致 →
+     Docker 误判 10.9G 的后端镜像「无人使用」。12 个镜像实际全被容器引用，无可回收。
+  2. **真正的浪费在备份目录**：`scripts/backup_kb.sh` 的原保留策略只有
+     `find -mtime +14 -delete`（天数），**管不住同一天的多份**。而 `deploy.sh`
+     每次部署前都会调本脚本备份一次 → 一天部署 N 次就留 N 份近乎相同的数据。
+     2026-09-15 当天积了 **9 份 `sekb_data`**（每份 112MB），合计约 1.0G。
+
+- **改动**（`scripts/backup_kb.sh`）：
+  - 保留策略改为两条规则叠加：**(a) 超 `RETENTION_DAYS`(14) 天删**（原有）+
+    **(b) 同一天只留最新一份**（新增，按文件名内嵌的 `%Y%m%d` 分组）。
+  - 新增保底 `RETENTION_MIN_KEEP`（默认 2）：无论怎么去重，最新 2 份永远保留，
+    避免「历史很短时被削到只剩 1 份」（单份损坏即无备份）。
+  - 新增 `PRUNE_DRY_RUN=1`：只列出将删除哪些备份，一个都不删。
+  - 新增 `--prune-only`：**只清理、不做备份**（磁盘紧张时用）。默认模式会先完整
+    备份一次再清理，而备份要停 backend + 打包 112MB —— 只为腾空间时纯属多余。
+  - `COMPOSE_DIR` / `BACKUP_DIR` 改为可用环境变量覆盖，便于本地端到端验证。
+  - 清理结果改为打印「删除 N 份 / 可释放 X MB / 保留 N 份」，失败不再静默。
+  - 只用 bash 3.2 就有的语法（macOS 自带 bash 3.2 无关联数组），
+    这样开发机能直接跑测试脚本验证线上同一份代码。
+
+- **验证**：
+  - `docs/tmp/test_backup_retention.sh` 从**真实脚本抽取** `prune_backups` 函数体后运行，
+    **34 项断言全部通过**（复刻服务器现状 / 幂等 / 超龄规则 / 同天保底 / 空目录 /
+    保底可配置 / 干跑不删 / `set -euo pipefail` 下不早退 / CLI 参数 /
+    `--prune-only` 端到端不产生新备份）。本地 bash 3.2 与服务器 bash 5 均通过。
+  - 过程中测出并修掉两个真 bug：`sed` 未锚定导致 `day` 取成含时间的整串（**去重完全失效**）、
+    `local -A` 关联数组在 bash 3.2 上直接报错。
+  - 服务器实测：删除同日冗余备份 **9 份 / 释放 1003MB**，`0908~0915` 每天仍各留一份，
+    备份目录 2038MB → 1035MB。
+  - 部署脚本自带的备份调用随后验证：报告「无需清理（保留 9 份）」，幂等成立。
+
+---
+
 ## 2026-09-15（JobCopilot P5：DSH 接入，L1 配置+文档）
 
 内核查升到 `2631ee3`。交付物在 `jobcopilot-dsh-plugin` 仓库（**零 TypeScript**）。
