@@ -115,12 +115,13 @@ const News: React.FC = () => {
 
   /** 把 axios 错误翻译成用户能懂的话。
    *
-   *  为什么需要：429 是**网关限流**（切 tab 会瞬时打满 /api 的共享配额），
-   *  原来的通用文案「加载周期报告列表失败」让人以为是功能坏了。
+   *  为什么需要：429 有两种来源（**应用侧限流中间件**按 IP+路由组 60s 滑动窗口，
+   *  以及 nginx 的 limit_req），原来的通用文案「加载周期报告列表失败」让人以为是功能坏了。
+   *  这里不再猜是哪一层（对用户没意义），只告诉他「等一会儿再试」——窗口是 60 秒。
    */
   const describeError = (e: any, fallback: string): string => {
     const status = e?.response?.status;
-    if (status === 429) return '请求过于频繁（网关限流），已自动重试，请稍候再试';
+    if (status === 429) return '请求过于频繁，已自动重试；仍失败请等 1 分钟再试';
     if (status === 409) return e?.response?.data?.detail || '任务正在生成中，请稍候';
     if (status === 502 || status === 503 || status === 504) return '服务正在重启或过载，请稍后重试';
     return e?.response?.data?.detail || fallback;

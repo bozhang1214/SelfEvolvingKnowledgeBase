@@ -359,23 +359,35 @@ step "阶段 3/7：启动后端"
 info "启动 backend 容器..."
 run "docker compose -f docker-compose.prod.yml --env-file .env.prod up -d backend"
 
-# 等待后端健康检查通过（最长 90 秒）
+# 等待后端健康检查通过（最长 300 秒）
+# ⚠️ 为什么从 90 秒放宽到 300 秒：backend 启动包含 **L1 记忆/embedding 模型加载**
+# （2026-09-15 实测这一步就要 107 秒）＋ MCP 预热 ＋ LangGraph 构建；构建期间
+# CPU 被抢时整体会超过 90 秒。原窗口下出现过「容器其实正常、只是还没起完」被判定
+# 超时 → 部署在这一步**中止**，后续阶段（前端 nginx 重载、监控栈、端点验证）全都没跑，
+# 留下半成品状态。宁可多等，也不要中止在中间。
 if [ "$DRY_RUN" = false ]; then
-    info "等待 backend 就绪（最长 90 秒）..."
+    HEALTH_WAIT_ATTEMPTS=60
+    info "等待 backend 就绪（最长 $((HEALTH_WAIT_ATTEMPTS * 5)) 秒）..."
     HEALTHY=false
-    for i in $(seq 1 18); do
+    for i in $(seq 1 "$HEALTH_WAIT_ATTEMPTS"); do
         HEALTH=$(curl -sf http://localhost:8000/api/v1/health/live -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
         if [ "$HEALTH" = "200" ]; then
             success "backend 就绪（第 ${i} 次检查，HTTP ${HEALTH}）"
             HEALTHY=true
             break
         fi
-        echo -e "  ${YELLOW}等待中...${NC} (${i}/18, HTTP ${HEALTH})"
+        echo -e "  ${YELLOW}等待中...${NC} (${i}/${HEALTH_WAIT_ATTEMPTS}, HTTP ${HEALTH})"
         sleep 5
     done
 
     if [ "$HEALTHY" = false ]; then
-        fail "backend 健康检查超时" "查看日志：docker compose -f docker-compose.prod.yml logs backend --tail 50"
+        # 超时前把后端自己的日志打出来：否则只看到 Docker 的 HTTP 000，
+        # 分不清是「还在加载模型」还是「启动就崩了」。
+        echo -e "  ${YELLOW}backend 最近日志：${NC}"
+        docker compose -f docker-compose.prod.yml logs --tail 20 backend 2>&1 | sed 's/^/    /'
+        fail "backend 健康检查超时（$((HEALTH_WAIT_ATTEMPTS * 5)) 秒）" "1. 看上面日志：还在初始化 → 再等一两分钟手动验证
+        2. 启动就异常 → docker compose -f docker-compose.prod.yml logs backend --tail 100
+        3. 确认容器状态: docker ps --filter name=sekb-backend"
     fi
 else
     echo -e "  ${YELLOW}[DRY-RUN]${NC} 等待 backend 健康检查..."

@@ -11,7 +11,10 @@
 app:
   name: self-evolving-kb
   version: 0.1.0
-  environment: development
+  # 从环境变量取（compose 里 backend 设了 ENVIRONMENT=production）。
+  # 这里原来是写死的 `development`，于是线上 /health 与启动日志一直自称 development ——
+  # 排查时无法用它区分环境（也容易让监控误判）。纯展示用途，不改变任何行为分支。
+  environment: ${ENVIRONMENT:-development}
 
 # ============ LLM 模型路由 ============
 llm:
