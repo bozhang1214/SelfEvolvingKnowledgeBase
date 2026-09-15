@@ -126,13 +126,19 @@ else
     warn "无法检测内存"
 fi
 
-# 1.4 磁盘空间
+# 1.4 磁盘空间（**只告警，不判定失败**）
+# ⚠️ 2026-09-15 修：这里原本在 <20GB 时直接 fail，但真正的磁盘门禁在
+#    deploy.sh 阶段 2（NEED_MB=25000，且会**先** `docker builder prune -af` 再判定）。
+#    两者阈值不一致，且本检查排在前面，造成一个自相矛盾的循环：
+#      「部署成功后的稳态可用空间（约 17-18GB）< 这里要求的 20GB」
+#      → 于是**每次成功部署都会把下一次部署拦住**，而阶段 2 本来能靠清缓存解决。
+#    现在这里只提示，把判定权交给阶段 2 那唯一的门禁（它知道要先清缓存）。
 DISK_AVAIL=$(df -m . 2>/dev/null | awk 'NR==2 {print $4}')
 if [ -n "$DISK_AVAIL" ]; then
     if [ "$DISK_AVAIL" -ge 20480 ]; then
         pass "磁盘可用空间: ${DISK_AVAIL}MB"
     else
-        fail "磁盘空间不足: ${DISK_AVAIL}MB" "至少需要 20GB"
+        warn "磁盘可用空间偏低: ${DISK_AVAIL}MB（构建峰值约需 17-18GB；阶段 2 会先清构建缓存再判定，若仍不足会明确报错）"
     fi
 else
     warn "无法检测磁盘空间"
