@@ -1,0 +1,15 @@
+# 镜像构建专用约束（不放进 requirements.txt，保持后者与平台无关）
+#
+# 为什么需要它：torch 是被 sentence-transformers **传递**引入的，而 PyPI 与国内镜像上的
+# Linux torch 默认是 CUDA 构建 —— 会额外拖进 19 个 nvidia-* 包（实测 site-packages/nvidia
+# 占 3.2GB），而本机没有 GPU，纯属死重量，还显著抬高每次构建的磁盘峰值。
+#
+# 为什么用「约束」而不是「先装一步」：Dockerfile 用 `pip install --prefix=/install`，
+# 该前缀不在 sys.path 上，所以后续 pip **看不见**前一步装的东西，会重新解析并拉回 CUDA 版
+# （实测踩到过：先装 +cpu 成功，装 requirements 时又把 torch-2.14.0(cuda, 554MB) 装了回来，
+#  连 nvidia-cudnn-cu13 一起，镜像反而从 10.9GB 涨到 11.1GB）。
+# 用约束把这个版本钉死在**同一次解析**里，才是可靠做法。
+#
+# `+cpu` 本地版本号只存在于 PyTorch 官方 CPU 索引，因此配合
+# --extra-index-url https://download.pytorch.org/whl/cpu 即可精确命中，不会与镜像源歧义。
+torch==2.14.0+cpu
