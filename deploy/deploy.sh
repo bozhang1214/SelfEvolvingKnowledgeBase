@@ -116,6 +116,30 @@ cd "$PROJECT_ROOT"
 DEPLOY_DATE=$(date '+%Y-%m-%d %H:%M:%S')
 DEPLOY_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
+# ============================================================
+# 部署互斥锁（多协作者必做）
+# ============================================================
+# 为什么需要：本项目存在多个协作者同时开发、都可能发生产。两个部署交错会
+# 造成镜像构建互相打断、容器重启互相踩，最终停在**半部署状态**——比直接失败更难查。
+# 这里用 flock 保证同一时刻只有一个部署；第二个会立刻失败并告诉你**谁在部署**。
+#
+# 注意：锁只保护「同一台机器上的 deploy.sh」。若确认对方已异常退出，
+# 直接删除锁文件即可（flock 的锁随进程退出自动释放，文件残留不代表仍被占用）。
+LOCK_FILE="${DEPLOY_LOCK_FILE:-/tmp/sekb-deploy.lock}"
+if [ "$DRY_RUN" = false ] && command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCK_FILE"
+    if ! flock -n 9; then
+        HOLDER="$(cat "$LOCK_FILE" 2>/dev/null | tail -1)"
+        fail "另一个部署正在进行，已中止（避免两个部署交错）" \
+"锁文件: $LOCK_FILE
+持有者: ${HOLDER:-未知}
+确认对方已退出后可删除锁文件重试：rm -f $LOCK_FILE"
+    fi
+    echo "pid=$$ user=$(whoami) since=$DEPLOY_DATE commit=$DEPLOY_SHA" >&9
+elif [ "$DRY_RUN" = false ]; then
+    warn "系统没有 flock，跳过部署互斥（多人同时部署可能交错）"
+fi
+
 echo ""
 echo "============================================"
 echo -e "  ${BOLD}SEKB 线上部署${NC}"
