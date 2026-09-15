@@ -64,10 +64,23 @@ COPY requirements.txt ./
 # 详见该文件内的说明（实测踩过 `--prefix` 导致第二次解析又拉回 CUDA 版）。
 COPY constraints-image.txt ./
 
+# ---------- 只把 CPU 版 torch 那颗轮子取到本地 ----------
+# ⚠️ 这里刻意**不**在主安装步骤上加 `--extra-index-url https://download.pytorch.org/whl/cpu`：
+#    加了它 pip 会对**所有包**都去查那个境外索引，实测把 networkx/sympy 这类普通依赖
+#    的下载拖到 **36.5 kB/s**，第 17 步跑满 1002 秒后撞上构建超时（20 分钟）而失败。
+#    改为「先把轮子下到本地目录」，主安装步骤用 --find-links 从本地满足 torch，
+#    其余依赖仍走国内镜像 → 既拿到 CPU 版，又不引入境外索引的解析开销。
+RUN pip download --no-cache-dir --no-deps -d /torch-wheel \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --timeout 120 --retries 3 \
+        "torch==2.14.0+cpu"
+
 # 安装依赖到独立前缀目录，便于 stage 2 整体复制
+# -c constraints-image.txt：把 torch 钉死在 +cpu（见该文件说明）
+# --find-links /torch-wheel：torch 由本地轮子满足，不查任何远程索引
 RUN pip install --no-cache-dir --prefix=/install \
         -i ${PIP_INDEX} \
-        --extra-index-url https://download.pytorch.org/whl/cpu \
+        --find-links /torch-wheel \
         --trusted-host mirrors.cloud.tencent.com \
         --trusted-host mirrors.aliyun.com \
         --timeout 120 --retries 3 \
