@@ -8,10 +8,9 @@
 | 工作流 | 负责人 | 涉及文件（重点） | 开始时间 |
 |---|---|---|---|
 | JobCopilot P1–P7 | DSH Agent（本会话） | `jobcopilot/**`、`backend/app/agents/job/**`、`deploy/**`、`docs/ops/**` | 2026-09-15 06:00 |
-| 招聘分析：搜索历史 / 报告隔离 | SEKB Team | `backend/app/agents/job/{market,job_cache}.py`、`backend/app/api/routes/job.py`、`frontend/src/pages/Job.tsx` | 2026-09-15 10:30 |
-| 招聘分析：搜索历史布局调整 + 历史报告清理（去掉「部分分析」） | SEKB Team | 同上 + `docs/changelog.d/` | 2026-09-15 11:40 |
 
-> ⚠️ 上表第二行与第一行**有重叠文件**（`market.py`）。改它之前先看一眼这行还在不在。
+> 注：2026-09-15「招聘分析：搜索历史 / 报告隔离 / 历史报告清理」轮次已收工
+> （与 P1–P7 重叠过 `market.py`、`job.py`，未发生冲突）。
 
 ## 共享文件（改前先查上表）
 
