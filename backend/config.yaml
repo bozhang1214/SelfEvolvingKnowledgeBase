@@ -434,3 +434,8 @@ job:
   default_min_salary_k: 50              # 最低月薪（K），即 50K×14
   # 猎聘/BOSS 排除的大厂（已有独立渠道，聚焦大厂之外的创业公司）
   exclude_companies: [字节, 阿里, 淘宝, 天猫, 蚂蚁, 腾讯, 百度, 小米, 京东, 大疆, 小红书, 深度求索, DeepSeek, ByteDance, Alibaba, Tencent, Baidu, Xiaomi]
+  # 分析链路传输方式（P4）：mcp=走 jobcopilot-mcp 子进程（推荐）；direct=进程内直接调用（回滚开关）
+  transport: mcp
+  mcp_command: jobcopilot-mcp
+  mcp_timeout_s: 180.0
+  mcp_connect_timeout_s: 30.0

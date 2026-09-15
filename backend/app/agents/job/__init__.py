@@ -21,3 +21,8 @@ __all__ = [
     "JobAnalysisGenerator",
     "load_user_profile",
 ]
+
+# 应用停机时关闭共享的内核 MCP 连接（由 bootstrap 的生命周期钩子调用）
+from app.agents.job.mcp_client import close_shared_kernel  # noqa: E402
+
+__all__ += ["close_shared_kernel"]

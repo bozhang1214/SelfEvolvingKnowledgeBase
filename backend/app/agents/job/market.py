@@ -18,9 +18,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from jobcopilot import analyze_jobs_batch
 from jobcopilot.core.stats import classify_role, compute_stats  # noqa: F401  (对外转发)
 
+from app.agents.job.generator import _resolve_prompt_dir
 from app.agents.job.llm_adapter import SekbLLMAdapter
 from app.core.logging import get_logger
 
@@ -72,6 +72,67 @@ def delete_report(user_id: str) -> bool:
     return existed
 
 
+async def _run_analysis(
+    ctx: Any,
+    jobs: list[dict[str, Any]],
+    user_profile: str,
+    keyword: str,
+    city: str,
+) -> dict[str, Any]:
+    """执行批量分析：默认走 MCP 内核，``transport=direct`` 时进程内直连。
+
+    两条路径都返回同构报告；差异只在内核怎么被调用。
+    """
+    transport = getattr(ctx.config.job, "transport", "mcp")
+
+    if transport == "mcp":
+        from app.agents.job.mcp_client import get_shared_kernel
+
+        kernel = get_shared_kernel(ctx.config.job)
+        report = await kernel.call(
+            "analyze_jobs_batch",
+            {
+                "jobs": jobs,
+                "keyword": keyword,
+                "city": city,
+                # 多用户系统必须逐请求注入画像（内核的全局画像承载不了）
+                "user_profile": user_profile,
+            },
+        )
+        _log_kernel_usage(report.get("usage"), "批量分析")
+        return report
+
+    from jobcopilot import analyze_jobs_batch
+
+    prompt_dir = _resolve_prompt_dir()
+    return await analyze_jobs_batch(
+        SekbLLMAdapter(ctx.llm_factory),
+        jobs,
+        user_profile,
+        keyword=keyword,
+        city=city,
+        prompt_dir=str(prompt_dir) if prompt_dir else None,
+    )
+
+
+def _log_kernel_usage(usage: Any, scene: str) -> None:
+    """记录内核回报的 token 用量。
+
+    走 MCP 后是内核自己调 LLM，**SEKB 的 LLMFactory 看不到这些调用**——
+    若不记录，招聘分析的费用就从成本统计里消失了。这里落到结构化日志
+    （Loki 可检索/聚合），保住既有可见性。
+    """
+    if not isinstance(usage, dict) or not usage.get("calls"):
+        return
+    logger.info(
+        "内核分析用量",
+        scene=scene,
+        calls=usage.get("calls"),
+        prompt_tokens=usage.get("prompt_tokens"),
+        completion_tokens=usage.get("completion_tokens"),
+    )
+
+
 async def analyze_market(
     ctx: Any,
     user_id: str,
@@ -87,8 +148,6 @@ async def analyze_market(
     批量分析」联动，不重复采集）。无论哪种方式，报告都会缓存，供「批量分析」
     tab 默认展示最近一次结果。
     """
-    from app.agents.job.generator import _resolve_prompt_dir
-
     from_provided = jobs is not None
     if not from_provided:
         cached = get_cached_report(user_id)
@@ -106,15 +165,7 @@ async def analyze_market(
         result = await collector.fetch_all(keyword=keyword, page=0, limit=20)
         jobs = result["jobs"]
 
-    prompt_dir = _resolve_prompt_dir()
-    report = await analyze_jobs_batch(
-        SekbLLMAdapter(llm_factory),
-        jobs or [],
-        user_profile,
-        keyword=keyword,
-        city=city,
-        prompt_dir=str(prompt_dir) if prompt_dir else None,
-    )
+    report = await _run_analysis(ctx, jobs or [], user_profile, keyword, city)
 
     # 无论是否提供 jobs，都缓存报告，供「批量分析」tab 默认展示最近一次结果
     cache = _load_cache()

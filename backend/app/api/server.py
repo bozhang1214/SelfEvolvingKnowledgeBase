@@ -153,6 +153,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if _context is not None:
             if _context.news_scheduler is not None:
                 _context.news_scheduler.shutdown()
+            # 关闭常驻的内核 MCP 子进程（P4：分析链路走 jobcopilot-mcp）
+            try:
+                from app.agents.job.mcp_client import close_shared_kernel
+
+                await close_shared_kernel()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("关闭内核 MCP 连接失败（忽略）", error=str(e)[:120])
             await shutdown_app(_context)
         _context = None
         logger.info("FastAPI 应用已关闭")

@@ -371,6 +371,13 @@ class JobConfig(BaseModel):
         "大疆", "小红书", "深度求索", "DeepSeek", "ByteDance", "Alibaba",
         "Tencent", "Baidu", "Xiaomi",
     ]
+    # ---- 分析链路传输方式（P4：SEKB 切到 MCP）----
+    # "mcp"    走 jobcopilot-mcp 子进程（stdio）——解耦内核，SEKB 不再直接 import
+    # "direct" 进程内直接调用 jobcopilot 包（旧路径，保留作紧急回滚开关）
+    transport: str = "mcp"
+    mcp_command: str = "jobcopilot-mcp"   # 子进程命令
+    mcp_timeout_s: float = 180.0          # 单次工具调用超时（秒）
+    mcp_connect_timeout_s: float = 30.0   # 建连超时（秒，含子进程冷启动）
 
 
 class AppConfig(BaseModel):

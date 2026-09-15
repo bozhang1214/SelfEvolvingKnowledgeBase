@@ -101,6 +101,31 @@ class AppContext:
     usage_service: Any = None
 
 
+async def _warmup_kernel_mcp(config: AppConfig) -> None:
+    """在**启动任务**里预热内核 MCP 连接（P4）。
+
+    为什么必须在启动期建连：MCPClient 内部用 anyio 的 AsyncExitStack，
+    要求「进入」与「退出」发生在**同一个 task**。若等到第一个请求才懒建连，
+    连接会在请求 task 里建立、却在 lifespan 的关闭 task 里释放，
+    触发 `Attempted to exit cancel scope in a different task than it was entered in`，
+    并可能遗留子进程。放在启动任务里，建连与关闭就同属 lifespan，干净无歧义。
+
+    失败**不阻塞启动**（招聘模块是可选能力）：记警告，首次调用时会给出清晰错误。
+    """
+    if getattr(config.job, "transport", "mcp") != "mcp":
+        return
+    try:
+        from app.agents.job.mcp_client import get_shared_kernel
+
+        kernel = get_shared_kernel(config.job)
+        ok = await kernel.health_check()
+        logger.info("内核 MCP 预热完成", ok=ok, command=config.job.mcp_command)
+        if not ok:
+            logger.warning("内核 MCP 探活失败，招聘分析首次调用可能报错（其余功能不受影响）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("内核 MCP 预热异常（不阻塞启动）", error=str(e)[:200])
+
+
 async def initialize_app(config_path: str = "config.yaml") -> AppContext:
     """
     初始化应用所有组件，返回 AppContext。
@@ -297,6 +322,7 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         logger.info("招聘分析 Agent 已启用", llm_role=config.job.llm_role)
         # 打出内核查版本/commit：子模块钉版本在**运行时**的可见性兜底
         log_kernel_info()
+        await _warmup_kernel_mcp(config)
 
     logger.info("应用初始化完成")
 

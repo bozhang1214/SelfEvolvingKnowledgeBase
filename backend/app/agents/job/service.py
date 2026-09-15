@@ -20,7 +20,9 @@ class JobAgent:
 
     def __init__(self, config: Any, llm_factory: Any) -> None:
         self._config = config
-        self._generator = JobAnalysisGenerator(llm_factory)
+        # ⚠️ 必须把 config 传下去：传输方式（mcp/direct）、超时、子进程命令都在里面。
+        #    漏传会静默退回 direct 直连，MCP 切换等于没生效。
+        self._generator = JobAnalysisGenerator(llm_factory, config=config)
         logger.info("招聘分析 Agent 已初始化", llm_role=config.llm_role)
 
     async def analyze_job(
