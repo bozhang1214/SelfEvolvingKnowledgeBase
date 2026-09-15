@@ -67,7 +67,10 @@ def _load() -> dict[str, Any]:
 
 def _save(data: dict[str, Any]) -> None:
     _FILE.parent.mkdir(parents=True, exist_ok=True)
-    _FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 原子写：先写临时文件再 os.replace，避免崩溃截断后下次 _load 静默清空缓存
+    tmp = _FILE.with_name(_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(_FILE)
 
 
 def is_expired(entry: dict[str, Any], now: float | None = None) -> bool:

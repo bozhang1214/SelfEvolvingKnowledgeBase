@@ -32,6 +32,8 @@ class ShareStorage:
         self._conv_dir = self._data_dir / "shares"
         self._shares: dict[str, dict[str, Any]] = {}
         self._initialized = False
+        # 会话追加写锁：key = "share_id|viewer_user_id"，保证同会话并发追加不丢消息
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def _ensure_initialized(self) -> None:
         if self._initialized:
@@ -174,15 +176,18 @@ class ShareStorage:
         """向分享会话追加一条消息。"""
         self._ensure_initialized()
         path = self._conv_file(share_id, viewer_user_id)
-        messages = await self.get_messages(share_id, viewer_user_id)
-        messages.append(message)
-        payload = {
-            "share_id": share_id,
-            "viewer_user_id": viewer_user_id,
-            "messages": messages,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        await asyncio.to_thread(_save_json_atomic, path, payload)
+        # 按 (share_id, viewer) 粒度加锁：读-改-写跨 await，无锁时同会话并发追加会丢消息
+        lock = self._locks.setdefault(f"{share_id}|{viewer_user_id}", asyncio.Lock())
+        async with lock:
+            messages = await self.get_messages(share_id, viewer_user_id)
+            messages.append(message)
+            payload = {
+                "share_id": share_id,
+                "viewer_user_id": viewer_user_id,
+                "messages": messages,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await asyncio.to_thread(_save_json_atomic, path, payload)
 
 
 # ============================================================

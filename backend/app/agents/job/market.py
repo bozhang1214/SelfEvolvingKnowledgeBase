@@ -80,7 +80,10 @@ def _save_cache(store: dict[str, Any]) -> None:
     if legacy:
         # 保留 v1 旧条目，避免升级时丢数据（只读兜底，不再新增）
         payload["__legacy"] = legacy
-    _CACHE_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 原子写：先写临时文件再 replace，避免崩溃截断后静默清空缓存
+    tmp = _CACHE_FILE.with_name(_CACHE_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(_CACHE_FILE)
 
 
 def _fresh(report: dict[str, Any]) -> bool:

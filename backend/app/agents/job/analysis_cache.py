@@ -33,7 +33,10 @@ def _load() -> dict[str, Any]:
 
 def _save(data: dict[str, Any]) -> None:
     _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 原子写：先写临时文件再 replace，避免崩溃截断后静默清空缓存
+    tmp = _CACHE_FILE.with_name(_CACHE_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(_CACHE_FILE)
 
 
 def get_cached_analysis(user_id: str, jd_text: str) -> dict[str, Any] | None:
