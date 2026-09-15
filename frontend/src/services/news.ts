@@ -75,3 +75,26 @@ export async function generatePeriodic(type: PeriodicType): Promise<{ type: stri
   const res = await apiClient.post(`/news/${type}`);
   return res.data;
 }
+
+
+/** 定时任务（日报/周报/月报）最近一次的执行状态。 */
+export interface NewsTaskStatus {
+  kind: 'daily' | 'weekly' | 'monthly';
+  ok: boolean;
+  period: string;
+  error: string;
+  started_at: string;
+  finished_at: string;
+  duration_s: number;
+}
+
+/**
+ * 读取最近一次定时任务的执行状态。
+ *
+ * 为什么要它：定时任务失败以前只在服务端日志里留一行，用户看不到，
+ * 只能靠「咦今天怎么没日报」发现。界面据此显示失败原因，并让「提交后轮询」有依据。
+ */
+export async function getNewsStatus(): Promise<NewsTaskStatus | null> {
+  const res = await apiClient.get<{ status: NewsTaskStatus | null }>('/news/status');
+  return res.data.status;
+}

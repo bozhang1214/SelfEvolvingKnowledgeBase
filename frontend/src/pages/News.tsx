@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Layout, List, Button, Typography, Tag, Spin, Empty, message, Card, Space, Tabs,
+  Layout, List, Button, Typography, Tag, Spin, Empty, message, Card, Space, Tabs, Alert,
 } from 'antd';
 import {
   ReloadOutlined, FileTextOutlined, ThunderboltOutlined, CalendarOutlined,
@@ -9,11 +9,14 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   listReports, getReport, refreshNews,
-  listPeriodic, getPeriodic, generatePeriodic,
+  listPeriodic, getPeriodic, generatePeriodic, getNewsStatus,
+  type NewsTaskStatus,
   type NewsReportMeta, type NewsReport,
   type PeriodicType, type PeriodicReportMeta, type PeriodicReport,
 } from '@/services/news';
 import { useUserStore } from '@/stores/user';
+
+const TASK_LABEL: Record<TabKey, string> = { daily: '日报', weekly: '周报', monthly: '月报' };
 
 const { Text } = Typography;
 const { Sider, Content } = Layout;
@@ -37,7 +40,10 @@ const News: React.FC = () => {
 
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [generating, setGenerating] = useState(false);
+  // 哪个 tab 的任务在跑（null = 都没跑）。原来是一个布尔值共用，导致切到任何 tab
+  // 都显示 loading、分不清是哪个任务在跑。
+  const [generatingKey, setGeneratingKey] = useState<TabKey | null>(null);
+  const [taskStatus, setTaskStatus] = useState<NewsTaskStatus | null>(null);
 
   const loadReports = async (autoSelectLatest = false) => {
     setLoadingList(true);
@@ -103,39 +109,80 @@ const News: React.FC = () => {
     }
   };
 
+  /** 轮询任务状态：等到「最近一次任务完成时间」变化（或超时）。
+   *
+   *  为什么要轮询而不是等请求返回：周报/月报实测耗时约 10 分钟，浏览器与网关都容易
+   *  先超时，界面就会一直转圈且拿不到结果。提交后立刻返回、由状态接口汇报结果，
+   *  界面才不会假死。
+   */
+  const pollTask = async (kind: TabKey, prevFinishedAt?: string) => {
+    for (let i = 0; i < 120; i += 1) {          // 15s × 120 ≈ 30 分钟上限
+      await new Promise((r) => setTimeout(r, 15000));
+      try {
+        const st = await getNewsStatus();
+        if (st && st.kind === kind && st.finished_at !== prevFinishedAt) {
+          setTaskStatus(st);
+          return st;
+        }
+      } catch {
+        // 后端可能正在重启（部署），继续下一轮
+      }
+    }
+    return null;
+  };
+
+  const finishTask = async (kind: TabKey, prev: string | undefined, okText: string) => {
+    const st = await pollTask(kind, prev);
+    if (st && st.ok) {
+      message.success(okText);
+    } else if (st) {
+      message.error(`${okText.split('：')[0]}失败：${st.error || '原因未知'}`);
+    } else {
+      message.warning('任务仍在后台运行，稍后刷新查看结果');
+    }
+    if (kind === 'daily') {
+      await loadReports(true);
+    } else {
+      await loadPeriodic(kind as PeriodicType, true);
+    }
+  };
+
   const handleRefresh = async () => {
-    setGenerating(true);
+    setGeneratingKey('daily');
+    const prev = taskStatus?.finished_at;
     try {
       const result = await refreshNews(true);
       if ((result as { skipped?: boolean }).skipped) {
         message.info('今日日报已生成，无需重复生成');
+        await loadReports(true);
       } else {
-        message.success(`日报生成完成：采集 ${result.fetched} 条，筛选 ${result.filtered} 条`);
+        await finishTask('daily', prev, `日报生成完成（采集 ${result.fetched} 条）`);
       }
-      await loadReports(true);
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '生成日报失败');
     } finally {
-      setGenerating(false);
+      setGeneratingKey(null);
     }
   };
 
   const handleGeneratePeriodic = async (type: PeriodicType) => {
-    setGenerating(true);
+    const label = type === 'weekly' ? '周报' : '月报';
+    setGeneratingKey(type as TabKey);
+    const prev = taskStatus?.finished_at;
     try {
-      const result = await generatePeriodic(type);
-      const label = type === 'weekly' ? '周报' : '月报';
-      message.success(`${label}生成完成：${result.period}`);
-      await loadPeriodic(type, true);
+      // 后端会在生成完成后把结果写进状态文件；这里只负责提交 + 轮询
+      await generatePeriodic(type);
+      await finishTask(type as TabKey, prev, `${label}生成完成（${prev ? '' : ''}请查看列表）`);
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '生成周期报告失败');
+      message.error(e?.response?.data?.detail || `生成${label}失败`);
     } finally {
-      setGenerating(false);
+      setGeneratingKey(null);
     }
   };
 
   useEffect(() => {
     loadReports(true);
+    getNewsStatus().then(setTaskStatus).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -187,7 +234,8 @@ const News: React.FC = () => {
                 type="primary"
                 block
                 icon={<ThunderboltOutlined />}
-                loading={generating}
+                loading={generatingKey === tab}
+                disabled={generatingKey !== null && generatingKey !== tab}
                 onClick={() => (isDaily ? handleRefresh() : handleGeneratePeriodic(tab as PeriodicType))}
               >
                 {isDaily ? '重新生成日报' : tab === 'weekly' ? '生成周报' : '生成月报'}
@@ -203,6 +251,16 @@ const News: React.FC = () => {
             </Button>
           </Space>
         </div>
+        {taskStatus && !taskStatus.ok ? (
+          <Alert
+            type="error"
+            showIcon
+            closable
+            style={{ marginBottom: 12 }}
+            message={`最近一次${TASK_LABEL[taskStatus.kind] || ''}生成任务失败`}
+            description={`${taskStatus.error || '原因未知'}（完成时间 ${taskStatus.finished_at || '未知'}）`}
+          />
+        ) : null}
         <Spin spinning={loadingList}>
           {listData.length === 0 ? (
             <div style={{ padding: 24 }}>

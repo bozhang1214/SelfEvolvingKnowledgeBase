@@ -91,7 +91,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 4G
+          # 2.5G：宿主机总共 3.6G，原先的 4G 上限等于没有上限，
+          # 一旦资讯任务/embedding 冲高就会把同机其他服务（含 SSH）一起拖慢。
+          memory: 2.5G
           cpus: "1.5"
         reservations:
           memory: 1G
