@@ -61,6 +61,27 @@ RUN pip install --no-cache-dir -i ${PIP_INDEX} \
 # 先复制依赖清单，利用 Docker 层缓存（依赖变化少时跳过重装）
 COPY requirements.txt ./
 
+# ---------- 先装 CPU-only torch（必须在 requirements 之前）----------
+# 为什么：torch 不是本文件的直接依赖，而是被 sentence-transformers **传递**拉进来的，
+# 而 PyPI（及其国内镜像）上的 Linux torch 默认是 **CUDA 构建** —— 会额外拖进
+# 19 个 nvidia-* 包（实测 site-packages/nvidia 占 3.2GB），而本机没有 GPU
+# （torch.cuda.is_available() 为 False），纯属死重量。它还让每次构建的磁盘峰值
+# 大幅上升（曾因此把 59G 磁盘挤到构建失败）。
+#
+# 顺序是**关键**：先装 `+cpu` 版本，后面 `-r requirements.txt` 看到 `torch>=x` 已被
+# 满足就不会再去 PyPI 拉 CUDA 版。`+cpu` 这个本地版本号只存在于 PyTorch 官方
+# CPU 索引，所以 pinned 写死即可，不会与镜像源歧义。
+#
+# --extra-index-url 用同一镜像源：torch 的运行时依赖（sympy/networkx/jinja2 等）
+# 不在 PyTorch 索引上，必须能回落到常规源解析。
+RUN pip install --no-cache-dir --prefix=/install \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url ${PIP_INDEX} \
+        --trusted-host mirrors.cloud.tencent.com \
+        --trusted-host mirrors.aliyun.com \
+        --timeout 120 --retries 3 \
+        "torch==2.14.0+cpu"
+
 # 安装依赖到独立前缀目录，便于 stage 2 整体复制
 RUN pip install --no-cache-dir --prefix=/install \
         -i ${PIP_INDEX} \
