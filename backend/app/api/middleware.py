@@ -115,11 +115,17 @@ class RateLimitMiddleware:
         now = time.time()
         key = (client_ip, group)
 
-        # 清理过期记录
-        self._windows[key] = [ts for ts in self._windows[key] if now - ts < window]
+        # 清理过期记录（用 get 不自动创建 key）；清空后删除 key，避免不同 IP 的
+        # 空桶让 `_windows` 字典无界增长（否则攻击者伪造海量 IP 即可撑爆内存）
+        bucket = self._windows.get(key)
+        if bucket:
+            bucket[:] = [ts for ts in bucket if now - ts < window]
+            if not bucket:
+                del self._windows[key]
+                bucket = None
 
         # 检查是否超限
-        if len(self._windows[key]) >= limit:
+        if bucket and len(bucket) >= limit:
             body = json.dumps({
                 "code": 3001,
                 "message": "请求过于频繁，请稍后再试",

@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -24,7 +25,9 @@ JWT_ALGORITHM = "HS256"
 
 # jti 黑名单（SEC-02：登出后 token 立即失效）。单 worker 内存实现；
 # 多 worker 部署需外置 Redis（与 L2 记忆同源），见 11-EVOLUTION。
-_jti_blacklist: set[str] = set()
+# 存 {jti: 吊销时间戳}，revoke 时惰性清理超过 token 最长有效期的条目，避免无界增长。
+_jti_blacklist: dict[str, float] = {}
+_JTI_MAX_TTL_S = 90 * 24 * 3600  # token 最长 90 天，过期后吊销记录无意义
 
 
 # 弱密钥占位词：命中即判定为不安全（SEC-01）
@@ -85,9 +88,19 @@ def create_jwt(user_id: str) -> str:
 
 
 def revoke_jwt(jti: str) -> None:
-    """把 jti 加入黑名单（登出后 token 立即失效）。"""
-    if jti:
-        _jti_blacklist.add(jti)
+    """把 jti 加入黑名单（登出后 token 立即失效）。
+
+    惰性清理：超过 token 最长有效期（90 天）的吊销记录已无意义，顺手删除，
+    避免黑名单在长跑进程中无界增长（每登出一次加一条）。
+    """
+    if not jti:
+        return
+    now = time.time()
+    cutoff = now - _JTI_MAX_TTL_S
+    if len(_jti_blacklist) > 1000:  # 仅在累积较多时清理，避免每次登出都全量扫描
+        for stale_jti in [k for k, ts in _jti_blacklist.items() if ts < cutoff]:
+            _jti_blacklist.pop(stale_jti, None)
+    _jti_blacklist[jti] = now
 
 
 def revoke_token(token: str) -> None:
