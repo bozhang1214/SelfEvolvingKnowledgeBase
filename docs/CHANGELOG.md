@@ -6,6 +6,45 @@
 
 ---
 
+## 2026-09-15（JobCopilot P4：SEKB 分析链路切到 MCP）
+
+内核查升到 `6c5f7cd`。**这是第一个动到 SEKB 生产分析链路的阶段。**
+
+**改动**：采集链路不变；分析链路从「直接 import 内核」改为
+`MCPClient → stdio → jobcopilot-mcp`，SEKB 成为内核的**客户端**而非调用方。
+`transport: direct` 保留为**紧急回滚开关**（改一行配置 + 重启即可退回旧路径）。
+
+**新增 `app/agents/job/mcp_client.py`**：常驻 stdio 客户端
+- **共享连接**：单职位与批量分析共用一条子进程（不各起一个）
+- **命令解析**：PATH 找不到时回落到当前解释器同目录（venv 场景常见）
+- **启动期预热**：MCPClient 内部用 anyio `AsyncExitStack`，要求进入/退出同一 task；
+  懒建连会变成「请求 task 建、lifespan task 关」并触发告警，故放在启动任务里建连
+
+**DoD 3：错误必须清晰**：子进程起不来 / 超时 / 内核返回结构化错误 → 一律转成带
+排查方向的 `KernelMCPError`，不让路由抛 500 堆栈。
+
+**补上两个切 MCP 后必然出现的缺口**
+1. **多用户画像**：内核的 `save_profile` 是**进程级全局状态**，而 SEKB 是多用户系统——
+   没有按请求注入画像的能力，就会把 A 的画像用到 B 的分析上。两个分析工具都加了
+   `user_profile` 参数。
+2. **费用可见性**：走 MCP 后是**内核自己调 LLM**，SEKB 的 LLMFactory 看不到这些调用，
+   精心做的 token/费用统计会直接漏掉招聘分析。现在内核回报**本次调用**的增量用量，
+   SEKB 落到结构化日志（Loki 可检索）。
+
+**修掉一个很隐蔽的真 bug**：`JOBCOPILOT_PROMPTS_DIR` 文档里写了读、**代码里从未读**。
+后果是宿主以为自己把 `prompt/job` 传给了内核，实际内核用的是包内 base——
+**现网提示词热改（bind mount）静默失效**。已修 + 补测试。
+
+**验证**
+- SEKB 721 → **739 passed**（+18 MCP 接线测试，真实拉起子进程走 stdio 协议）；
+  ruff 全绿；mypy 门禁 302 ≤ 310；P0 逐字段比对仍全等
+- jobcopilot 213 passed / ruff / mypy strict 全绿
+- **部署前真 LLM 验证**（生产容器内）：单职位 7 段全非空 21s、批量 5+6 字段 8.4s、
+  **提示词生效来源 `{'local'}`**（SEKB 的 prompt/job 真被采用）
+- 子进程泄漏检查：3 轮建连/断连后残留 0
+
+---
+
 ## 2026-09-15（JobCopilot P3：提示词分发端点 + 三级回退）
 
 内核查升到 `a24c7af`。SEKB 侧新增 nginx `/prompts/` 静态分发端点。
