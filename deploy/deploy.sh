@@ -428,26 +428,44 @@ if [ "$DRY_RUN" = false ]; then
         echo ""
     fi
 
-    echo "--- 端点检查 ---"
-    echo -n "  backend /health/live: "
-    curl -sf http://localhost:8000/api/v1/health/live -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "FAIL"
-    echo -n "  backend /metrics: "
-    curl -sf http://localhost:8000/metrics -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "FAIL"
-    echo -n "  frontend /: "
-    curl -sf http://localhost/ -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "FAIL"
+    # 带重试的端点探测。为什么必须重试：监控栈（尤其 Grafana）重启后要几十秒才就绪，
+    # 一次性探测会在**服务其实健康**的情况下打 FAIL —— 2026-09-15 连续两次部署都出现
+    # 「grafana: 000 FAIL」，而一分钟后它就是 healthy。这种假 FAIL 的代价是让人从此
+    # 不再相信这份验证输出（进而忽略真正的 FAIL）。
+    probe_endpoint() {
+        local label="$1" url="$2" allowed="$3" tries="${4:-6}" delay="${5:-5}"
+        local i code
+        for i in $(seq 1 "$tries"); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null)" || code="000"
+            case " $allowed " in
+                *" $code "*) printf '  %-22s %s\n' "$label" "$code"; return 0 ;;
+            esac
+            # 差一点就绪时不必等满：继续重试
+            [ "$i" -lt "$tries" ] && sleep "$delay"
+        done
+        printf '  %-22s %s（重试 %s 次后仍非 [%s]）\n' "$label" "$code" "$tries" "$allowed"
+        return 1
+    }
+
+    echo "--- 端点检查（带重试，最多约 $((6 * 5)) 秒/端点）---"
+    EP_FAIL=0
+    probe_endpoint "backend /health/live" "http://localhost:8000/api/v1/health/live" "200" || EP_FAIL=$((EP_FAIL + 1))
+    probe_endpoint "backend /metrics" "http://localhost:8000/metrics" "200" || EP_FAIL=$((EP_FAIL + 1))
+    # 前端 / 是 301（nginx 重定向到 /sekb），也接受 200
+    probe_endpoint "frontend /" "http://localhost/" "200 301" || EP_FAIL=$((EP_FAIL + 1))
 
     if [ "$SKIP_MONITOR" = false ]; then
-        echo -n "  prometheus: "
-        curl -sf http://localhost:9091/-/healthy -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "FAIL"
-        echo -n "  grafana: "
-        curl -sf http://localhost:3001/api/health -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "FAIL"
-        echo -n "  alertmanager: "
-        curl -sf http://localhost:9093/-/healthy -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "FAIL"
-        echo -n "  feishu-webhook: "
-        curl -sf http://localhost:5001/health -o /dev/null -w "%{http_code}\n" 2>/dev/null || echo "FAIL"
+        probe_endpoint "prometheus" "http://localhost:9091/-/healthy" "200" || EP_FAIL=$((EP_FAIL + 1))
+        probe_endpoint "grafana" "http://localhost:3001/api/health" "200" || EP_FAIL=$((EP_FAIL + 1))
+        probe_endpoint "alertmanager" "http://localhost:9093/-/healthy" "200" || EP_FAIL=$((EP_FAIL + 1))
+        probe_endpoint "feishu-webhook" "http://localhost:5001/health" "200" || EP_FAIL=$((EP_FAIL + 1))
     fi
     echo ""
-    success "部署后验证完成"
+    if [ "$EP_FAIL" -eq 0 ]; then
+        success "部署后验证完成（全部端点正常）"
+    else
+        warn "部署后验证完成：${EP_FAIL} 个端点在重试窗口内未就绪（可能仍在启动，请稍后复查：docker ps）"
+    fi
 else
     echo -e "  ${YELLOW}[DRY-RUN]${NC} 跳过验证（dry-run 模式）"
 fi

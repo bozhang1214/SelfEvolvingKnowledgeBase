@@ -449,10 +449,15 @@ else
 fi
 
 # 备份 cron
-if sudo crontab -l 2>/dev/null | grep -q "backup.sh"; then
+# ⚠️ 两个坑（2026-09-15 修）：
+#   1) 只看 root 的 crontab —— 实际任务装在部署用户（bo）的 crontab 里；
+#   2) grep 的模式是 "backup.sh"，而脚本名是 "backup_kb.sh"，中间的 _kb 让模式
+#      永远匹配不上。结果部署日志里长期挂着「定时备份 cron 未配置」这条假警告，
+#      而备份其实每天都在跑（假警告会让真警告被忽略）。
+if { sudo crontab -l 2>/dev/null; crontab -l 2>/dev/null; } | grep -qE "backup_kb\.sh|backup\.sh"; then
     pass "定时备份 cron 已配置"
 else
-    warn "定时备份 cron 未配置" "crontab -e 添加每日备份任务"
+    warn "定时备份 cron 未配置（root 与当前用户的 crontab 都没找到）" "crontab -e 添加每日备份任务"
 fi
 
 echo ""
@@ -472,8 +477,12 @@ if git rev-parse --is-inside-work-tree &>/dev/null; then
     fi
 
     # 检查是否有 remote
-    if git remote -v | grep -q origin; then
-        pass "Git remote 已配置"
+    # ⚠️ 不能只认 origin：本仓库的 remote 叫 gitea / github（origin 指向 GitHub
+    #    的 SSH 地址，中国网络经常连不上）。只认 origin 会长期报「Git remote 未配置」
+    #    的假警告。这里改为「有任意 remote 即可」，并把名字打出来便于核对。
+    REMOTES="$(git remote 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')"
+    if [ -n "$REMOTES" ]; then
+        pass "Git remote 已配置（${REMOTES}）"
     else
         warn "Git remote 未配置"
     fi
