@@ -27,11 +27,11 @@ status: draft（阶段1 SSOT 工作产物）
   - `full(路由级)`：router 级 `dependencies=[Depends(require_full_access)]` + 处理器内 `get_current_user`
   - `full(handler)`：仅处理器内 `Depends(require_full_access)`
 
-### 0.3 限流（现状：全局限流未生效）
-- `RateLimitMiddleware`（纯 ASGI 滑动窗口，middleware.py:34-122）已实现，但在 `create_app()` 中被注释禁用（server.py:195-201：`# app.add_middleware(RateLimitMiddleware, default_limit=60, ...)`）。
-- `config.yaml api.rate_limit.enabled: false`（config.yaml:271）。
-- **所有端点当前均无生效限流**；监控端点注释建议以 Nginx/网络策略保护（metrics.py:10-11、monitoring.py:8-9 注释）。
-- 下文各表“限流”列统一写：`无（全局限流中间件注释禁用，server.py:195-201）`。
+### 0.3 限流（现状：已启用，双闸）
+- `RateLimitMiddleware`（纯 ASGI 滑动窗口，middleware.py）已挂载并生效（server.py:204-219，`config.api.rate_limit.enabled: true`，2026-09-10 起）。
+- 分组额度（前缀匹配，**可带方法**）：auth 5 / share 20 / upload 30 / job 30 / `POST /news/` 6（生成）/ `/news/` 120（读）/ 默认 60，60s 滑动窗口。
+- 另有 nginx 第一道闸：`api_limit 10r/s`、`news_limit 30r/s`、`client_event_limit 2r/s`；被限流返回 429（`limit_req_status 429`）。
+- 详见 `docs/tech/05-API-REFERENCE.md §1.3`。
 
 ### 0.4 错误处理总览
 - 全局 SEKBError 异常处理器：server.py:205-223，映射见 server.py:75-106（LLMRateLimit/Budget→429、LLMTimeout→504、LLM/Tool→502、Security→403、StorageError 含“不存在”→404 否则 500、其余→500），响应体 `{error, message, details}`。
@@ -220,7 +220,7 @@ auth 6 / chat 2 / chat_share 3 / conversations 7 / health 3 / job 14 / knowledge
 ## 14. 异常与漂移清单（T1 域）
 
 1. **无鉴权端点（6 个）**：health 3 个（`/api/v1/health/`、`/live`、`/ready`）、metrics `/metrics`、monitoring `/client-event`、另有 auth `/register`+`/login` 开放属设计（登录/注册必须开放）。其中 `/client-event` 与 `/metrics` 接受任意来源请求（有 Nginx/网络层保护建议注释：metrics.py:10-11、monitoring.py:8-9）。
-2. **限流整体未生效**：`RateLimitMiddleware` 代码存在（middleware.py:34-122）但未挂载（server.py:195-201 注释禁用），`api.rate_limit.enabled=false`（config.yaml:271）——auth 登录/注册也无速率限制。
+2. **限流已启用（双闸）**：`RateLimitMiddleware` 已挂载生效（server.py:204-219，`enabled: true`），按路由分组限流（auth 5 / job 30 / news 读写分离 6/120 / 默认 60）；另有 nginx 层 `api_limit/news_limit/client_event_limit`。
 3. **POST 幂等性小结**：绝大多数写 POST 非幂等（register、chat、chat_stream、rate、create_share、create_chat_share、upload(overwrite=false)、monitoring/client-event、job/analyze 与 fetch 与 batch-analyze 依赖 14/7 天缓存近似幂等）；upload `overwrite=true`、job/cache/save 为覆盖式（近似幂等）；news refresh force=false 当日跳过（幂等）、force=true 覆盖；DELETE/删除类多数重复调用返回 404 或 deleted=false。
 4. **chat 会话并发防护为进程内集合**（`_conv_inflight`，chat.py:54、711-719）：多 worker 部署下不能跨进程互斥【推断·待验证：生产 worker 数未知】；且锁键对新会话（conversation_id 空）退化到 `user|`，同用户并发新建会话互斥。
 5. **文档/注释漂移**：create_jwt docstring 写「72 小时」，实际读 config 2160h=90 天（auth.py:68 vs 71）；server.py:285-287 路由注册日志缺 profile；share.py:138-141 中 `_HISTORY_WINDOW*2` 截断实现（注释与实现一致，无漂移）。chat.py:586 注释「不阻塞主回复」但代码为 `await` 同步执行（chat.py:591）——知识入库实际在返回前同步等待（仅失败被捕获），表述与实现有出入【标注现状】。

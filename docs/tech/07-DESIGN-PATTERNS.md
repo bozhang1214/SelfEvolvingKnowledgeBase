@@ -52,7 +52,7 @@ related: [01-ARCHITECTURE, 11-EVOLUTION]
 
 ### 1.7 装饰器/中间件（鉴权/限流/日志）
 - **落点**：路由 `Depends`（get_current_user / require_full_access）、FastAPI 异常处理器、middleware.py RateLimitMiddleware。
-- **评价**：✅ 鉴权用依赖注入清晰；✅ 全局异常统一脱敏（server.py:226-250）。⚠️ **RateLimitMiddleware 实现但未挂载**（server.py:195-201）——装饰能力未启用；⚠️ 日志上下文注入无请求级中间件（T8），仅 chat 路由手动 bind。
+- **评价**：✅ 鉴权用依赖注入清晰；✅ 全局异常统一脱敏（server.py:226-250）。✅ **RateLimitMiddleware 已挂载生效**（server.py:204-219，读写分离）；⚠️ 日志上下文注入无请求级中间件（T8），仅 chat 路由手动 bind。
 
 ### 1.8 观察者/发布-订阅（SSE、后台任务）
 - **落点**：chat_stream 的 asyncio.Queue（chat.py:719-758）+ token sink（core/token_sink.py）；知识入库/偏好抽取 create_task。
@@ -113,7 +113,7 @@ related: [01-ARCHITECTURE, 11-EVOLUTION]
 | 流式（SSE / 真流式） | ✅ token sink + astream_events |
 | 记忆分层 | L1 ✅ / L2 ✗ 预留 / L3 ✅ |
 | 成本控制 | ⚠️ 定价/统计在，预算控制未接线 |
-| 限流/熔断 | ✗ 限流未挂载、无熔断 |
+| 限流/熔断 | ✅ 限流已挂载（nginx+ASGI 双闸）；无熔断 |
 | 幂等 | 部分覆盖（upload overwrite/job 缓存/news force） |
 
 ---

@@ -219,8 +219,8 @@ status: draft（阶段1 SSOT 工作产物）
 | api.host | str | 0.0.0.0 | "0.0.0.0" | server.py:145（仅启动日志；uvicorn 实际绑定由外部启动参数决定） | 已引用（弱：仅日志） |
 | api.port | int | 8000 | 8000 | server.py:146（同上） | 已引用（弱：仅日志） |
 | api.cors_origins | list[str] | localhost:3000/5173/3004 | [] | middleware.py:22；server.py:288 | 已引用 |
-| api.rate_limit.enabled | bool | false | False | 无（RateLimitMiddleware 未挂载，server.py:195-201 注释禁用） | **死配置** |
-| api.rate_limit.requests_per_minute | int | 60 | 60 | 无 | **死配置** |
+| api.rate_limit.enabled | bool | true | False | server.py:204-219（挂载 RateLimitMiddleware） | 已生效（2026-09-10 起） |
+| api.rate_limit.requests_per_minute | int | 60 | 60 | server.py:207（默认组） | 已生效 |
 | api.auth.token_expire_hours | int | 2160（90 天） | 2160 | auth.py:71（每次 create_jwt） | 已引用 |
 | api.auth.jwt_secret | str | `${JWT_SECRET:-sekb-dev-secret-change-in-production}` | "" | 无（鉴权直接读 env `JWT_SECRET`：auth.py:39、启动校验 bootstrap.py:128-130；该 key 恒为空，见 §0 展开缺陷） | **死配置**（双重失效） |
 | api.auth.password_min_length | int | 8 | 8 | 无（注册模型硬编码 min_length=8，user.py:45） | **死配置** |

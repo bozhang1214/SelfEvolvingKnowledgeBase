@@ -29,7 +29,7 @@ related: [01-ARCHITECTURE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 09-OBSERVABI
 | TD-04 | 一致性 | 多存储无锁 RMW（profile/shares/caches/news storage） | T6 | 并发丢更新 | 中 | P1 |
 | TD-05 | 观测 | 4 指标未埋点 + record_llm_call 无调用方 + user/tool 标签失真 | T8 D-T8-1..6 | 监控盲区 | 低 | P1 |
 | TD-06 | 架构 | LLM 统一入口被绕过 10 处（news/job/classifier/image/share） | T3 | 成本/统计/重试缺失 | 中 | P1 |
-| TD-07 | 架构 | RateLimitMiddleware 未挂载；`_conv_inflight` 仅进程内 | server.py:195-201；T1 | 限流/并发防护缺口 | 中 | P1 |
+| TD-07 | 架构 | ~~RateLimitMiddleware 未挂载~~（已挂载生效，读写分离）；`_conv_inflight` 仍仅进程内 | server.py:204-219；T1 | 并发防护（多 worker 前） | 低 | P2 |
 | TD-08 | 安全 | 无 refresh 黑名单/jti；分享过期无清扫；image 段配置静默丢 | T2/T6/BACKLOG | 安全纵深不足 | 中 | P1 |
 | TD-09 | 代码 | 上帝路由 chat.py:407-623 | 03 §2 | 可维护性 | 中 | P2 |
 | TD-10 | 数据 | ChromaDB eviction 未实现；News/Job 清理不彻底 | T6 | 磁盘增长 | 低 | P2 |
@@ -44,7 +44,7 @@ related: [01-ARCHITECTURE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 09-OBSERVABI
 
 ### 2.1 短期（1-2 月）——止血与收口
 
-> **2026-09 重构已落地**：死配置已删 11 键（D3/P2-12/P2-P2-05/D6）；cost_control 预算占位已删、RateLimitMiddleware 已配置驱动接线（`enabled` 待启用）；LLM 统一入口 9 处已收口（`ainvoke_with_stats`/`astream_with_stats`，仅剩 image_processor 独立视觉模型 T3 漂移）；画像偏好抽取（方案 B）随 skill 删除而解耦，待「求职意图」识别后按意图触发。以下为未完成项：
+> **2026-09 重构已落地**：死配置已删 11 键（D3/P2-12/P2-P2-05/D6）；cost_control 预算占位已删、RateLimitMiddleware 已挂载生效（2026-09-10 启用，2026-09-15 资讯读写分离）；LLM 统一入口 9 处已收口（`ainvoke_with_stats`/`astream_with_stats`，仅剩 image_processor 独立视觉模型 T3 漂移）；画像偏好抽取（方案 B）随 skill 删除而解耦，待「求职意图」识别后按意图触发。以下为未完成项：
 
 - 修 `${VAR:-default}` 展开缺陷（T2 §4），清理剩余死配置（evaluation 5 项 / app.debug / vector_store.provider 等）。
 - 启用 RateLimitMiddleware（`rate_limit.enabled=true`，需先验证 SSE 流式不受影响）。

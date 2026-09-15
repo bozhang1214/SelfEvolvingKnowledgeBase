@@ -138,7 +138,7 @@ pii_masking / prompt_injection_guard / max_input_length / blocked_patterns 均�
 | tools | filesystem(2)/vector_store(2)/document_parser(1)/image_analysis(8) | image_analysis 走 env；vector_store 开关错位 |
 | storage | backend/postgres(2) | 后端未切换预留 |
 | security | 4 项 | 注入防护/长度限制未实现（BACKLOG P1） |
-| api | rate_limit(2)/auth(3) | 限流未挂载、jwt 走 env |
+| api | rate_limit(已启用)/auth(3) | 限流已挂载生效（读写分离）；jwt 走 env |
 | news/job | max_items / default_city_code | 清理 |
 
 ---

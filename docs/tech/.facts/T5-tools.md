@@ -35,7 +35,7 @@ ToolRegistry 仅管理 1 个工具（web_search），`tools/registry.py:1-14` �
 | 重试 | `max_retries` 默认 2（config.yaml:209），指数退避 `asyncio.sleep(2**attempt)` 1s/2s（bocha_server.py:140-188）；HTTP ≥400 视为 ToolError **不重试直接抛**（bocha_server.py:148-152,174-176）；重试耗尽抛 ToolError（bocha_server.py:191-194） |
 | 失败降级 | ① MCP 连接失败 → `_init_direct_fallback()` 直接封装博查 API（registry.py:127-133,185-195）；② provider≠bocha → 直接封装（registry.py:134-137）；③ langchain_core 未装且需兜底 → ToolError（registry.py:187-191）；④ 调用侧：Executor 捕获任何异常转 ToolError、步骤记 FAILED 继续执行后续步骤（executor.py:106-134,227-231） |
 | 外部依赖 | 博查 AI 搜索 API `https://api.bochaai.com/v1/web-search`（config.yaml:206），key `${BOCHA_API_KEY}`（config.yaml:205，脱敏 `<REDACTED>`）；依赖 mcp / langchain-mcp-adapters / langchain_core / httpx 库 |
-| 配额/限流 | 代码内无配额统计与限流；单次 count 上限 20（schema bocha_server.py:55-56）；API 层 `api.rate_limit.enabled: false`（config.yaml:271）→ 无 HTTP 级限流【推断：配额完全取决于博查账户侧，代码不可见】 |
+| 配额/限流 | 代码内无配额统计；单次 count 上限 20（schema bocha_server.py:55-56）；API 层限流已启用（`api.rate_limit.enabled: true`，ASGI 分组 + nginx 双闸） |
 | 健康检查 | MCP 模式 `session.send_ping()`（registry.py:277、client.py:320-334）；直接封装模式仅判 tool 非空（registry.py:272-274） |
 
 ### 2.2 rag_retrieve（知识库检索）
@@ -121,6 +121,6 @@ ToolRegistry 仅管理 1 个工具（web_search），`tools/registry.py:1-14` �
 ## 5. 配额/限流/异常发现（现状事实）
 
 - 工具层无任何代码内配额/限流/熔断计数；只有单次 count 上限（web_search 20）与重试/超时参数。
-- API 限流配置存在但 `enabled: false`（config.yaml:270-272）。
+- API 限流已启用（`enabled: true`，2026-09-10 起；ASGI 分组 + nginx 双闸）。
 - 发现：ImageProcessor 直接 `langchain_openai.ChatOpenAI`（image_processor.py:293,306）不走 llm_factory 统一统计/降级入口；news/job 采集各链路也不经过 ToolRegistry。
 - 发现：config.yaml 仅出现 1 个 MCP 化工具（web_search），filesystem 工具 enabled:false（config.yaml:211-213），registry 注释声称后续接入，代码中无对应实现。

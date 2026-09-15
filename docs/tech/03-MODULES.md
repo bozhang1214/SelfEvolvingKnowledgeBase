@@ -173,7 +173,7 @@ flowchart TB
 
 - server.py：create_app/lifespan（初始化 NewsScheduler、装配）、异常处理器（SEKBError 映射 + error_id）、14 路由挂载。
 - 鉴权：get_current_user（JWT）、require_full_access（白名单）、access_level。
-- 中间件：RateLimitMiddleware **已实现未挂载**。
+- 中间件：RateLimitMiddleware **已挂载生效**（`enabled: true`，按路由分组 + 方法级读写分离）。
 - 各 routes：见 05-API-REFERENCE。
 
 ---
