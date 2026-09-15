@@ -204,6 +204,26 @@ write /tmp/.tmp-compose-build-metadataFile-*.json: no space left on device
 | 低于多少先清缓存 | 32G |
 | 全量构建耗时（无缓存） | ~13 分钟 |
 
+### ⚠️ 已解决的根因：后端镜像里装了用不上的 CUDA torch（2026-09-15）
+
+后端镜像原本 **10.9GB**，其中 `site-packages/nvidia` 占 **3.2GB**（19 个 CUDA 包）——
+因为 torch 是被 `sentence-transformers` 传递引入的，而 PyPI/国内镜像上的 Linux torch
+默认是 **CUDA 构建**，可这台机器**没有 GPU**。
+
+改用 CPU 版 torch（`backend/constraints-image.txt` 钉 `torch==2.14.0+cpu`，
+Dockerfile 先用 `pip download --no-deps` 取轮子再用 `--find-links` 安装）后：
+
+| 指标 | 改前 | 改后 |
+|---|---|---|
+| 后端镜像 | 10.9GB | **3.34GB** |
+| `site-packages/nvidia` | 3.2GB | 不存在 |
+| 可用磁盘 | 16–24GB | **32.7GB** |
+
+**因此本节下面的「磁盘紧张」经验大多已成历史**，但仍值得保留（换机器/改依赖时可能复发）。
+两条踩坑记录也留在 `backend/constraints-image.txt` 与 CHANGELOG 里：
+`--prefix` 安装后再装 requirements 会重新解析并拉回 CUDA 版；给主安装步骤加
+`--extra-index-url` 会让 pip 对所有包都查境外索引（networkx 掉到 36 kB/s）而构建超时。
+
 ### 缓存与镜像：`docker system df` 的「可回收」在本机**不可信**
 
 > ⚠️ **2026-09-15 实测纠正**：本文档此前写「上一个后端镜像会失去标签，变成 10G 级别的
