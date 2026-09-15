@@ -25,6 +25,10 @@ set -euo pipefail
 COMPOSE_DIR="/opt/self-evolving-kb/SelfEvolvingKnowledgeBase"
 BACKUP_DIR="/opt/self-evolving-kb/backups"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
+# 至少保留的最新份数（跨天兜底：历史很短时不要把备份删到只剩 1 份）
+RETENTION_MIN_KEEP="${RETENTION_MIN_KEEP:-2}"
+# PRUNE_DRY_RUN=1 → 只列出「将要删除哪些备份」，一个都不删（删生产备份前先预演）
+PRUNE_DRY_RUN="${PRUNE_DRY_RUN:-0}"
 VOLUME_NAME="sekb_data"
 GITEA_VOLUME_NAME="sekb_gitea_data"
 TS="$(date +%Y%m%d_%H%M%S)"
@@ -76,10 +80,89 @@ fi
 
 # ------------------------------------------------------------
 # 3) 清理旧备份
+#
+# 两条规则叠加：
+#   a) 超过 RETENTION_DAYS 天            → 删（原有规则）
+#   b) 同一天只留最新一份                 → 删（去重，本条是后加的）
+#
+# 为什么必须要 b)：deploy.sh 每次部署前都会调用本脚本做一次备份，**一天部署 N 次
+# 就留 N 份近乎完全相同的数据**；而天数规则永远管不住同一天的多份。
+# 2026-09-15 就是实例：当天积了 9 份 sekb_data（每份 112MB、合计约 1.0G），
+# 把 59G 磁盘挤到 24G 可用，低于 deploy.sh 的 25G 构建门禁，部署直接卡住。
+#
+# 保底：无论规则 b) 怎么去重，最新 RETENTION_MIN_KEEP 份永远保留——
+# 防止「同一天做了很多次备份」时被削到只剩 1 份（单份损坏即无备份）。
 # ------------------------------------------------------------
-echo "[${TS}] 清理 ${RETENTION_DAYS} 天前的旧备份 ..."
-find "${BACKUP_DIR}" -name 'sekb_data_*.tar.gz' -mtime "+${RETENTION_DAYS}" -delete
-find "${BACKUP_DIR}" -name 'sekb_gitea_data_*.tar.gz' -mtime "+${RETENTION_DAYS}" -delete
+prune_backups() {
+    local pattern="$1" label="$2"
+    local f day kept=0 removed=0 freed_kb=0 size_kb
+    local seen_days=","
+    local -a doomed=()
+
+    # ls 按文件名倒序 = 按时间戳倒序（文件名内嵌 %Y%m%d_%H%M%S），最新在前。
+    # 注：只用 bash 3.2 就有的语法（macOS 自带 bash 3.2 无关联数组），
+    #     便于在开发机上直接跑 docs/tmp/test_backup_retention.sh 验证。
+    while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        # 取文件名里的 8 位日期（必须锚定整串——不锚定只会替换第一处，
+        # 结果 day 变成 "20260915_110825.tar.gz" 这种含时间的串，去重永远不生效）
+        day="$(basename "$f" | sed -E 's/^.*_([0-9]{8})_[0-9]{6}\.tar\.gz$/\1/')"
+        # 名字不符合约定时退化为「每个文件算独立一天」= 只受超龄规则约束，安全
+        case "$day" in
+            [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+            *) day="$(basename "$f")" ;;
+        esac
+
+        # 规则 a：超龄
+        if [ -n "$(find "$f" -maxdepth 0 -mtime "+${RETENTION_DAYS}" 2>/dev/null)" ]; then
+            doomed+=("$f"); continue
+        fi
+        # 规则 b：同一天只留最新（保底 RETENTION_MIN_KEEP 份不受此限）
+        case "$seen_days" in
+            *",${day},"*)
+                if [ "$kept" -ge "${RETENTION_MIN_KEEP}" ]; then
+                    doomed+=("$f"); continue
+                fi
+                ;;
+            *)
+                seen_days="${seen_days}${day},"
+                ;;
+        esac
+        kept=$(( kept + 1 ))
+    done < <(ls -1 "${BACKUP_DIR}"/${pattern} 2>/dev/null | sort -r)
+
+    for f in ${doomed[@]+"${doomed[@]}"}; do
+        size_kb="$(du -k "$f" 2>/dev/null | cut -f1)" || size_kb=0
+        if [ "${PRUNE_DRY_RUN}" = "1" ]; then
+            echo "    [dry-run] 将删除 $(basename "$f")"
+        else
+            rm -f "$f"
+        fi
+        removed=$(( removed + 1 ))
+        freed_kb=$(( freed_kb + ${size_kb:-0} ))
+    done
+
+    # 注意：这里必须用 if，不能用 `[ ... ] && verb=...`
+    # —— set -e 下条件不成立会让整个脚本退出（经典坑）
+    local verb="删除"
+    if [ "${PRUNE_DRY_RUN}" = "1" ]; then
+        verb="将删除（dry-run，实际未删）"
+    fi
+    if [ "$removed" -gt 0 ]; then
+        if [ "$freed_kb" -ge 1024 ]; then
+            echo "[$(date +%Y%m%d_%H%M%S)] 清理 ${label}: ${verb} ${removed} 份，可释放 $(( freed_kb / 1024 )) MB（保留 ${kept} 份）"
+        else
+            echo "[$(date +%Y%m%d_%H%M%S)] 清理 ${label}: ${verb} ${removed} 份，可释放 ${freed_kb} KB（保留 ${kept} 份）"
+        fi
+    else
+        echo "[$(date +%Y%m%d_%H%M%S)] 清理 ${label}: 无需清理（保留 ${kept} 份）"
+    fi
+}
+
+echo "[${TS}] 清理旧备份（>${RETENTION_DAYS} 天 + 同天去重，最少保留 ${RETENTION_MIN_KEEP} 份）..."
+prune_backups 'sekb_data_*.tar.gz' 'SEKB 数据'
+prune_backups 'sekb_gitea_data_*.tar.gz' 'Gitea 数据'
+echo "[${TS}] 清理后备份目录占用: $(du -sh "${BACKUP_DIR}" | cut -f1)"
 
 echo "[${TS}] 备份完成: ${BACKUP_FILE} ($(du -h "${BACKUP_FILE}" | cut -f1))"
 if [ -f "${GITEA_BACKUP_FILE}" ]; then

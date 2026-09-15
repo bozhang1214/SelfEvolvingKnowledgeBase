@@ -75,10 +75,21 @@ sudo apt-get clean      # 实测 147M → 40K
 ```bash
 ls -la /opt/self-evolving-kb/backups/
 du -sh /opt/self-evolving-kb/backups
+PRUNE_DRY_RUN=1 /opt/self-evolving-kb/backup_kb.sh    # 预演：只列出将删哪些，不删
 ```
 
-默认保留 14 天（`scripts/backup_kb.sh` 的 `RETENTION_DAYS`），约 7 份 × 112M ≈ 780M。
-**磁盘不紧张时不要删** —— 这是目前**唯一的**数据副本（无异地备份）。
+保留策略（`scripts/backup_kb.sh`）是**两条规则叠加**：
+
+1. 超过 `RETENTION_DAYS`（默认 14 天）→ 删；
+2. **同一天只留最新一份** → 删（`RETENTION_MIN_KEEP` 默认 2 份保底不受此限）。
+
+> **踩坑（2026-09-15）**：原来只有规则 1，**管不住同一天的多份**。而
+> `deploy/deploy.sh` 每次部署前都会调 `backup_kb.sh` 备份一次 → 一天部署 N 次
+> 就留 N 份近乎相同的数据。当天积了 **9 份 ×112M ≈ 1.0G**，把可用空间挤到
+> 24394MB，低于构建门禁 25000MB，**部署直接卡住**。
+> 加规则 2 后：18 份 → 9 份，释放 1003MB，且 `0908~0915` **每天仍各留一份**。
+
+**磁盘不紧张时不要手工删** —— 这是目前**唯一的**数据副本（无异地备份，见第 5 节）。
 
 ---
 
@@ -189,11 +200,30 @@ write /tmp/.tmp-compose-build-metadataFile-*.json: no space left on device
 | 低于多少先清缓存 | 32G |
 | 全量构建耗时（无缓存） | ~13 分钟 |
 
-### 缓存与悬空镜像
+### 缓存与镜像：`docker system df` 的「可回收」在本机**不可信**
 
-每次部署出新镜像后，**上一个后端镜像会失去标签**（`image:` 名字被新镜像占用），
-变成 10G 级别的可回收空间。部署脚本阶段 7 的 `docker image prune -f` 会顺手清掉，
-所以**不要在部署前手动清**——那时旧镜像还被运行中的容器占着，清不掉。
+> ⚠️ **2026-09-15 实测纠正**：本文档此前写「上一个后端镜像会失去标签，变成 10G 级别的
+> 可回收空间，阶段 7 的 `docker image prune -f` 会顺手清掉」。**这个结论是错的。**
+
+本机 Docker 已启用 **containerd 镜像存储**（`docker info` 显示
+`Storage Driver: overlayfs` + `driver-type: io.containerd.snapshotter.v1`），
+镜像实体在 `/var/lib/containerd` 而不是 `/var/lib/docker`（后者仅 941M）：
+
+```bash
+sudo du -xshm /var/lib/containerd/*          # 注：* 必须交给 root 展开
+#   18922  .../io.containerd.snapshotter.v1.overlayfs   ← 解包后的镜像层
+#    5059  .../io.containerd.content.v1.content         ← blob
+```
+
+此时 `docker system df` 会**误报**：它报 `Images 16.58GB / RECLAIMABLE 10.71GB (64%)`，
+但 12 个镜像**全部被运行中的容器引用**，`docker image prune -a -f` 实测只回收 **1.013MB**。
+
+- **原因**：容器记录的 `.Image` 是**平台 manifest digest**（如 `233241502afc`），
+  而 `docker images` 显示的是 **index digest**（如 `fdb9585a6c8d`）；两者不匹配，
+  Docker 就把那个 10.9G 的后端镜像当成「无人使用」。同理 `docker builder prune`
+  也可能报 `Reclaimable: 0B`（实测缓存 1.155GB 却清不掉）。
+- **因此**：不要靠 `docker system df` 判断能不能腾出空间，**以 `df -Pm /` 为准**；
+  镜像存储这块基本**没有**可回收量。
 
 > 旧版 Docker 不支持 `--max-used-space` 时自动退化为整体清空（安全，只是下次构建慢）。
 > 本机实测 Docker 29.6.1 / buildx 0.35 支持。
@@ -202,7 +232,7 @@ write /tmp/.tmp-compose-build-metadataFile-*.json: no space left on device
 
 ## 5. ⚠️ 尚未解决的隐患：备份没有异地副本
 
-**现状**：7 份备份全部位于 `/opt/self-evolving-kb/backups/`，**和源数据同一块磁盘**。
+**现状**：全部备份（约 9 份 / 1.0G）都位于 `/opt/self-evolving-kb/backups/`，**和源数据同一块磁盘**。
 磁盘损坏 / 误删 / 勒索 → 数据和备份一起没。
 
 `backup_kb.sh` 里**没有任何** cos / oss / rclone / rsync / scp 上传逻辑。
@@ -224,7 +254,8 @@ echo "===== $(date +%F' '%T) ====="
 df -h / | tail -1
 free -h | head -2
 echo "--- PSI:"; cat /proc/pressure/memory
-echo "--- docker:"; docker system df
+echo "--- docker:"; docker system df   # ⚠️ 本机 RECLAIMABLE 不可信，以 df -Pm / 为准
+echo "--- containerd:"; sudo du -xshm /var/lib/containerd/* | sort -hr | head -3
 echo "--- 备份:"; du -sh /opt/self-evolving-kb/backups; ls /opt/self-evolving-kb/backups/*.tar.gz | wc -l
 echo "--- 日志:"; journalctl --disk-usage
 echo "--- 容器:"; docker ps --format '{{.Names}}\t{{.Status}}'
@@ -240,6 +271,8 @@ echo "--- 容器:"; docker ps --format '{{.Names}}\t{{.Status}}'
 | 2026-09-14 | journal 限容 200M + `apt-get clean` | `/var/log` 378M→146M |
 | 2026-09-14 | 停用 `fwupd` / `multipathd` | 释放约 57M 内存，PSI 归零 |
 | 2026-09-14 | `deploy.sh` 加入 `--max-used-space 2GB` | 防复发（待下次部署验证） |
+| 2026-09-15 | `backup_kb.sh` 保留策略加「同天去重」+ `RETENTION_MIN_KEEP=2` 保底 | 备份 18 份→9 份，释放 1003MB（`0908~0915` 每天仍各留一份） |
+| 2026-09-15 | 纠正本文档「旧镜像可回收 10G」的错误结论 | 实测 `image prune -a` 仅回收 1.013MB；containerd 镜像存储无可回收量 |
 
 ---
 
