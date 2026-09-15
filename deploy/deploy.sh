@@ -309,6 +309,15 @@ else
     # 使用 timeout 防止无限等待（20 分钟超时）
     if run "timeout 1200 docker compose -f docker-compose.prod.yml --env-file .env.prod build --progress=plain backend"; then
         success "后端镜像构建完成"
+        # 本脚本**不会** `git pull`（部署的就是当前检出的代码），而构建要几分钟：
+        # 期间如果检出被更新（例如另一个人 `git pull` 了），镜像内容就与开头记录的
+        # DEPLOY_SHA 不一致 —— 2026-09-15 真发生过：报告「代码版本 c83a6d5」而
+        # 检出头已经到 4a715f3，两个版本都在服务器上，谁也说不清线上跑的是哪个。
+        # 这里只是**告警**不中止：镜像已经构建出来了，但必须让人知道要重跑一次。
+        POST_BUILD_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        if [ "$POST_BUILD_SHA" != "$DEPLOY_SHA" ]; then
+            warn "构建期间代码版本变了（$DEPLOY_SHA → $POST_BUILD_SHA）：本次镜像可能不含最新提交，建议再部署一次"
+        fi
     else
         fail "后端镜像构建失败" "1. 检查网络: curl -I https://mirrors.cloud.tencent.com/
         2. 检查 Docker 加速: cat /etc/docker/daemon.json
@@ -440,7 +449,11 @@ else
     # ⚠️ 必须带 --env-file .env.prod：监控栈里的 feishu-webhook 依赖
     # ${FEISHU_WEBHOOK_URL} 插值；不带 env-file 时会被解析成**空串**，
     # 于是「部署前检查显示飞书已配置」而容器里实际是空的 → 告警发不出去。
-    if run "docker compose -f docker-compose.monitoring.yml --env-file .env.prod up -d"; then
+    # ⚠️ 必须带 --build：feishu-webhook 是**本地构建**的镜像（image: sekb-feishu-webhook:latest），
+    # 不带 --build 时 compose 看到同名 tag 已存在就**不会重建**，于是改了网关代码
+    # （卡片字段/按钮/释义）部署完却还是旧行为。Prometheus/Grafana 用的是上游镜像，
+    # --build 对它们是空操作，配置没变也不会被重启。
+    if run "docker compose -f docker-compose.monitoring.yml --env-file .env.prod up -d --build"; then
         success "监控栈启动完成"
         if [ "$DRY_RUN" = false ]; then
             sleep 10
@@ -568,7 +581,7 @@ echo -e "  ${GREEN}${BOLD}部署完成${NC}"
 echo "============================================"
 echo ""
 echo "  部署时间: $DEPLOY_DATE"
-echo "  代码版本: $DEPLOY_SHA"
+echo "  代码版本: $DEPLOY_SHA（本脚本不会 git pull，部署的就是当时本地检出的这份）"
 echo ""
 echo "  服务访问地址："
 echo "    前端:       http://localhost/"

@@ -17,6 +17,7 @@ from app.agents.news.filter import NewsFilter
 from app.agents.news.generator import DailyReportGenerator
 from app.agents.news.rss_fetcher import RSSFetcher
 from app.agents.news.storage import NewsStorage
+from app.core.alerts import fire_and_forget, send_alert
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -25,6 +26,9 @@ logger = get_logger(__name__)
 _CONTENT_CONCURRENCY = 10
 # 单条正文传给 LLM 的最大字符数（150~200 字摘要足够）
 _CONTENT_MAX_CHARS = 1200
+
+#: 任务类型 → 中文名（告警标题用）
+_KIND_LABEL = {"daily": "日报", "weekly": "周报", "monthly": "月报"}
 
 
 class NewsAgent:
@@ -261,6 +265,11 @@ class NewsAgent:
 
         手动触发以前不写状态：请求被浏览器掐断（499）后服务端还在跑，
         用户既看不到进度也看不到失败原因 —— 只能反复点。
+
+        失败时**同时推一条飞书告警**：落盘只有打开页面才看得见，
+        而「今天日报没出来」正是靠人肉眼发现才拖了很久的问题。
+        这里是手动/定时两条路径的唯一收口，因此告警放在这里；
+        调度器的重试会用相同错误再次进来，靠 ``send_alert`` 的窗口去重只推一次。
         """
         import json as _json
 
@@ -275,6 +284,16 @@ class NewsAgent:
             path.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError as e:
             logger.warning("写入任务状态失败", error=str(e)[:200])
+
+        if not ok:
+            label = _KIND_LABEL.get(kind, kind)
+            fire_and_forget(send_alert(
+                f"科技资讯{label}生成失败",
+                f"类型: {kind}｜时间点: {period or started_at or '未知'}｜原因: {error or '未知'}",
+                source="news",
+                severity="critical",
+            ))
+
 
     def read_status(self) -> dict | None:
         """读取最近一次定时任务的执行状态（供接口/前端展示「今天为什么没生成」）。"""

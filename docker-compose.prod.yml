@@ -79,6 +79,9 @@ services:
       # 用户白名单（逗号分隔邮箱）：为空=所有人完整功能；配置后仅白名单内邮箱为完整功能，
       # 其余登录用户为「预览」：仅功能说明 + 科技资讯只读（不能重新生成日报）
       ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
+      # 任务失败告警（飞书）网关地址。默认走同网内的 feishu-webhook 网关；
+      # 想关掉就设成 off/none/0（见 app/core/alerts.py 的 _DISABLED_VALUES）。
+      NEWS_ALERT_WEBHOOK_URL: ${NEWS_ALERT_WEBHOOK_URL:-http://sekb-feishu-webhook:5001/webhook}
     volumes:
       # 数据持久化：会话/索引/向量库/日志/trace 全部写入挂载卷
       - sekb_data:/app/data

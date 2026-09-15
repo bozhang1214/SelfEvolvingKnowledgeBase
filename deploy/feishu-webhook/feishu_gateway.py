@@ -50,11 +50,23 @@ _ALERT_GUIDE = {
     },
 }
 
+# 应用侧（非 Prometheus）告警：alertname 是动态中文标题，查不到上面那张表，
+# 因此按 labels.source 给释义与入口，避免卡片只有一行「任务失败」看不出该怎么办。
+_SOURCE_GUIDE = {
+    "news": {
+        "meaning": "科技资讯的日报/周报/月报生成失败（RSS 采集、正文抽取或大模型调用出错），报告没有产出或没有更新",
+        "action": "打开「科技资讯」页面手动重新生成；若反复失败，查后端日志（关键字 news）确认是网络还是模型侧问题",
+    },
+}
 
-def _build_action_buttons(conversation_id: str = "") -> list[dict]:
+
+def _build_action_buttons(conversation_id: str = "", *, source: str = "") -> list[dict]:
     """构建操作按钮（跳转链接，未配置 URL 则不显示）。
 
-    顺序与主辅分工一致：Prometheus 告警（主）→ Grafana 看板（辅）→ 前端对话定位。
+    顺序与主辅分工一致：Prometheus 告警（主）→ Grafana 看板（辅）→ 应用页面/对话定位。
+
+    应用侧告警（如资讯生成失败）没有 conversation_id：此时给「查看资讯」这类
+    真正的处置入口，而不是一个点了没用的「查看对话记录」。
     """
     buttons = []
     # 告警源是 Prometheus：主按钮直达告警页（/alerts 列出活跃告警与规则）
@@ -73,7 +85,15 @@ def _build_action_buttons(conversation_id: str = "") -> list[dict]:
             "type": "default",
             "url": GRAFANA_URL,
         })
-    if FRONTEND_URL:
+    if source == "news" and FRONTEND_URL:
+        # FRONTEND_URL 已含 /sekb 子路径（如 https://bos-studio.tech/sekb）
+        buttons.append({
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": "查看资讯"},
+            "type": "default",
+            "url": FRONTEND_URL + "/news",
+        })
+    elif FRONTEND_URL:
         # FRONTEND_URL 已含 /sekb 子路径（如 https://bos-studio.tech/sekb）
         # 深链到 /chat，携带 conversation_id 时前端自动定位到对应会话
         chat_url = FRONTEND_URL + "/chat"
@@ -129,17 +149,19 @@ def _build_card(alerts: list[dict]) -> dict:
         severity = labels.get("severity", "unknown")
         alertname = labels.get("alertname", "unknown")
         service = labels.get("service", "unknown")
+        source = labels.get("source", "")
 
         content = (
             f"**{status_icon} {alertname}**\n"
-            f"状态: {status_text} | 级别: {severity} | 服务: {service}\n"
+            f"状态: {status_text} | 级别: {severity} | 服务: {service}"
+            + (f" | 来源: {source}" if source else "") + "\n"
             f"摘要: {annotations.get('summary', '无')}\n"
             f"详情: {annotations.get('description', '无')}\n"
             f"开始: {starts_at}"
             + (f"\n恢复: {ends_at}" if status == "resolved" else "")
         )
-        # 补充直白解释 + 建议操作
-        guide = _ALERT_GUIDE.get(alertname)
+        # 补充直白解释 + 建议操作（先按告警名，再退回按来源）
+        guide = _ALERT_GUIDE.get(alertname) or _SOURCE_GUIDE.get(source)
         if guide:
             content += (
                 f"\n\n💡 **这是什么**：{guide['meaning']}"
@@ -159,14 +181,18 @@ def _build_card(alerts: list[dict]) -> dict:
 
     # 提取 conversation_id（用于「查看对话记录」深链，多条告警取第一个有效的）
     conversation_id = ""
+    source = ""
     for alert in alerts:
-        cid = alert.get("labels", {}).get("conversation_id", "")
-        if cid:
+        labels = alert.get("labels", {})
+        cid = labels.get("conversation_id", "")
+        if cid and not conversation_id:
             conversation_id = cid
-            break
+        src = labels.get("source", "")
+        if src and not source:
+            source = src
 
     # 操作按钮（跳转链接，未配置则不显示）
-    buttons = _build_action_buttons(conversation_id)
+    buttons = _build_action_buttons(conversation_id, source=source)
     if buttons:
         elements.append({"tag": "hr"})
         elements.append({"tag": "action", "actions": buttons})
@@ -237,6 +263,32 @@ async def alertmanager_webhook(request: Request) -> JSONResponse:
         return JSONResponse(
             {"status": "error", "detail": str(e)}, status_code=500
         )
+
+
+@app.post("/test")
+async def send_test_alert(source: str = "news", severity: str = "critical") -> JSONResponse:
+    """发一条**测试卡片**，验证「网关 → 飞书」链路（不经过 Alertmanager）。
+
+    为什么要有这个端点：这条链路曾经「配置看着是好的、实际发不出去」（env-file 没传），
+    只能在真出事时才发现。改完网关/飞书配置后先打一发，确认群里真的收到卡片。
+    """
+    card = _build_card([
+        {
+            "status": "firing",
+            "labels": {
+                "alertname": "告警链路测试",
+                "severity": severity,
+                "source": source,
+                "service": "sekb",
+            },
+            "annotations": {
+                "summary": "这是一条测试告警，收到即说明「SEKB → 飞书网关 → 飞书群」链路正常",
+                "description": "忽略即可；无需任何处理。",
+            },
+        }
+    ])
+    result = await _send_to_feishu(card)
+    return JSONResponse({"status": "ok", "source": source, "feishu": result})
 
 
 @app.get("/health")
