@@ -22,13 +22,28 @@
 #
 set -euo pipefail
 
-COMPOSE_DIR="/opt/self-evolving-kb/SelfEvolvingKnowledgeBase"
-BACKUP_DIR="/opt/self-evolving-kb/backups"
+COMPOSE_DIR="${COMPOSE_DIR:-/opt/self-evolving-kb/SelfEvolvingKnowledgeBase}"
+BACKUP_DIR="${BACKUP_DIR:-/opt/self-evolving-kb/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 # 至少保留的最新份数（跨天兜底：历史很短时不要把备份删到只剩 1 份）
 RETENTION_MIN_KEEP="${RETENTION_MIN_KEEP:-2}"
 # PRUNE_DRY_RUN=1 → 只列出「将要删除哪些备份」，一个都不删（删生产备份前先预演）
 PRUNE_DRY_RUN="${PRUNE_DRY_RUN:-0}"
+# --prune-only → 只清理旧备份，不做备份
+PRUNE_ONLY=false
+for _arg in "$@"; do
+    case "${_arg}" in
+        --prune-only) PRUNE_ONLY=true ;;
+        -h|--help)
+            echo "用法: $0 [--prune-only]"
+            echo "  默认        备份 sekb_data + sekb_gitea_data，然后按策略清理旧备份"
+            echo "  --prune-only 跳过备份，只清理旧备份（磁盘紧张时用）"
+            echo "环境变量: RETENTION_DAYS=14  RETENTION_MIN_KEEP=2  PRUNE_DRY_RUN=1"
+            echo "          BACKUP_DIR=<备份目录>  COMPOSE_DIR=<仓库目录>"
+            exit 0 ;;
+        *) echo "未知参数: ${_arg}（试 $0 --help）" >&2; exit 2 ;;
+    esac
+done
 VOLUME_NAME="sekb_data"
 GITEA_VOLUME_NAME="sekb_gitea_data"
 TS="$(date +%Y%m%d_%H%M%S)"
@@ -44,55 +59,9 @@ trap 'echo "[$(date +%Y%m%d_%H%M%S)] 兜底：确保 backend / gitea 已启动";
        docker compose -f docker-compose.monitoring.yml start gitea 2>/dev/null || true' EXIT
 
 # ------------------------------------------------------------
-# 1) SEKB 应用数据卷（sekb_data）
+# 清理逻辑（函数定义提前到此处，好让 --prune-only 能在备份之前直接调用）
 # ------------------------------------------------------------
-echo "[${TS}] 停止 backend 以获取一致快照 ..."
-docker compose -f docker-compose.prod.yml --env-file .env.prod stop backend
 
-echo "[${TS}] 打包数据卷 ${VOLUME_NAME} ..."
-docker run --rm \
-  -v "${VOLUME_NAME}:/data:ro" \
-  -v "${BACKUP_DIR}:/backup" \
-  alpine tar czf "/backup/sekb_data_${TS}.tar.gz" -C /data .
-
-echo "[${TS}] 重启 backend ..."
-docker compose -f docker-compose.prod.yml --env-file .env.prod start backend
-
-# ------------------------------------------------------------
-# 2) Gitea 数据卷（sekb_gitea_data）—— 版本管理权威源，必须备份
-#    Gitea 未部署时静默跳过（卷不存在则 docker run 会失败，故先探测）
-# ------------------------------------------------------------
-if docker volume inspect "${GITEA_VOLUME_NAME}" >/dev/null 2>&1; then
-  echo "[${TS}] 停止 gitea 以获取一致快照 ..."
-  docker compose -f docker-compose.monitoring.yml stop gitea
-
-  echo "[${TS}] 打包数据卷 ${GITEA_VOLUME_NAME} ..."
-  docker run --rm \
-    -v "${GITEA_VOLUME_NAME}:/data:ro" \
-    -v "${BACKUP_DIR}:/backup" \
-    alpine tar czf "/backup/sekb_gitea_data_${TS}.tar.gz" -C /data .
-
-  echo "[${TS}] 重启 gitea ..."
-  docker compose -f docker-compose.monitoring.yml start gitea
-else
-  echo "[${TS}] 跳过 Gitea 备份（卷 ${GITEA_VOLUME_NAME} 不存在）"
-fi
-
-# ------------------------------------------------------------
-# 3) 清理旧备份
-#
-# 两条规则叠加：
-#   a) 超过 RETENTION_DAYS 天            → 删（原有规则）
-#   b) 同一天只留最新一份                 → 删（去重，本条是后加的）
-#
-# 为什么必须要 b)：deploy.sh 每次部署前都会调用本脚本做一次备份，**一天部署 N 次
-# 就留 N 份近乎完全相同的数据**；而天数规则永远管不住同一天的多份。
-# 2026-09-15 就是实例：当天积了 9 份 sekb_data（每份 112MB、合计约 1.0G），
-# 把 59G 磁盘挤到 24G 可用，低于 deploy.sh 的 25G 构建门禁，部署直接卡住。
-#
-# 保底：无论规则 b) 怎么去重，最新 RETENTION_MIN_KEEP 份永远保留——
-# 防止「同一天做了很多次备份」时被削到只剩 1 份（单份损坏即无备份）。
-# ------------------------------------------------------------
 prune_backups() {
     local pattern="$1" label="$2"
     local f day kept=0 removed=0 freed_kb=0 size_kb
@@ -158,6 +127,69 @@ prune_backups() {
         echo "[$(date +%Y%m%d_%H%M%S)] 清理 ${label}: 无需清理（保留 ${kept} 份）"
     fi
 }
+
+# ------------------------------------------------------------
+# --prune-only：磁盘紧张时只清理旧备份，不做备份
+#   （备份会停 backend + 打包 112MB，只为腾空间时纯属多余）
+# ------------------------------------------------------------
+if [ "${PRUNE_ONLY}" = true ]; then
+    echo "[${TS}] --prune-only：跳过备份阶段，仅清理旧备份（干跑=${PRUNE_DRY_RUN}）"
+    prune_backups 'sekb_data_*.tar.gz' 'SEKB 数据'
+    prune_backups 'sekb_gitea_data_*.tar.gz' 'Gitea 数据'
+    echo "[${TS}] 清理后备份目录占用: $(du -sh "${BACKUP_DIR}" | cut -f1)"
+    exit 0
+fi
+
+# ------------------------------------------------------------
+# 1) SEKB 应用数据卷（sekb_data）
+# ------------------------------------------------------------
+echo "[${TS}] 停止 backend 以获取一致快照 ..."
+docker compose -f docker-compose.prod.yml --env-file .env.prod stop backend
+
+echo "[${TS}] 打包数据卷 ${VOLUME_NAME} ..."
+docker run --rm \
+  -v "${VOLUME_NAME}:/data:ro" \
+  -v "${BACKUP_DIR}:/backup" \
+  alpine tar czf "/backup/sekb_data_${TS}.tar.gz" -C /data .
+
+echo "[${TS}] 重启 backend ..."
+docker compose -f docker-compose.prod.yml --env-file .env.prod start backend
+
+# ------------------------------------------------------------
+# 2) Gitea 数据卷（sekb_gitea_data）—— 版本管理权威源，必须备份
+#    Gitea 未部署时静默跳过（卷不存在则 docker run 会失败，故先探测）
+# ------------------------------------------------------------
+if docker volume inspect "${GITEA_VOLUME_NAME}" >/dev/null 2>&1; then
+  echo "[${TS}] 停止 gitea 以获取一致快照 ..."
+  docker compose -f docker-compose.monitoring.yml stop gitea
+
+  echo "[${TS}] 打包数据卷 ${GITEA_VOLUME_NAME} ..."
+  docker run --rm \
+    -v "${GITEA_VOLUME_NAME}:/data:ro" \
+    -v "${BACKUP_DIR}:/backup" \
+    alpine tar czf "/backup/sekb_gitea_data_${TS}.tar.gz" -C /data .
+
+  echo "[${TS}] 重启 gitea ..."
+  docker compose -f docker-compose.monitoring.yml start gitea
+else
+  echo "[${TS}] 跳过 Gitea 备份（卷 ${GITEA_VOLUME_NAME} 不存在）"
+fi
+
+# ------------------------------------------------------------
+# 3) 清理旧备份
+#
+# 两条规则叠加：
+#   a) 超过 RETENTION_DAYS 天            → 删（原有规则）
+#   b) 同一天只留最新一份                 → 删（去重，本条是后加的）
+#
+# 为什么必须要 b)：deploy.sh 每次部署前都会调用本脚本做一次备份，**一天部署 N 次
+# 就留 N 份近乎完全相同的数据**；而天数规则永远管不住同一天的多份。
+# 2026-09-15 就是实例：当天积了 9 份 sekb_data（每份 112MB、合计约 1.0G），
+# 把 59G 磁盘挤到 24G 可用，低于 deploy.sh 的 25G 构建门禁，部署直接卡住。
+#
+# 保底：无论规则 b) 怎么去重，最新 RETENTION_MIN_KEEP 份永远保留——
+# 防止「同一天做了很多次备份」时被削到只剩 1 份（单份损坏即无备份）。
+# ------------------------------------------------------------
 
 echo "[${TS}] 清理旧备份（>${RETENTION_DAYS} 天 + 同天去重，最少保留 ${RETENTION_MIN_KEEP} 份）..."
 prune_backups 'sekb_data_*.tar.gz' 'SEKB 数据'

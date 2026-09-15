@@ -75,8 +75,12 @@ sudo apt-get clean      # 实测 147M → 40K
 ```bash
 ls -la /opt/self-evolving-kb/backups/
 du -sh /opt/self-evolving-kb/backups
-PRUNE_DRY_RUN=1 /opt/self-evolving-kb/backup_kb.sh    # 预演：只列出将删哪些，不删
+PRUNE_DRY_RUN=1 /opt/self-evolving-kb/backup_kb.sh --prune-only   # 预演：只列出将删哪些，一份都不删
+/opt/self-evolving-kb/backup_kb.sh --prune-only                   # 真正清理（不做新备份、不停服务）
 ```
+
+> `--prune-only` 跳过备份阶段：**不会**再打包一份 112MB，也**不会**停 backend/gitea。
+> 不带它时脚本会先完整备份一次再清理（cron 与 `deploy.sh` 用的就是默认模式）。
 
 保留策略（`scripts/backup_kb.sh`）是**两条规则叠加**：
 
