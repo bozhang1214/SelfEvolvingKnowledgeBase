@@ -68,7 +68,12 @@ PREFIX="${STATUS_LINE:0:1}"
 # ⚠️ 不要用 `tr -d '+-U'` 去前缀：BSD（macOS）的 tr 会把 `+-U` 当成 ASCII **区间**
 #    （`+`=43 到 `U`=85），区间内包含全部数字，结果把 SHA 里的数字全删掉。
 #    用 sed 精确去掉首字符。
-EXPECTED_SHA="$(printf '%s' "$STATUS_LINE" | sed -E 's/^[ +U-]//' | awk '{print $1}')"
+#
+# ⚠️ 期望值必须从**父仓库索引**取（HEAD:jobcopilot 的 gitlink），不能用
+#    `git submodule status` 的输出——那报的是**已检出的** commit。
+#    用错源会出现「期望=实际 却判定不一致」的荒谬输出（且标签「SEKB 钉住的版本」是假的）：
+#    `+` 前缀已经说明两者不一致，两个数字却打印成一样，把人看懵。
+EXPECTED_SHA="$(git rev-parse "HEAD:${SUBMODULE_PATH}" 2>/dev/null | tr -d '\n' || true)"
 ACTUAL_SHA="$(git -C "$SUBMODULE_PATH" rev-parse HEAD 2>/dev/null || echo "")"
 
 if [ ! -f "$SUBMODULE_PATH/pyproject.toml" ]; then
