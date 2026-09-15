@@ -4,6 +4,7 @@ JWT 鉴权与密码哈希模块（Phase 3）
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
 import secrets
 import uuid
@@ -61,11 +62,11 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
-    """验证密码。"""
+    """验证密码（恒定时间比较，防计时侧信道）。"""
     try:
         salt, pwd_hash = stored_hash.split("$", 1)
         computed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100000)
-        return computed.hex() == pwd_hash
+        return hmac.compare_digest(computed.hex(), pwd_hash)
     except (ValueError, AttributeError):
         return False
 

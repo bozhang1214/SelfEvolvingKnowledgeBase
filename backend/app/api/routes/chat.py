@@ -547,6 +547,10 @@ async def chat_stream(
                         streamed_answer = True
                     yield _yield_event(kind, content)
             finally:
+                # 客户端断开时事件生成器被取消，但后台 _run_chat 任务仍在跑——
+                # 继续烧 LLM token 并落库，必须显式取消（否则资源泄漏）。
+                if not run_task.done():
+                    run_task.cancel()
                 reset_token_sink(sink_token)
 
             # 取结果（异常转为 error 事件）

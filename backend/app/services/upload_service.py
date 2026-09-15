@@ -111,13 +111,17 @@ def is_image_file(file_name: str) -> bool:
 
 
 def save_image_original(src_path: str, file_name: str, user_id: str) -> str:
-    """保存图片原图到持久化目录（按用户隔离），返回保存后的路径。"""
+    """保存图片原图到持久化目录（按用户隔离），返回保存后的路径。
+
+    文件名经 ``safe_rel_path`` 消毒：拒绝绝对路径与 ``..`` 穿越，否则恶意文件名
+    （如 ``../../etc/x``）会把图片写出上传目录（与文档保存口径对齐）。
+    """
     dest_dir = IMAGE_UPLOAD_DIR / user_id
     dest_dir.mkdir(parents=True, exist_ok=True)
     # 避免文件名冲突：添加时间戳前缀
     timestamp = int(time.time())
-    dest_name = f"{timestamp}_{file_name}"
-    dest_path = dest_dir / dest_name
+    safe_name = safe_rel_path(file_name)
+    dest_path = dest_dir / f"{timestamp}_{safe_name}"
     shutil.copy2(src_path, dest_path)
     logger.info("图片原图已保存", file_name=file_name, saved_path=str(dest_path))
     return str(dest_path)

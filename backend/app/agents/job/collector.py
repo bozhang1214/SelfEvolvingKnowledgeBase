@@ -39,7 +39,7 @@ class BossBrowserSource:
         self._base_url = base_url
 
     async def fetch(
-        self, keyword: str, page: int = 0, limit: int = 20
+        self, keyword: str, page: int = 0, limit: int = 20, city: str = "北京"
     ) -> list[dict[str, Any]]:
         if not keyword or not keyword.strip():
             return []
@@ -50,7 +50,7 @@ class BossBrowserSource:
                     json={
                         "site": "boss",
                         "keyword": keyword.strip(),
-                        "city": "北京",
+                        "city": city,
                         "page": page,
                         "limit": limit,
                     },
@@ -172,7 +172,13 @@ class JobCollector:
     ) -> tuple[str, list[dict[str, Any]]]:
         name = getattr(source, "name", source.__class__.__name__)
         try:
-            jobs = await source.fetch(keyword=keyword, page=page, limit=limit)
+            # BOSS 浏览器服务需要城市参数才能采对应城市（否则永远只采北京）
+            if isinstance(source, BossBrowserSource):
+                jobs = await source.fetch(
+                    keyword=keyword, page=page, limit=limit, city=self._city
+                )
+            else:
+                jobs = await source.fetch(keyword=keyword, page=page, limit=limit)
             return name, jobs or []
         except Exception as e:  # noqa: BLE001
             logger.warning("采集源失败", source=name, error=str(e)[:150])

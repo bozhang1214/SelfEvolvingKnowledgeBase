@@ -165,13 +165,22 @@ async def upload_file(
 
     file_name = file.filename or "unnamed"
 
-    # 读取文件内容并做大小校验
-    content = await file.read()
-    if len(content) > upload_service.MAX_FILE_SIZE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"文件过大：{len(content)} bytes，上限 {upload_service.MAX_FILE_SIZE_BYTES} bytes",
-        )
+    # 分块读取并校验大小：若先 `await file.read()` 全量读入再判上限，超大文件会在
+    # 校验生效前就打爆内存（DoS）。分块边读边累计，超限立即中断。
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > upload_service.MAX_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"文件过大：超过上限 {upload_service.MAX_FILE_SIZE_BYTES} bytes",
+            )
+        chunks.append(chunk)
+    content = b"".join(chunks)
     md5 = upload_service.compute_md5(content)
 
     # 落盘到临时文件（保留原扩展名，便于 FileProcessor 按扩展名选择解析器）

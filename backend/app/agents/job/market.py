@@ -273,7 +273,7 @@ async def analyze_market(
         cfg = ctx.config.job
         collector = JobCollector(
             city=city,
-            min_salary_k=cfg.default_min_salary_k,
+            min_salary_k=min_salary_k or cfg.default_min_salary_k,
             exclude_companies=cfg.exclude_companies,
         )
         result = await collector.fetch_all(keyword=keyword, page=0, limit=20)
