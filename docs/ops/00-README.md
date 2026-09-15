@@ -38,6 +38,7 @@ related: [docs/tech/00-README]
 | 12 | [12-GITEA.md](./12-GITEA.md) | 自托管 Gitea 部署与日常运维（仓库/凭据/镜像/备份恢复） | 改仓库、配镜像、恢复代码时 |
 | 13 | [13-DISK-MEMORY.md](./13-DISK-MEMORY.md) | 磁盘与内存巡检/清理手册（构建缓存、journal、PSI 判读） | 部署报磁盘不足、内存告警时 |
 | 14 | [14-CHANGE-RELEASE-POLICY.md](./14-CHANGE-RELEASE-POLICY.md) | 变更与发布操作规约（HIL 闸门/回滚/审计） | 任何生产变更前 |
+| 15 | [15-MCP-ENDPOINT.md](./15-MCP-ENDPOINT.md) | JobCopilot MCP 公网端点（云端平台接入、令牌轮换、安全边界） | 接云端平台、换令牌、排查 401/421 时 |
 
 ## 关联
 
