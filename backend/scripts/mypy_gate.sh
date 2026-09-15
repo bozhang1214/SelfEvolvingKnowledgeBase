@@ -22,10 +22,28 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASELINE_FILE="${HERE}/../mypy-baseline.txt"
 MYPY_CMD=(python -m mypy app/ --ignore-missing-imports --no-error-summary)
 
+# 前置检查：mypy 不可用时**必须失败**，不能静默放行。
+# 实测过的坑：脚本内用 `python -m mypy`，若当前环境没有 mypy（例如本机没激活
+# backend 的 venv），mypy 命令整体失败、错误行数为 0 —— 于是打印
+# 「✅ 0 ≤ 310，无新增类型错误」。**门禁看起来是绿的，其实一次都没跑。**
+if ! python -m mypy --version >/dev/null 2>&1; then
+    echo "❌ 找不到 mypy（\`python -m mypy\` 不可用）：门禁无法执行，按失败处理。"
+    echo "   请先安装/激活环境，例如： cd backend && . .venv/bin/activate  （或 pip install mypy）"
+    exit 1
+fi
 echo "==> mypy $(python -m mypy --version 2>/dev/null || true)"
 
 # 统计错误行数（error: 开头，不含 Success/Found 汇总行）
-COUNT="$("${MYPY_CMD[@]}" 2>&1 | grep -cE '^[^:]+:[0-9]+: error:')"
+MYPY_OUT="$("${MYPY_CMD[@]}" 2>&1)"
+MYPY_RC=$?
+COUNT="$(printf '%s\n' "${MYPY_OUT}" | grep -cE '^[^:]+:[0-9]+: error:')"
+
+# mypy 退出码语义：0=无错误，1=有类型错误（正常），>1=执行失败（配置/内部错误）
+if [ "${MYPY_RC}" -gt 1 ]; then
+    echo "❌ mypy 执行失败（退出码 ${MYPY_RC}）：门禁无法判定，按失败处理。"
+    printf '%s\n' "${MYPY_OUT}" | tail -10
+    exit 1
+fi
 
 if [ ! -f "${BASELINE_FILE}" ]; then
     echo "${COUNT}" > "${BASELINE_FILE}"
@@ -38,7 +56,7 @@ echo "==> mypy 错误数: ${COUNT}（基线: ${BASELINE}）"
 
 if [ "${COUNT}" -gt "${BASELINE}" ]; then
     echo "❌ mypy 错误数超过基线（${COUNT} > ${BASELINE}），存在新增类型错误，请修复。"
-    "${MYPY_CMD[@]}" 2>&1 | grep -E '^[^:]+:[0-9]+: error:' | head -30
+    printf '%s\n' "${MYPY_OUT}" | grep -E '^[^:]+:[0-9]+: error:' | head -30
     exit 1
 fi
 echo "✅ mypy 错误数 ≤ 基线（${COUNT} ≤ ${BASELINE}），无新增类型错误。"

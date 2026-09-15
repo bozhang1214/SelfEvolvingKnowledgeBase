@@ -81,14 +81,24 @@ def test_sekb_injects_its_logger_into_core() -> None:
 
 
 def test_kernel_does_not_depend_on_sekb() -> None:
-    """零循环依赖：内核源码里不得出现 SEKB 引用。"""
+    """零循环依赖：内核源码里不得 **import** SEKB 的 ``app`` 包。
+
+    注意这里是「导入」检查而不是子串检查：早先的实现只判断源码里是否出现
+    ``"app."``，于是任何含该子串的**普通变量名**都会导致误报——例如内核 HTTP
+    双传输里的 ``http_app.router`` / ``sse_app.routes``。那种误报会让人误以为
+    内核反向依赖了 SEKB，实际只是命名巧合。改用正则匹配真正的导入语句。
+    """
+    import re
+
     import jobcopilot
 
     pkg = Path(jobcopilot.__file__).resolve().parent
+    # 匹配 `from app...` / `import app...`（含缩进，覆盖函数内延迟导入）
+    pattern = re.compile(r"^[ \t]*(?:from|import)[ \t]+app(?:[.\s]|$)", re.MULTILINE)
     offenders = [
         str(p.relative_to(pkg))
         for p in pkg.rglob("*.py")
-        if "app." in p.read_text(encoding="utf-8")
+        if pattern.search(p.read_text(encoding="utf-8"))
     ]
     assert not offenders, f"内核反向依赖 SEKB：{offenders}"
 
