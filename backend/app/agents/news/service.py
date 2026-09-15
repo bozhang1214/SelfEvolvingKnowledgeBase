@@ -219,6 +219,20 @@ class NewsAgent:
             "report": report,
         }
 
+    def read_status(self) -> dict | None:
+        """读取最近一次定时任务的执行状态（供接口/前端展示「今天为什么没生成」）。"""
+        import json
+        from pathlib import Path
+
+        path = Path(self._config.report_dir) / "last_status.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning("资讯任务状态文件损坏，忽略")
+            return None
+
     def list_reports(self) -> list[dict]:
         """列出历史日报。"""
         return self._storage.list_reports()

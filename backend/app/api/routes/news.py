@@ -72,6 +72,17 @@ async def get_report(
     return agent.read_report(reports[0]["date"])
 
 
+@router.get("/status")
+async def news_status(user_id: str = Depends(get_current_user)):
+    """最近一次定时任务（日报/周报/月报）的执行状态。
+
+    为什么要这个接口：定时任务失败以前只在服务端日志里留一行，用户看不到，
+    只能靠「咦今天怎么没日报」发现。现在前端可以直接展示失败原因。
+    """
+    agent = _require_news_agent()
+    return {"status": agent.read_status()}
+
+
 @router.post("/{report_type}")
 async def generate_periodic(
     report_type: str,
