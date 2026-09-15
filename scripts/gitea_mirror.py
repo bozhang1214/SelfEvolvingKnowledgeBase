@@ -107,14 +107,36 @@ def cmd_status() -> int:
     return 1 if bad else 0
 
 
-def cmd_sync() -> int:
-    """触发推送镜像同步（用正确的端点），等待后打印结果。"""
+def _sync_once(gitea_name: str) -> bool:
+    """触发一次同步并返回是否已无错误。"""
+    api(f"/repos/{GITEA_OWNER}/{gitea_name}/push_mirrors-sync", method="POST")
+    mirrors = api(f"/repos/{GITEA_OWNER}/{gitea_name}/push_mirrors")
+    if not isinstance(mirrors, list) or not mirrors:
+        return False
+    err = (mirrors[0].get("last_error") or "").strip()
+    return not err
+
+
+def cmd_sync(retries: int = 3) -> int:
+    """触发推送镜像同步（带重试），等待后打印结果。
+
+    ⚠️ 为什么需要重试：实测会偶发
+    ``PushRejected ... cannot lock ref 'refs/heads/main'``——这是**并发同步的锁竞争**
+    （手动触发恰好撞上 ``sync_on_commit`` 或定时同步）。网络与配置都没问题，
+    重试一次即恢复；把它当成真错误去改配置，反而会把镜像地址改坏。
+    """
     for gitea_name in REPO_MAP:
-        res = api(f"/repos/{GITEA_OWNER}/{gitea_name}/push_mirrors-sync", method="POST")
-        mark = "✅ 已触发" if "__http_error__" not in res else f"❌ {res}"
-        print(f"  {gitea_name:22s} {mark}")
+        print(f"  {gitea_name:22s} 触发中 ...")
     print("  等待 35s 让 Gitea 完成推送 ...")
     time.sleep(35)
+
+    for i in range(1, retries + 1):
+        pending = [r for r in REPO_MAP if not _sync_once(r)]
+        if not pending:
+            print(f"  ✅ 全部同步成功（第 {i} 次尝试）")
+            break
+        print(f"  第 {i} 次仍有未完成: {pending}（偶发锁竞争，重试）")
+        time.sleep(15)
     return cmd_status()
 
 
