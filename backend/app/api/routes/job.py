@@ -240,7 +240,13 @@ async def batch_analyze(body: BatchAnalyzeReq, user_id: str = Depends(get_curren
         from app.agents.job.archive import save_report
 
         rep = result["report"]
-        save_report(user_id, "batch", f"批量分析 · {rep['keyword']}（{rep['job_count']} 个职位）", rep)
+        save_report(
+            user_id,
+            "batch",
+            f"批量分析 · {rep['keyword']}（{rep['job_count']} 个职位）",
+            rep,
+            search_id=result.get("search_id", ""),
+        )
         return result
     except Exception as e:
         logger.error("批量分析失败", error=str(e), exc_info=True)
@@ -451,12 +457,31 @@ async def get_archived_report(report_id: str, user_id: str = Depends(get_current
 
 @router.delete("/reports/{report_id}")
 async def delete_archived_report(report_id: str, user_id: str = Depends(get_current_user)):
-    """删除一份历史存档报告。"""
-    _require_job_agent()
-    from app.agents.job.archive import delete_report
+    """删除一份历史存档报告，并**同步清理其对应的缓存报告**。
 
-    deleted = delete_report(user_id, report_id)
-    return {"deleted": deleted}
+    同步后该搜索回到「未做过批量分析」状态（历史搜索条目保留，可重新分析恢复）。
+    归属通过存档记录的 ``search_id`` 定位；旧数据没有则按关键词回退匹配。
+    """
+    _require_job_agent()
+    from app.agents.job import job_cache as jc
+    from app.agents.job.archive import delete_report
+    from app.agents.job.market import delete_report_by_search_id
+
+    meta = delete_report(user_id, report_id)
+    if meta is None:
+        return {"deleted": False, "search_id": ""}
+
+    sid = str(meta.get("search_id") or "")
+    if not sid:
+        keyword = str(meta.get("keyword") or "")
+        if keyword:
+            sid = next(
+                (s["search_id"] for s in jc.list_searches(user_id) if s["keyword"] == keyword),
+                "",
+            )
+    if sid:
+        delete_report_by_search_id(sid)
+    return {"deleted": True, "search_id": sid}
 
 
 # ============================================================

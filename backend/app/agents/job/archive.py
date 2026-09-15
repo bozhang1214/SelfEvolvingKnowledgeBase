@@ -12,6 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 _DIR = Path("data/job_reports")
 _INDEX_FILE = _DIR / "index.json"
 _MAX_REPORTS = 200  # 每个用户最多保留 200 条
@@ -130,14 +134,31 @@ def _save_index(data: list[dict[str, Any]]) -> None:
     _INDEX_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def save_report(user_id: str, type_: str, title: str, report: dict[str, Any]) -> str:
-    """把报告存为 Markdown 文件，返回报告 id。"""
+def save_report(
+    user_id: str,
+    type_: str,
+    title: str,
+    report: dict[str, Any],
+    search_id: str = "",
+) -> str:
+    """把报告存为 Markdown 文件，返回报告 id。
+
+    **批量报告的保留策略**：同一「用户 + 关键词 + 城市」只保留**最新一份**——
+    本次写入后，同组更旧的批量报告（含 .md/.json）会被删除，避免历史报告无限堆积。
+    （单职位分析报告不参与去重，每次保留。）
+
+    Args:
+        search_id: 该批量报告归属的搜索 id（用于「删除报告时同步清缓存报告」）
+    """
     _DIR.mkdir(parents=True, exist_ok=True)  # 先建目录，避免 .md 写入时目录不存在
     rid = uuid.uuid4().hex[:12]
     md = report_to_markdown(type_, title, report)
     (_DIR / f"{rid}.md").write_text(md, encoding="utf-8")
     # 额外存结构化 JSON，供前端用与批量/单职位一致的语义化布局渲染
     (_DIR / f"{rid}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    keyword = str(report.get("keyword") or "") if type_ == "batch" else ""
+    city = str(report.get("city") or "") if type_ == "batch" else ""
 
     index = _load_index()
     index.insert(0, {
@@ -146,9 +167,94 @@ def save_report(user_id: str, type_: str, title: str, report: dict[str, Any]) ->
         "type": type_,
         "title": title,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "search_id": search_id,
+        "keyword": keyword,
+        "city": city,
     })
+
+    if type_ == "batch":
+        index, removed = _dedupe_batch(index, user_id, keyword, city, keep_id=rid)
+        for old_id in removed:
+            _remove_files(old_id)
+        if removed:
+            logger.info(
+                "批量报告去重", user_id=user_id, keyword=keyword, city=city, removed=len(removed)
+            )
+
     _save_index(index[:_MAX_REPORTS])
     return rid
+
+
+def _dedupe_batch(
+    index: list[dict[str, Any]],
+    user_id: str,
+    keyword: str,
+    city: str,
+    keep_id: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """同一「用户 + 关键词 + 城市」的批量报告只保留 keep_id。
+
+    Returns:
+        ``(新索引, 被移除的报告 id 列表)``
+    """
+    kept: list[dict[str, Any]] = []
+    removed: list[str] = []
+    for x in index:
+        same_group = (
+            x.get("type") == "batch"
+            and x.get("user_id") == user_id
+            and x.get("keyword") == keyword
+            and x.get("city") == city
+        )
+        if same_group and x.get("id") != keep_id:
+            removed.append(str(x.get("id")))
+            continue
+        kept.append(x)
+    return kept, removed
+
+
+def _remove_files(report_id: str) -> None:
+    """删除一份报告的两个落盘文件（.md / .json）。"""
+    (_DIR / f"{report_id}.md").unlink(missing_ok=True)
+    (_DIR / f"{report_id}.json").unlink(missing_ok=True)
+
+
+def dedupe_batch_reports(user_id: str) -> dict[str, Any]:
+    """对已有历史做一次性清理：同「关键词 + 城市」的批量报告只留最新一份。
+
+    不依赖索引顺序——显式按 ``created_at`` 取每组最新（索引被外部改动过也安全）。
+
+    Returns:
+        ``{"removed": N, "kept": M, "groups": {组: 保留数}}``
+    """
+    index = _load_index()
+
+    newest: dict[tuple[str, str], tuple[str, str]] = {}
+    for x in index:
+        if x.get("type") != "batch" or x.get("user_id") != user_id:
+            continue
+        gk = (str(x.get("keyword") or ""), str(x.get("city") or ""))
+        created = str(x.get("created_at") or "")
+        if gk not in newest or created > newest[gk][0]:
+            newest[gk] = (created, str(x.get("id")))
+
+    keep_ids = {rid for _created, rid in newest.values()}
+    kept: list[dict[str, Any]] = []
+    removed: list[str] = []
+    for x in index:
+        is_ours_batch = x.get("type") == "batch" and x.get("user_id") == user_id
+        if is_ours_batch and str(x.get("id")) not in keep_ids:
+            removed.append(str(x.get("id")))
+            continue
+        kept.append(x)
+
+    for rid in removed:
+        _remove_files(rid)
+    if removed:
+        _save_index(kept[:_MAX_REPORTS])
+
+    groups = {f"{gk[0]}|{gk[1]}": 1 for gk in newest}
+    return {"removed": len(removed), "kept": len(kept), "groups": groups}
 
 
 def list_reports(user_id: str) -> list[dict[str, Any]]:
@@ -159,6 +265,7 @@ def list_reports(user_id: str) -> list[dict[str, Any]]:
             "type": x["type"],
             "title": x["title"],
             "created_at": x.get("created_at", ""),
+            "search_id": x.get("search_id", ""),
         }
         for x in _load_index()
         if x.get("user_id") == user_id
@@ -195,13 +302,29 @@ def get_report(user_id: str, report_id: str) -> dict[str, Any] | None:
     }
 
 
-def delete_report(user_id: str, report_id: str) -> bool:
-    """删除某用户的一份报告，返回是否真的删了。"""
+def delete_report(user_id: str, report_id: str) -> dict[str, Any] | None:
+    """删除某用户的一份报告。
+
+    返回被删除报告的元信息（含 ``search_id``，供调用方同步清理缓存报告）；
+    报告不存在时返回 None。
+    """
     index = _load_index()
-    new = [x for x in index if not (x.get("id") == report_id and x.get("user_id") == user_id)]
-    if len(new) == len(index):
-        return False
-    _save_index(new)
-    (_DIR / f"{report_id}.md").unlink(missing_ok=True)
-    (_DIR / f"{report_id}.json").unlink(missing_ok=True)
-    return True
+    target = next(
+        (x for x in index if x.get("id") == report_id and x.get("user_id") == user_id),
+        None,
+    )
+    if target is None:
+        return None
+    # 旧索引可能没记 keyword/city：删文件前从报告 JSON 补齐，供上层同步清缓存报告
+    if not target.get("keyword"):
+        json_path = _DIR / f"{report_id}.json"
+        if json_path.exists():
+            try:
+                rep = json.loads(json_path.read_text(encoding="utf-8"))
+                target["keyword"] = rep.get("keyword") or ""
+                target["city"] = rep.get("city") or ""
+            except (json.JSONDecodeError, OSError):
+                pass
+    _save_index([x for x in index if not (x.get("id") == report_id and x.get("user_id") == user_id)])
+    _remove_files(report_id)
+    return target

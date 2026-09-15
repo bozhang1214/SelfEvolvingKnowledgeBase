@@ -266,7 +266,7 @@ async def analyze_market(
     if not from_provided:
         cached = get_cached_report(user_id, sid if search_id else None)
         if cached is not None:
-            return {"cached": True, "report": cached}
+            return {"cached": True, "report": cached, "search_id": sid}
 
         from app.agents.job.collector import JobCollector
 
@@ -290,4 +290,4 @@ async def analyze_market(
         from_provided=from_provided,
         search_id=sid,
     )
-    return {"cached": False, "report": report}
+    return {"cached": False, "report": report, "search_id": sid}

@@ -73,8 +73,6 @@ const Job: React.FC = () => {
   const [fetchSalary, setFetchSalary] = useState('不限');
   const [fetching, setFetching] = useState(false);
   const [fetchedJobs, setFetchedJobs] = useState<FetchedJob[]>([]);
-  // 复选框选中的职位（多选批量分析）
-  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   // 收集列表表格分页（受控）
   const [tablePage, setTablePage] = useState(1);
   const [tablePageSize, setTablePageSize] = useState(20);
@@ -194,7 +192,6 @@ const Job: React.FC = () => {
     setFetchSalary(
       s.min_salary_k > 0 && SALARY_OPTIONS.includes(`${s.min_salary_k}K+`) ? `${s.min_salary_k}K+` : '不限',
     );
-    setSelectedRowKeys([]);
     setMarketReport(null); // 重置会话内报告，由「批量分析」三态重新判断
     setCachedMarketReport(null);
 
@@ -522,24 +519,11 @@ const Job: React.FC = () => {
     const key = jobKey(job);
     const newJobs = fetchedJobs.filter((j) => jobKey(j) !== key);
     setFetchedJobs(newJobs);
-    setSelectedRowKeys((prev) => prev.filter((k) => String(k) !== key));
     // 职位集合变了：会话内报告不再可信，清掉交由「批量分析」三态判断（缓存报告若仍匹配会重新展示）
     setMarketReport(null);
     await syncJobCache(newJobs);
     await loadSearches(); // 刷新「报告是否与列表一致」状态
     message.success('已删除该职位');
-  };
-
-  // 是否已全选全部职位（跨页全选：不受分页「每页最多 100 条」限制）
-  const allSelected = fetchedJobs.length > 0 && selectedRowKeys.length >= fetchedJobs.length;
-
-  /** 全选全部职位 / 取消全选（一键跨页全选，避免表头全选只能选当前页）。 */
-  const handleToggleSelectAll = () => {
-    if (allSelected) {
-      setSelectedRowKeys([]);
-    } else {
-      setSelectedRowKeys(fetchedJobs.map(jobKey));
-    }
   };
 
   const handleAnalyze = async () => {
@@ -601,71 +585,6 @@ const Job: React.FC = () => {
 
   return (
     <div style={{ padding: 24, overflow: 'auto', background: '#fff', minHeight: '100%' }}>
-      {/* 搜索历史：Tabs 上方的「当前搜索」上下文（选中后各 tab 都围绕它展示） */}
-      <div style={{ maxWidth: 1080, margin: '0 auto 12px auto' }}>
-        <Card
-          size="small"
-          title={
-            <Space>
-              <HistoryOutlined />
-              <Text strong>搜索历史</Text>
-              <Text type="secondary" style={{ fontWeight: 400, fontSize: 12 }}>
-                选中即切换「当前搜索」：职位收集展示其职位列表，批量分析展示其报告
-              </Text>
-            </Space>
-          }
-          extra={
-            <Button size="small" icon={<ReloadOutlined />} onClick={() => loadSearches()}>
-              刷新
-            </Button>
-          }
-        >
-          <Spin spinning={searchesLoading}>
-            {searches.length === 0 ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="暂无搜索历史，先在「职位收集」输入关键词采集职位"
-              />
-            ) : (
-              <Space wrap size={[8, 8]}>
-                {searches.map((s) => {
-                  const active = s.search_id === currentSearchId;
-                  return (
-                    <Tag
-                      key={s.search_id}
-                      color={active ? 'blue' : undefined}
-                      onClick={() => applySearch(s)}
-                      style={{
-                        cursor: 'pointer',
-                        padding: '4px 10px',
-                        opacity: s.expired ? 0.6 : 1,
-                        border: active ? '1px solid #1677ff' : '1px solid #f0f0f0',
-                      }}
-                    >
-                      <Text strong>{s.keyword || '未命名'}</Text>
-                      <Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>
-                        {s.count} 个
-                      </Text>
-                      {s.expired ? (
-                        <Tag color="default" style={{ marginLeft: 6 }}>
-                          已过期
-                        </Tag>
-                      ) : s.has_report ? (
-                        <Tag color={s.report_matched ? 'green' : 'orange'} style={{ marginLeft: 6 }}>
-                          {s.report_matched ? '有报告' : '报告待更新'}
-                        </Tag>
-                      ) : (
-                        <Tag style={{ marginLeft: 6 }}>未分析</Tag>
-                      )}
-                    </Tag>
-                  );
-                })}
-              </Space>
-            )}
-          </Spin>
-        </Card>
-      </div>
-
       <Tabs
         activeKey={analysisMode}
         onChange={(k) => setAnalysisMode(k as 'collect' | 'batch' | 'single' | 'history' | 'plan')}
@@ -676,6 +595,71 @@ const Job: React.FC = () => {
             label: <span><SearchOutlined /> 职位收集</span>,
             children: (
               <>
+                {/* 搜索历史：属于「职位收集」的父选项——选中即切换「当前搜索」上下文 */}
+                <div style={{ maxWidth: 1080, margin: '0 auto 12px auto' }}>
+                  <Card
+                    size="small"
+                    title={
+                      <Space>
+                        <HistoryOutlined />
+                        <Text strong>搜索历史</Text>
+                        <Text type="secondary" style={{ fontWeight: 400, fontSize: 12 }}>
+                          选中即切换「当前搜索」：职位收集展示其职位列表，批量分析展示其报告
+                        </Text>
+                      </Space>
+                    }
+                    extra={
+                      <Button size="small" icon={<ReloadOutlined />} onClick={() => loadSearches()}>
+                        刷新
+                      </Button>
+                    }
+                  >
+                    <Spin spinning={searchesLoading}>
+                      {searches.length === 0 ? (
+                        <Empty
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                          description="暂无搜索历史，先在「职位收集」输入关键词采集职位"
+                        />
+                      ) : (
+                        <Space wrap size={[8, 8]}>
+                          {searches.map((s) => {
+                            const active = s.search_id === currentSearchId;
+                            return (
+                              <Tag
+                                key={s.search_id}
+                                color={active ? 'blue' : undefined}
+                                onClick={() => applySearch(s)}
+                                style={{
+                                  cursor: 'pointer',
+                                  padding: '4px 10px',
+                                  opacity: s.expired ? 0.6 : 1,
+                                  border: active ? '1px solid #1677ff' : '1px solid #f0f0f0',
+                                }}
+                              >
+                                <Text strong>{s.keyword || '未命名'}</Text>
+                                <Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>
+                                  {s.count} 个
+                                </Text>
+                                {s.expired ? (
+                                  <Tag color="default" style={{ marginLeft: 6 }}>
+                                    已过期
+                                  </Tag>
+                                ) : s.has_report ? (
+                                  <Tag color={s.report_matched ? 'green' : 'orange'} style={{ marginLeft: 6 }}>
+                                    {s.report_matched ? '有报告' : '报告待更新'}
+                                  </Tag>
+                                ) : (
+                                  <Tag style={{ marginLeft: 6 }}>未分析</Tag>
+                                )}
+                              </Tag>
+                            );
+                          })}
+                        </Space>
+                      )}
+                    </Spin>
+                  </Card>
+                </div>
+
                 <Card
                   title={
                     <Space>
@@ -754,26 +738,18 @@ const Job: React.FC = () => {
         {fetchedJobs.length > 0 && (
           <>
             <Space style={{ marginTop: 12, width: '100%', justifyContent: 'space-between' }}>
-              <Space size={12}>
-                <Text type="secondary" style={{ fontSize: 12 }}>共 {fetchedJobs.length} 条职位</Text>
-                <Button size="small" type="link" onClick={handleToggleSelectAll}>
-                  {allSelected ? `取消全选（已选 ${fetchedJobs.length} 条）` : `全选全部 ${fetchedJobs.length} 条`}
-                </Button>
-              </Space>
+              <Text type="secondary" style={{ fontSize: 12 }}>共 {fetchedJobs.length} 条职位</Text>
               <Button
                 type="primary"
                 size="small"
                 icon={<BarChartOutlined />}
-                disabled={selectedRowKeys.length < 1}
                 loading={batchAnalyzing}
                 onClick={() => {
-                  const keys = selectedRowKeys.map(String);
-                  const selected = fetchedJobs.filter((j) => keys.includes(j.job_id || `${j.title}-${j.company}`));
                   setAnalysisMode('batch');
-                  handleBatchAnalyze(false, selected);
+                  handleBatchAnalyze(false);
                 }}
               >
-                前往批量分析{selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ''}
+                对全部 {fetchedJobs.length} 条做批量分析
               </Button>
             </Space>
             <Table
@@ -781,13 +757,6 @@ const Job: React.FC = () => {
               style={{ marginTop: 8 }}
               rowKey={(j) => j.job_id || `${j.title}-${j.company}`}
               dataSource={fetchedJobs.slice((tablePage - 1) * tablePageSize, tablePage * tablePageSize)}
-              rowSelection={{
-                selectedRowKeys,
-                onChange: setSelectedRowKeys,
-                // 跨页保留选中：否则翻页时 antd 会清掉不在当前页的选中项，
-                // 导致「全选全部」或逐页勾选在翻页后丢失
-                preserveSelectedRowKeys: true,
-              }}
               pagination={false}
               columns={[
                 {
@@ -867,6 +836,23 @@ const Job: React.FC = () => {
             label: <span><BarChartOutlined /> 批量分析</span>,
             children: (
               <>
+                {/* 当前搜索：批量分析围绕它展示；可一键回「职位收集」切换 */}
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ maxWidth: 1080, margin: '0 auto 12px' }}
+                  message={
+                    <Space wrap>
+                      <Text>当前搜索：</Text>
+                      <Text strong>{currentSearch?.keyword || '（未选择）'}</Text>
+                      {currentSearch && <Tag color="blue">{currentSearch.count} 个职位</Tag>}
+                      {currentSearch?.expired && <Tag color="default">已过期</Tag>}
+                      <Button size="small" type="link" onClick={() => setAnalysisMode('collect')}>
+                        切换搜索
+                      </Button>
+                    </Space>
+                  }
+                />
                 {/* 批量市场分析 */}
                 <Card
                   title={
