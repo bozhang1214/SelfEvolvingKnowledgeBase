@@ -136,9 +136,23 @@ class DailyReportGenerator:
         categories: list[Any] | None = None,
         period_type: str = "daily",
         min_items_per_category: int = 10,
+        time_span_override: str | None = None,
     ) -> dict:
-        """按给定周期生成结构化报告（头条 + 逐类 + 综合分析），日报/周报/月报共用。"""
+        """按给定周期生成结构化报告（头条 + 逐类 + 综合分析），日报/周报/月报共用。
+
+        Args:
+            time_span_override: 真实的日期区间文案（如 ``2026-09-07 ~ 2026-09-13``）。
+                给了就用它替换固定的「过去一周 / 本周」措辞——周报按自然周采集时，
+                固定措辞会让模型误以为在写本周。
+        """
         self._ctx = _PERIOD_CONTEXTS.get(period_type, _PERIOD_CONTEXTS["daily"])
+        if time_span_override:
+            self._ctx = {
+                **self._ctx,
+                "time_span": time_span_override,
+                # 有了明确区间，就把「本周」这类相对措辞换成中性的「本期」
+                "period_label": "本期",
+            }
         cats = categories or []
 
         # 1. 分类（批量 LLM 语义分类，单归属；失败时回退关键词）

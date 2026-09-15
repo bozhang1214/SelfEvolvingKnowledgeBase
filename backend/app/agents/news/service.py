@@ -105,9 +105,68 @@ class NewsAgent:
             except OSError:
                 pass
 
+    @staticmethod
+    def _span_text(window: tuple[datetime, datetime] | None) -> str | None:
+        """把 UTC 区间渲染成「2026-09-07 ~ 2026-09-13」这样的中文提示词用语。"""
+        if window is None:
+            return None
+        since, until = window
+        return f"{since:%Y-%m-%d} ~ {until - timedelta(days=1):%Y-%m-%d}"
+
+    @staticmethod
+    def _period_window(
+        report_type: str, label: str, tz_name: str
+    ) -> tuple[datetime, datetime] | None:
+        """按 period 标签算出**自然周期**的起止时间（本地时区，返回 UTC，左闭右开）。
+
+        返回的是**本地时区**的 aware datetime（自然周/月属本地日历概念）。
+        用它生成周报时（例如周二生成）会把**本周**（周二往回 7 天）算进去，而期号却写
+        「上周一」—— 标签与内容不一致。这里改为按标签算自然周期：
+
+        - ``weekly``：label = 上周一 ``YYYY-MM-DD`` → ``[该日 00:00, +7 天)``
+        - ``monthly``：label = ``YYYY-MM`` → ``[该月 1 日 00:00, 次月 1 日)``
+
+        Args:
+            report_type: ``weekly`` / ``monthly``（其他返回 ``None``）。
+            label: 周期标签。
+            tz_name: 本地时区名（如 ``Asia/Shanghai``）。
+
+        Returns:
+            ``(since, until)``（本地时区）；无法解析时返回 ``None``（调用方回退小时窗口）。
+        """
+        from zoneinfo import ZoneInfo
+
+        try:
+            tz = ZoneInfo(tz_name)
+            if report_type == "weekly":
+                start = datetime.strptime(label, "%Y-%m-%d").replace(tzinfo=tz)
+                end = start + timedelta(days=7)
+            elif report_type == "monthly":
+                year, month = (int(x) for x in label.split("-"))
+                start = datetime(year, month, 1, tzinfo=tz)
+                end = datetime(year + (month // 12), (month % 12) + 1, 1, tzinfo=tz)
+            else:
+                return None
+        except (ValueError, KeyError):
+            logger.warning(f"周期标签无法解析，回退到小时窗口 type={report_type} label={label}")
+            return None
+        # 返回**本地时区**的 aware datetime：自然周/月是本地日历概念，直接渲染才对
+        # （曾经转成 UTC 再减一天渲染，结果日期差了一天）。与条目的 UTC 时间比较仍
+        # 按瞬时进行，因此过滤器不需要改动。
+        return start, end
+
     async def _generate_report(self, report_type: str, period: str | None = None) -> dict:
         """日报/周报/月报共用流水线：采集 → 按时间窗口筛选 → 正文抽取 → 逐类生成 → 存储。"""
-        # 1. 时间窗口（小时）
+        # 1. 周期标签与时间窗口
+        #    ⚠️ 必须先算标签：周报/月报的窗口要按 period 算**自然周期**，
+        #    而不是「生成时刻往前 N 小时」（否则标签写上周、内容却含本周）。
+        if report_type == "daily":
+            period_label = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            window = None
+        else:
+            period_label = self._period_label(report_type, period)
+            window = self._period_window(report_type, period_label, self._config.timezone)
+
         window_hours = self._WINDOW_HOURS[report_type]
         if window_hours is None:
             window_hours = self._config.time_window_hours
@@ -121,6 +180,8 @@ class NewsAgent:
             keywords=self._keywords,
             exclude_keywords=self._exclude_keywords,
             time_window_hours=window_hours,
+            since=window[0] if window else None,
+            until=window[1] if window else None,
         )
         filtered = flt.filter(items)
 
@@ -134,15 +195,14 @@ class NewsAgent:
             self._config.categories,
             period_type=report_type,
             min_items_per_category=getattr(self._config, "min_items_per_category", 10),
+            # 把**真实日期区间**交给提示词，避免模型按「本周/过去一周」的口径写
+            time_span_override=self._span_text(window),
         )
 
-        # 5. 存储
+        # 5. 存储（period_label 已在第 1 步算好）
         if report_type == "daily":
-            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            path = self._storage.save_daily(day, report)
-            period_label = day
+            path = self._storage.save_daily(period_label, report)
         else:
-            period_label = self._period_label(report_type, period)
             path = self._storage.save_periodic(report_type, period_label, report)
 
         logger.info(
