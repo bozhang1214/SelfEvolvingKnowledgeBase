@@ -44,4 +44,4 @@ related: [docs/tech/00-README]
 
 - 技术文档：`docs/tech/`（00-README 地图）；可观测技术口径：`docs/tech/09-OBSERVABILITY.md`。
 - 活文档：`docs/CHANGELOG.md`（变更记录）、`docs/BACKLOG.md`（待办）。
-- 审查存档：`docs/codeReview/`（历史审查报告，仅追溯）。
+- 审查存档：`docs/codeReview/未修复问题跟踪.md`（审查问题跟踪表；原始报告已归档，git 历史可查）。

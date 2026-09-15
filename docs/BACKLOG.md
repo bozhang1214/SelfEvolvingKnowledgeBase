@@ -66,7 +66,7 @@
 
 ## 四、代码审计跟踪（2026-09 全域评审）
 
-> 来源：`docs/codeReview/2026-09-全域评审/`（01 工程评审、02 文档工程、03 路线图、04 第二轮复核、**Qoder 全项目深度审查**）。
+> 来源：`docs/codeReview/未修复问题跟踪.md` 第五章「2026-09-08 全域评审问题」（已从 01 工程评审 / 02 文档工程 / 03 路线图 / 04 第二轮复核 / **Qoder 全项目深度审查**合并归档，原始报告见 git 历史）。
 > **编号冲突说明**：Qoder 报告用 SEC/CON/QLT/OPS/TST 编号，与 01/04 报告的 SEC/AGENT/RAG/OBS/PERF/DATA/FE/OPS/DOC/R2 **不同义**（如 Qoder 的 SEC-01=JWT 弱密钥，而 01 报告的 SEC-01=会话越权）。以下一律按「**主题**」合并登记，不再引用原始编号。
 
 **已处理（截至 2026-09-08）**：
@@ -101,7 +101,7 @@
 | P2（本季度） | 运维/架构/文档 | 灰度链路、编排层合并、SSRF/cookie/采集合规、暴露面收敛（监控栈/browser-service/webhook）、密钥长尾加固（argon2id/备份排除.env/分享过期统一）、**文档工程剩余（C1 主README/C3 子系统成篇/C5 部署手册合并/C9-C10 清单脚本化与守卫）** |
 
 > 注：`--workers 1` 已一并缓解 Qoder 报告的 CON-01（多进程共享 Chroma）、CON-03（scheduler 重复）、OPS-01（Prometheus 多进程指标失真）等「多 worker 架构」类问题；若未来恢复多 worker，需先外置存储/Redis + Chroma client-server。
-> 详细条目、证据与验收标准见 `docs/codeReview/2026-09-全域评审/` 各报告；批次顺序以 03 号路线图为准。
+> 详细条目、证据与验收标准见 `docs/codeReview/未修复问题跟踪.md` 第五章；批次顺序以 03 号路线图为准（原报告已归档，git 历史可查）。
 
 ### 重构专项（REFACTORING v1.0，2026-09-09 已确认 → WP 执行映射）
 
