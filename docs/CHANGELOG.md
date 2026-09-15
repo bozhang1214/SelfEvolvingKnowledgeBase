@@ -49,6 +49,30 @@ DSH headless 三项 DoD 实测通过；验证后已把 headless profile 补丁�
 
 ---
 
+## 2026-09-15（招聘分析：搜索历史 + 报告按搜索隔离 + 过期清理）
+
+- **背景**：报告缓存原为「每用户一份」（`{user_id: report}`），导致「选中某次历史搜索看它的报告」无法实现；且删除职位后报告与列表不一致，刷新后批量分析 tab **静默不展示**（用户看不到原因）。
+- **后端 · 搜索标识**：新增 `search_id = md5(user_id|keyword|city|min_salary_k)[:16]`（URL 安全、不含中文的稳定唯一标识，不面向用户展示）。
+- **后端 · 职位缓存**（`job_cache.py`）：条目增加 `search_id` / `count`；新增
+  - `list_searches(user_id)`：搜索历史列表（元数据 + `expired`/`has_jobs`，**不含 jobs**）+ **惰性清理**（超 14 天清空 `jobs`，但保留条目与 `count`，供前端打「已过期」角标）；
+  - `get_by_search_id` / `expired_search_ids` / `make_search_id` / `parse_key`。
+- **后端 · 报告缓存 v2**（`market.py`）：改为按 `search_id` 存（`{<sid>: {user_id, keyword, city, min_salary_k, report}}`），实现**一次搜索一份报告**；兼容读取 v1 旧格式（保留在 `__legacy` 槽，保存时不丢）；新增 `save_report_cache` / `delete_report_by_search_id`；`delete_report` 支持按 `search_id` 或整用户删除。
+- **后端 · API**：
+  - 新增 `GET /job/searches`（搜索历史，**三个状态标签由后端计算**：`expired` / `has_report` / `report_matched`，并在此时清理过期条目的报告）；
+  - 新增 `GET /job/cache/search/{search_id}`（某次搜索的职位列表）；
+  - `GET /job/batch-analyze/cached?search_id=` 按搜索取报告（不传 = 最新一份，兼容旧行为）；
+  - `POST /job/batch-analyze` 支持 `search_id` / `min_salary_k`；`DELETE /job/batch-analyze?search_id=` 支持只删该搜索的报告。
+- **前端**：
+  - **Tabs 上方新增「搜索历史」区**（作为「当前搜索」全局上下文）：展示 `关键词 · 职位数 · 状态角标`（已过期 / 有报告 / 报告待更新 / 未分析）；
+  - 选中历史搜索 → 回填筛选条件 + 载入该搜索的职位列表与报告；
+  - **批量分析三态**：① 报告与列表严格一致 → 正常展示；② 有报告但不一致 → 「报告已过期」+ 重新分析按钮；③ 无报告 → 「当前职位列表还未做过批量分析」+ 马上分析按钮；④ 过期搜索 → 「该搜索已过期」提示；
+  - 删除职位后刷新搜索历史并清空会话内报告（交由三态判断）；新采集自动成为「当前搜索」。
+- **数据迁移**：一次性回填——把历史存档里各关键词最新一份批量报告按 `search_id` 写入新报告缓存。线上 5 个搜索（第一层·解决方案售前 208 / 技术型产品 52 / 解决方案·售前 47 / Agent 88 / Agent开发 74）**全部回填成功**，`has_report` 与 `report_matched` 均为 True。
+- **测试**：`test_job_cache.py` 新增 18 例（search_id / 搜索历史 / 惰性清理 / 按 id 取 / 过期 id）；新增 `test_market_report_cache.py` 11 例（v2 读写 / 最新一份 / TTL / v1 兼容 / 删除）。
+- 验证：后端 pytest **763 passed**、ruff 全绿、mypy 292≤310；前端 tsc 0 错、eslint 0 错误、vitest 66 passed；已部署（版本 `80a0f46`）并线上验证三个接口 + 一致性判定四种情形（完整一致 True / 少一个 False / 多一个 False / 无报告 False）。
+
+---
+
 ## 2026-09-15（JobCopilot P4：SEKB 分析链路切到 MCP）
 
 内核查升到 `6c5f7cd`。**这是第一个动到 SEKB 生产分析链路的阶段。**
