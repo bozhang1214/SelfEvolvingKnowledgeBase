@@ -250,6 +250,65 @@ services:
         limits:
           memory: 512M
 
+# ============ JobCopilot MCP Server（HTTP/SSE，供云端平台调用）============
+  # 为什么需要单独一个容器：SEKB 用的内核 MCP Server 是 backend 容器内的 **stdio 子进程**
+  # （`jobcopilot-mcp`），外部访问不到；而云端平台（扣子/百炼/千帆/Dify/HiAgent）只认
+  # HTTP。这里用同一套内核再开一个 HTTP 入口。
+  #
+  # 复用 backend 镜像（内核已装在里面）→ **不新增镜像、不额外构建、不占新磁盘**。
+  jobcopilot-mcp:
+    image: self-evolving-kb-backend:${TAG:-latest}
+    container_name: sekb-jobcopilot-mcp
+    restart: unless-stopped
+    labels:
+      sekb-logs: jobcopilot-mcp
+    command: ["jobcopilot-mcp", "--http", "--host", "0.0.0.0", "--port", "8765"]
+    ports:
+      # 只绑回环：对外一律经 nginx（TLS + 路径前缀 + 令牌），避免绕过 TLS
+      - "127.0.0.1:8765:8765"
+    environment:
+      # ⚠️ 刻意**不配任何 LLM Key**：这是公网端点，必须 BYOK —— 每个调用方带自己的 Key
+      #    （X-JobCopilot-Api-Key 或 Authorization），否则任何能访问到的人都花这台
+      #    服务器的额度。
+      #
+      # 下面两个变量不设时，内核会**拒绝启动**并打印可操作提示（见 http_bind_error）：
+      # 这是安全闸，不是配置遗漏。
+      JOBCOPILOT_HTTP_TOKEN: ${JOBCOPILOT_HTTP_TOKEN:-}
+      JOBCOPILOT_HTTP_ALLOWED_HOSTS: ${JOBCOPILOT_ALLOWED_HOSTS:-bos-studio.tech}
+      # 反代挂在子路径 /jobcopilot 下：SSE 的消息端点必须带上该前缀，
+      # 否则客户端会按绝对路径请求到 /sse/messages/ 而失败（千帆只支持 SSE）。
+      JOBCOPILOT_HTTP_BASE_PATH: /jobcopilot
+      # 与 SEKB 共用同一份提示词（只读），保证两个入口行为一致、热改同时生效
+      JOBCOPILOT_PROMPTS_DIR: /app/prompt/job
+      TZ: Asia/Shanghai
+    volumes:
+      - ./prompt/job:/app/prompt/job:ro
+    # 只读根文件系统：公网端点不需要写任何东西；save_profile 用不了是有意的
+    # （共享端点上的画像会串到别人身上，调用方应改用 user_profile 参数按请求传）
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+    healthcheck:
+      # 无令牌访问 SSE 端点会返回 401 —— 401 恰好证明「服务活着且鉴权生效」
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s -o /dev/null -w '%{http_code}' http://localhost:8765/jobcopilot/sse | grep -qE '401|200'",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    networks:
+      - sekb_net
+
 # ============ 网络 ============
 networks:
   sekb_net:

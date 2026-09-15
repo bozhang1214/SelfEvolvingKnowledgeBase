@@ -93,6 +93,11 @@ fail() {
 
 warn() {
     echo -e "  ${YELLOW}⚠${NC} $1"
+    # 第二个参数是可选的可操作提示（与 fail 一致）——早先只有 fail 支持，
+    # 导致 warn 的提示被静默丢弃（调用方以为打印了）。
+    if [ -n "${2:-}" ]; then
+        echo -e "    ${YELLOW}→${NC} $2"
+    fi
 }
 
 info() {
@@ -368,6 +373,43 @@ else
 fi
 
 # ============================================================
+# 阶段 3.5：启动 JobCopilot MCP（HTTP/SSE，供云端平台调用）
+# ============================================================
+# 必须排在 frontend **之前**：nginx 配置里有 `upstream ... server jobcopilot-mcp:8765`，
+# nginx 启动时解析不到这个名字会直接启动失败。
+#
+# 它复用 backend 镜像，所以必须在 backend 镜像构建/存在之后启动。
+step "阶段 3.5/7：启动 JobCopilot MCP（HTTP/SSE）"
+if [ "$DRY_RUN" = false ]; then
+    if grep -q "^  jobcopilot-mcp:" docker-compose.prod.yml 2>/dev/null; then
+        if ! grep -qE "^JOBCOPILOT_HTTP_TOKEN=." .env.prod 2>/dev/null; then
+            # 不静默跳过：这个变量缺失时内核会拒绝启动（安全闸），
+            # 而 nginx 会因为解析不到 upstream 起不来 —— 必须让人知道原因。
+            warn "未配置 JOBCOPILOT_HTTP_TOKEN，跳过 MCP HTTP 入口" \
+                 "配置后重试：echo \"JOBCOPILOT_HTTP_TOKEN=\$(openssl rand -hex 24)\" >> .env.prod"
+        else
+            if run "docker compose -f docker-compose.prod.yml --env-file .env.prod up -d jobcopilot-mcp"; then
+                sleep 3
+                MCP_STATE="$(docker inspect -f '{{.State.Status}}' sekb-jobcopilot-mcp 2>/dev/null || echo unknown)"
+                if [ "$MCP_STATE" = "running" ]; then
+                    success "JobCopilot MCP 已启动（路径前缀 /jobcopilot，仅经 nginx 对外）"
+                else
+                    warn "JobCopilot MCP 启动后状态为 ${MCP_STATE}" \
+                         "查看日志：docker logs sekb-jobcopilot-mcp --tail 30"
+                fi
+            else
+                warn "JobCopilot MCP 启动失败（不阻塞主流程）" \
+                     "查看日志：docker logs sekb-jobcopilot-mcp --tail 30"
+            fi
+        fi
+    else
+        info "compose 中没有 jobcopilot-mcp 服务，跳过"
+    fi
+else
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} 启动 JobCopilot MCP"
+fi
+
+# ============================================================
 # 阶段 4：启动应用栈 - 前端
 # ============================================================
 step "阶段 4/7：启动前端"
@@ -459,6 +501,12 @@ if [ "$DRY_RUN" = false ]; then
         probe_endpoint "grafana" "http://localhost:3001/api/health" "200" || EP_FAIL=$((EP_FAIL + 1))
         probe_endpoint "alertmanager" "http://localhost:9093/-/healthy" "200" || EP_FAIL=$((EP_FAIL + 1))
         probe_endpoint "feishu-webhook" "http://localhost:5001/health" "200" || EP_FAIL=$((EP_FAIL + 1))
+    fi
+
+    # JobCopilot MCP（公网入口，经 nginx /jobcopilot/ 暴露给云端平台）
+    # 无令牌访问返回 401 恰好说明「服务活着 + 鉴权生效」；200 也算通过
+    if docker inspect -f '{{.State.Status}}' sekb-jobcopilot-mcp >/dev/null 2>&1; then
+        probe_endpoint "jobcopilot-mcp" "http://localhost:8765/jobcopilot/sse" "401 200" || EP_FAIL=$((EP_FAIL + 1))
     fi
     echo ""
     if [ "$EP_FAIL" -eq 0 ]; then
