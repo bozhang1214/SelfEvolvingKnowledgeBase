@@ -37,10 +37,34 @@ related: [02-RUNTIME-FLOWS, 08-GLOSSARY]
 - JWT：HS256，90 天有效期、滑动续租（`/auth/refresh`）；JWT 密钥取环境变量 `JWT_SECRET`（auth.py:39，启动强校验）。
 - ALLOWED_EMAILS：逗号分隔白名单（`.env.prod`，脱敏）。
 
-### 1.3 限流（现状：全局未生效）
-- `RateLimitMiddleware` 已实现但被注释禁用（server.py:195-201）；`api.rate_limit.enabled: false`（config.yaml:271）。
-- **当前所有端点均无生效限流**；nginx `limit_req zone=api_limit rate=10r/s` 是实际第一道闸（deploy/nginx.conf）。
-- 客户端事件上报有独立限流 `client_event_limit`（nginx，2r/s+b10）。
+### 1.3 限流（现状：**ASGI 中间件已生效** + nginx 两道闸）
+
+> ⚠️ 2026-09-15 修正：本节此前写「全局限流中间件未挂载 / 所有端点无生效限流」是**过期**信息
+> （`enabled: true` 自 2026-09-10 起）。照旧文档排查会把资讯 429 **误判成只有 nginx 一个原因**，
+> 而真实主因在应用侧（见下面 news 读/写分离）。改限流行为前先看这张表。
+
+- `RateLimitMiddleware` 已挂载（`server.py:204-219`），开关 `api.rate_limit.enabled`（`backend/config.yaml` 为 `true`）。
+- 粒度：`(客户端 IP, 路由组)` 的 **60 秒滑动窗口**；超限返回 `429` + `Retry-After: 60` +
+  `X-RateLimit-Limit/Remaining`。路由组按**最长前缀**匹配，键可写成 `"POST /api/v1/news/"`
+  这种**带方法**的形式（带方法的组优先于同前缀的纯前缀组）。
+- nginx 是第一道闸：`api_limit 10r/s burst 30`（`/sekb/api/`）、`news_limit 30r/s burst 60`
+  （`/sekb/api/v1/news/`）；已显式 `limit_req_status 429`（默认是 `503`，会被前端显示成
+  「服务不可用」，与「请求过于频繁」是完全不同的用户结论）。
+- 客户端事件上报另有 `client_event_limit`（nginx，2r/s + burst 10）。
+
+| 路由组（键） | 额度（次/分钟） | 配置项 | 说明 |
+|---|---|---|---|
+| `/api/v1/auth/` | 5 | `auth.rate_limit_login_per_minute` | 登录，防枚举 |
+| `/api/v1/share/` | 20 | `rate_limit.share_per_minute` | 公开分享链接 |
+| `/api/v1/upload` | 30 | `rate_limit.upload_per_minute` | 文件上传 |
+| `/api/v1/job/` | 30 | `rate_limit.job_per_minute` | 招聘采集/批量分析 |
+| `POST /api/v1/news/` | 6 | `rate_limit.news_generate_per_minute` | **资讯生成**（真调 LLM） |
+| `/api/v1/news/` | 120 | `rate_limit.news_per_minute` | 资讯读取（列表/正文/`status` 轮询） |
+| 其它 `/api/` | 60 | `rate_limit.requests_per_minute` | 默认 |
+
+> **为什么资讯读写必须分两条**：前端在生成期间每 15s 轮询 `/news/status`，切 tab 还要读
+> 列表 + 多篇正文；原来整组只有 10/分钟（配置注释写的是「资讯刷新成本高」，但前缀把读也覆盖了），
+> 于是用户翻两下页面就 429 —— owner 报的「加载周期报告列表失败 / 点第二次就失败」即此。
 
 ### 1.4 错误映射（全局异常处理器）
 | HTTP | 条件 | 证据 |
@@ -267,7 +291,10 @@ curl -X POST https://bos-studio.tech/sekb/api/v1/auth/login \
 ## 15. 端点异常/漂移汇总（引自 T1 §14）
 
 1. 无鉴权端点 6 个：health×3、`/metrics`、`/client-event`、register/login（后两者设计如此）；`/client-event` 与 `/metrics` 建议网络层保护。
-2. 全局限流中间件未挂载（server.py:195-201 注释禁用）；当前实际限流只有 nginx。
+2. ~~全局限流中间件未挂载~~ → **已挂载并生效**（`server.py:204-219`，`enabled: true`；见 §1.3）。
+   注意：应用侧 429 与 nginx 429 是**两套独立计数**，排查时要先看是谁返回的
+   （nginx 限流时上游响应时间为 `-`/`0.000` 且在 `docker logs sekb-frontend` 里有 `limiting requests`；
+   应用限流则 `urt>0` 且响应体是 `{"code":3001,"message":"请求过于频繁，请稍后再试"}`）。
 3. 多数写 POST 非幂等；upload overwrite、job 缓存、news force 控制近似幂等。
 4. `_conv_inflight` 进程内集合；新会话锁键退化 `user|`。
 5. create_jwt docstring「72h」与实际 90 天漂移（auth.py:68 vs 71）；chat.py:586「不阻塞」注释与同步 await 不符。

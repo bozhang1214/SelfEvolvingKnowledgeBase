@@ -295,13 +295,16 @@ class SecurityConfig(BaseModel):
 
 
 class RateLimitConfig(BaseModel):
-    """限流配置（按路由分组，前缀匹配；纯 ASGI 中间件，不缓冲 SSE）"""
+    """限流配置（按路由分组，前缀匹配，可带方法；纯 ASGI 中间件，不缓冲 SSE）"""
     enabled: bool = False
     requests_per_minute: int = 60      # 默认（chat/knowledge/conversations 等）
     share_per_minute: int = 20         # 分享问答（公开链接，防滥用）
     upload_per_minute: int = 30        # 文件上传
     job_per_minute: int = 30           # 职位采集/批量分析
-    news_per_minute: int = 10          # 资讯刷新（成本高）
+    # 资讯：读（列表/正文/状态轮询）与生成（真调 LLM）必须分开限额。
+    # 原来整组只有 10/分钟 → 前端轮询状态 + 读报告几下就用完，用户看到「请求过于频繁」。
+    news_per_minute: int = 120         # 资讯读取（GET：列表/正文/状态）
+    news_generate_per_minute: int = 6  # 资讯生成（POST：调 LLM，成本高，且已有文件锁互斥）
 
 
 class AuthConfig(BaseModel):

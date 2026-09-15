@@ -281,14 +281,17 @@ api:
     - "http://localhost:3000"           # Next.js 开发服务器
     - "http://localhost:5173"            # Vite 开发服务器
     - "http://localhost:3004"            # Phase 3 Vite (PROJECT_ID=4)
-  # API 限流（按 IP+路由分组，纯 ASGI 中间件，不缓冲 SSE）
+  # API 限流（按 IP+路由分组，可带方法，纯 ASGI 中间件，不缓冲 SSE）
   rate_limit:
     enabled: true                       # 已启用（2026-09-10）
     requests_per_minute: 60             # 默认：chat/knowledge/conversations 等
     share_per_minute: 20                # 分享问答（公开链接，防滥用）
     upload_per_minute: 30               # 文件上传
     job_per_minute: 30                  # 职位采集/批量分析
-    news_per_minute: 10                 # 资讯刷新（成本高）
+    # 资讯读与写分开限额：原来整组 10/分钟，前端轮询 /status + 读报告几下就用完，
+    # 表现为「加载周期报告列表失败 / 点第二次 429」（2026-09-15 定位）。
+    news_per_minute: 120                # 资讯读取（GET 列表/正文/状态）
+    news_generate_per_minute: 6         # 资讯生成（POST 调 LLM；已有文件锁互斥，无需更严）
   # 鉴权配置（Phase 3）
   auth:
     token_expire_hours: 2160           # 90 天（配合前端滑动续租，实际接近免登录）

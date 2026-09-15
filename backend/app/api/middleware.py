@@ -17,6 +17,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_config
 
 
+def _parse_route_key(key: str) -> tuple[str, str, int]:
+    """把 ``"POST /api/v1/news/"`` 拆成 (方法, 前缀, 是否带方法)。
+
+    ``"/api/v1/news/"`` → ``("", "/api/v1/news/", 0)``（任意方法）。
+    只认全大写的方法名，避免把某个以空格开头的前缀误认成方法。
+    """
+    parts = key.split(" ", 1)
+    if len(parts) == 2 and parts[0].isupper():
+        return parts[0], parts[1], 1
+    return "", key, 0
+
+
 def setup_cors(app: FastAPI) -> None:
     """配置 CORS 中间件。"""
     config = get_config()
@@ -38,7 +50,14 @@ class RateLimitMiddleware:
 
     - 按 (client_ip, 路由组) 粒度独立计数，避免不同组互相影响；
     - 路由组用最长前缀匹配（如 ``/api/v1/share/`` 覆盖所有分享子路径）；
+    - **可选带方法**（如 ``"POST /api/v1/news/"``），带方法的组优先于纯前缀组；
     - 不使用 BaseHTTPMiddleware，避免缓冲 SSE 流式响应。
+
+    为什么组要能带方法：同一前缀下「读」和「写」的成本能差一个数量级
+    —— 读资讯列表/正文几乎不花钱，而 ``POST /api/v1/news/`` 会真的去调 LLM 生成报告。
+    只按前缀分组就得二选一：要么把读也一起限死（用户翻两下页面就 429），
+    要么放开写（生成接口被刷爆）。2026-09-15 的「加载周期报告列表失败 / 点第二次就 429」
+    就是前者：``/api/v1/news/`` 整组只有 10 次/分钟，而前端状态轮询 + 读报告本身就要用掉。
     """
 
     def __init__(
@@ -51,17 +70,26 @@ class RateLimitMiddleware:
         self.app = app
         self.default_limit = default_limit
         self.default_window = default_window_seconds
-        # route_limits: 前缀 -> 每分钟上限；按前缀长度降序排列以便最长匹配
+        # route_limits: "前缀" 或 "方法 前缀" -> 每分钟上限；
+        # 排序规则：带方法的排前面，其次前缀更长者优先（最长匹配）
         self.route_limits = sorted(
-            (route_limits or {}).items(), key=lambda kv: -len(kv[0])
+            (_parse_route_key(k) + (v,) for k, v in (route_limits or {}).items()),
+            key=lambda item: (-item[2], -len(item[1])),
         )
         self._windows: dict[tuple[str, str], list[float]] = defaultdict(list)
 
-    def _match_group(self, path: str) -> tuple[str, int]:
-        """返回 (分组键, 上限)，最长前缀优先，无匹配用默认。"""
-        for prefix, limit in self.route_limits:
-            if path.startswith(prefix):
-                return prefix, limit
+    def _match_group(self, path: str, method: str = "") -> tuple[str, int]:
+        """返回 (分组键, 上限)，最长前缀优先，无匹配用默认。
+
+        ``method`` 为空串（未知方法）时只匹配不带方法的组，避免把未知方法
+        误判进「生成」这种小额度组里被限死。
+        """
+        for req_method, prefix, is_method_specific, limit in self.route_limits:
+            if not path.startswith(prefix):
+                continue
+            if is_method_specific and req_method != method:
+                continue
+            return (f"{req_method} {prefix}" if is_method_specific else prefix), limit
         return "default", self.default_limit
 
     async def __call__(self, scope, receive, send):
@@ -82,7 +110,7 @@ class RateLimitMiddleware:
         client_ip = client[0] if client else "unknown"
 
         # 按 (ip, 组) 独立计数
-        group, limit = self._match_group(path)
+        group, limit = self._match_group(path, method)
         window = self.default_window
         now = time.time()
         key = (client_ip, group)

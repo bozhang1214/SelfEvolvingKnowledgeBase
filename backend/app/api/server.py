@@ -211,7 +211,10 @@ def create_app() -> FastAPI:
                 "/api/v1/share/": config.api.rate_limit.share_per_minute,
                 "/api/v1/upload": config.api.rate_limit.upload_per_minute,
                 "/api/v1/job/": config.api.rate_limit.job_per_minute,
+                # 资讯读取：宽额度（前端会轮询 /status + 读列表正文）
                 "/api/v1/news/": config.api.rate_limit.news_per_minute,
+                # 资讯生成：窄额度（POST 才真的调 LLM；带方法的组优先匹配）
+                "POST /api/v1/news/": config.api.rate_limit.news_generate_per_minute,
             },
         )
 

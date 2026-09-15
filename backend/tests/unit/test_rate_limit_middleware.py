@@ -5,9 +5,11 @@ from __future__ import annotations
 from app.api.middleware import RateLimitMiddleware
 
 
-async def _run_request(mw: RateLimitMiddleware, path: str, client_ip: str = "1.2.3.4") -> list[dict]:
+async def _run_request(
+    mw: RateLimitMiddleware, path: str, client_ip: str = "1.2.3.4", method: str = "GET"
+) -> list[dict]:
     """模拟一次 HTTP 请求，返回 send 收到的消息列表。"""
-    scope = {"type": "http", "path": path, "method": "GET", "client": (client_ip, 12345)}
+    scope = {"type": "http", "path": path, "method": method, "client": (client_ip, 12345)}
     sent: list[dict] = []
 
     async def receive():
@@ -55,6 +57,48 @@ class TestMatchGroup:
         mw = RateLimitMiddleware(None, default_limit=60, route_limits={"/api/v1/upload": 30})
         assert mw._match_group("/api/v1/upload") == ("/api/v1/upload", 30)
         assert mw._match_group("/api/v1/upload/batch") == ("/api/v1/upload", 30)
+
+
+class TestMethodAwareGroups:
+    """同一前缀下「读」和「写」成本差一个数量级，必须能分开放额度。
+
+    真实背景：``/api/v1/news/`` 整组 10 次/分钟，把**读列表/读正文/状态轮询**也一起限死，
+    前端翻两下页面就 429（owner 报的「加载周期报告列表失败 / 点第二次就失败」）。
+    """
+
+    LIMITS = {"/api/v1/news/": 120, "POST /api/v1/news/": 6}
+
+    def test_post_uses_method_specific_group(self):
+        mw = RateLimitMiddleware(None, default_limit=60, route_limits=self.LIMITS)
+        assert mw._match_group("/api/v1/news/refresh", "POST") == ("POST /api/v1/news/", 6)
+        assert mw._match_group("/api/v1/news/weekly", "POST") == ("POST /api/v1/news/", 6)
+
+    def test_get_falls_back_to_prefix_group(self):
+        mw = RateLimitMiddleware(None, default_limit=60, route_limits=self.LIMITS)
+        assert mw._match_group("/api/v1/news/status", "GET") == ("/api/v1/news/", 120)
+        assert mw._match_group("/api/v1/news/periodic/weekly", "GET") == ("/api/v1/news/", 120)
+
+    def test_unknown_method_never_matches_method_group(self):
+        """method 未知（""）时不能被塞进小额度的方法组里误限。"""
+        mw = RateLimitMiddleware(None, default_limit=60, route_limits=self.LIMITS)
+        assert mw._match_group("/api/v1/news/status", "") == ("/api/v1/news/", 120)
+
+    def test_longer_prefix_still_wins_within_same_kind(self):
+        mw = RateLimitMiddleware(None, default_limit=60, route_limits={
+            "POST /api/v1/news/": 6,
+            "POST /api/v1/news/refresh": 2,
+        })
+        assert mw._match_group("/api/v1/news/refresh", "POST") == ("POST /api/v1/news/refresh", 2)
+        assert mw._match_group("/api/v1/news/weekly", "POST") == ("POST /api/v1/news/", 6)
+
+    async def test_read_budget_not_consumed_by_generation(self):
+        """关键行为：生成把额度用完，**读取不受影响**（两条计数互不干扰）。"""
+        mw = _make_mw(default_limit=60, route_limits=self.LIMITS)
+        for _ in range(6):  # POST 额度（6）用满
+            await _run_request(mw, "/api/v1/news/refresh", method="POST")
+        assert _status(await _run_request(mw, "/api/v1/news/refresh", method="POST")) == 429
+        # 读还能正常用（这里只验证不被 POST 的计数拖累，读额度是 120）
+        assert _status(await _run_request(mw, "/api/v1/news/status", method="GET")) == 200
 
 
 class TestRateLimitEnforcement:
