@@ -195,10 +195,12 @@ class BatchAnalyzeReq(BaseModel):
 
     keyword: str = Field("", description="采集关键词（空则用配置默认）")
     city: str = Field("", description="城市（空则用配置默认）")
-    force: bool = Field(False, description="true 强制重新分析（忽略 7 天缓存）")
+    force: bool = Field(False, description="true 强制重新分析（忽略该搜索的缓存）")
     jobs: list[dict[str, Any]] | None = Field(
         None, description="前端已收集的职位列表（提供则直接分析这批职位，不重复采集）"
     )
+    search_id: str = Field("", description="本次搜索的 search_id（报告挂在该搜索下）")
+    min_salary_k: int = Field(0, ge=0, description="最低月薪（K），用于派生 search_id")
 
 
 @router.post("/batch-analyze")
@@ -206,8 +208,9 @@ async def batch_analyze(body: BatchAnalyzeReq, user_id: str = Depends(get_curren
     """
     一键批量分析职位，生成市场分析报告。
 
-    - ``jobs`` 提供时：直接分析传入的职位（「职位收集 → 批量分析」联动，不重复采集，并缓存供默认展示）。
-    - ``jobs`` 为空时：自动采集并生成报告，7 天内命中缓存直接返回。
+    - ``jobs`` 提供时：直接分析传入的职位（「职位收集 → 批量分析」联动，不重复采集）。
+    - ``jobs`` 为空时：自动采集并生成报告，14 天内命中该搜索的缓存直接返回。
+    - ``search_id`` 提供时：报告挂在该次搜索下（与职位缓存一一对应）。
     """
     ctx = get_app_context()
     _require_job_agent()
@@ -220,7 +223,8 @@ async def batch_analyze(body: BatchAnalyzeReq, user_id: str = Depends(get_curren
 
     try:
         if body.force:
-            delete_report(user_id)
+            # 只强制该次搜索（未指定 search_id 时清空该用户全部报告，保持旧语义）
+            delete_report(user_id, body.search_id or None)
         result = await analyze_market(
             ctx=ctx,
             user_id=user_id,
@@ -229,6 +233,8 @@ async def batch_analyze(body: BatchAnalyzeReq, user_id: str = Depends(get_curren
             llm_factory=ctx.llm_factory,
             user_profile=load_user_profile(user_id),
             jobs=body.jobs,
+            search_id=body.search_id,
+            min_salary_k=body.min_salary_k,
         )
         # 自动存档到历史报告
         from app.agents.job.archive import save_report
@@ -242,23 +248,97 @@ async def batch_analyze(body: BatchAnalyzeReq, user_id: str = Depends(get_curren
 
 
 @router.delete("/batch-analyze")
-async def delete_batch_analysis(user_id: str = Depends(get_current_user)):
-    """删除批量分析缓存（下次进入会重新分析）。"""
+async def delete_batch_analysis(
+    search_id: str = "", user_id: str = Depends(get_current_user)
+):
+    """删除批量分析缓存。
+
+    - 传 ``search_id``：只删该次搜索的报告；
+    - 不传：删除该用户全部报告（保持旧语义，下次进入会重新分析）。
+    """
     _require_job_agent()
     from app.agents.job.market import delete_report
 
-    deleted = delete_report(user_id)
+    deleted = delete_report(user_id, search_id or None)
     return {"deleted": deleted}
 
 
 @router.get("/batch-analyze/cached")
-async def get_cached_batch_analysis(user_id: str = Depends(get_current_user)):
-    """返回最后一次缓存的批量分析报告（14 天内），无则 report=None。"""
+async def get_cached_batch_analysis(
+    search_id: str = "", user_id: str = Depends(get_current_user)
+):
+    """返回缓存的批量分析报告（14 天内），无则 report=None。
+
+    - 传 ``search_id``：返回**该次搜索**对应的报告；
+    - 不传：返回该用户**最新一份**（兼容旧调用）。
+    """
     _require_job_agent()
     from app.agents.job.market import get_cached_report
 
-    report = get_cached_report(user_id)
+    report = get_cached_report(user_id, search_id or None)
     return {"cached": report is not None, "report": report}
+
+
+# ============================================================
+# 搜索历史（一次搜索 = 一份职位列表 + 可选一份报告）
+# ============================================================
+
+
+@router.get("/searches")
+async def list_searches(user_id: str = Depends(get_current_user)):
+    """返回搜索历史列表（含过期惰性清理 + 报告状态），供前端 Tabs 上方展示。
+
+    每条包含：``search_id / keyword / city / min_salary_k / count / ts / expired``
+    以及报告状态 ``has_report`` / ``report_matched``（报告职位集合是否与职位列表一致）。
+    过期条目会**清空职位列表**并**删除其报告**，但条目保留（打「已过期」角标）。
+    """
+    _require_job_agent()
+    from app.agents.job import job_cache as jc
+    from app.agents.job.market import delete_report_by_search_id, get_cached_report
+
+    searches = jc.list_searches(user_id)
+
+    # 惰性清理：过期条目的报告一并删除
+    for sid in jc.expired_search_ids(user_id):
+        delete_report_by_search_id(sid)
+
+    by_id = {s["search_id"]: s for s in searches}
+    for sid in by_id:
+        report = get_cached_report(user_id, sid)
+        by_id[sid]["has_report"] = report is not None
+        by_id[sid]["report_matched"] = _report_matched(user_id, sid, report)
+
+    return {"searches": searches}
+
+
+def _report_matched(user_id: str, search_id: str, report: dict[str, Any] | None) -> bool:
+    """报告的职位集合是否与当前职位列表**严格一致**（前端展示报告的约束）。"""
+    if not report:
+        return False
+    from app.agents.job.job_cache import get_by_search_id
+
+    entry = get_by_search_id(user_id, search_id)
+    if entry is None:
+        return False
+
+    def _ik(j: dict[str, Any]) -> str:
+        return j.get("job_id") or f"{j.get('title', '')}-{j.get('company', '')}"
+
+    report_keys = {_ik(j) for j in (report.get("jobs") or [])}
+    list_keys = {_ik(j) for j in (entry.get("jobs") or [])}
+    return bool(report_keys) and report_keys == list_keys
+
+
+@router.get("/cache/search/{search_id}")
+async def get_search_jobs(search_id: str, user_id: str = Depends(get_current_user)):
+    """返回某次搜索的职位列表（含关键词/城市/薪资/是否过期）。"""
+    _require_job_agent()
+    from app.agents.job.job_cache import get_by_search_id
+
+    entry = get_by_search_id(user_id, search_id)
+    if entry is None:
+        raise HTTPException(404, "搜索不存在")
+    return {**entry, "cached": True, "count": len(entry.get("jobs") or []) or entry.get("count", 0)}
 
 
 @router.post("/import")
@@ -307,7 +387,7 @@ class SaveCacheReq(BaseModel):
 async def save_job_cache(body: SaveCacheReq, user_id: str = Depends(get_current_user)):
     """保存（覆盖）职位缓存，用于单职位删除/刷新后同步。"""
     _require_job_agent()
-    from app.agents.job.job_cache import cache_key, save_cached_jobs
+    from app.agents.job.job_cache import cache_key, make_search_id, save_cached_jobs
 
     keyword = (body.keyword or "").strip() or "Agent"
     city = (body.city or "").strip()
@@ -315,7 +395,7 @@ async def save_job_cache(body: SaveCacheReq, user_id: str = Depends(get_current_
         city = ""
     key = cache_key(user_id, keyword, city, body.min_salary_k)
     save_cached_jobs(key, body.jobs)
-    return {"saved": len(body.jobs)}
+    return {"saved": len(body.jobs), "search_id": make_search_id(key)}
 
 
 @router.get("/cache/latest")
@@ -326,7 +406,15 @@ async def get_latest_job_cache(user_id: str = Depends(get_current_user)):
 
     cached = get_latest_cached(user_id)
     if cached is None:
-        return {"cached": False, "keyword": "", "city": "", "min_salary_k": 0, "jobs": [], "count": 0}
+        return {
+            "cached": False,
+            "keyword": "",
+            "city": "",
+            "min_salary_k": 0,
+            "search_id": "",
+            "jobs": [],
+            "count": 0,
+        }
     return {**cached, "cached": True, "count": len(cached["jobs"])}
 
 

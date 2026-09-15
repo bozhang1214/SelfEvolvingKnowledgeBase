@@ -99,8 +99,8 @@ export async function refreshJob(jobUrl: string, source: string): Promise<{ jd_t
   return res.data;
 }
 
-/** 保存（覆盖）职位缓存（单职位删除/刷新后同步）。 */
-export async function saveJobCache(payload: { keyword: string; city: string; min_salary_k: number; jobs: FetchedJob[] }): Promise<{ saved: number }> {
+/** 保存（覆盖）职位缓存（单职位删除/刷新后同步）。返回该次搜索的 search_id。 */
+export async function saveJobCache(payload: { keyword: string; city: string; min_salary_k: number; jobs: FetchedJob[] }): Promise<{ saved: number; search_id: string }> {
   const res = await apiClient.post('/job/cache/save', payload);
   return res.data;
 }
@@ -144,20 +144,25 @@ export interface MarketReport {
   jobs: FetchedJob[];
 }
 
-/** 一键批量分析采集结果（7 天缓存；传入 jobs 则分析这批职位，不重复采集）。 */
+/** 一键批量分析采集结果（传入 jobs 则分析这批职位，不重复采集）。
+ *  传 search_id 时报告挂在该次搜索下（与职位缓存一一对应）。 */
 export async function batchAnalyze(payload: {
   keyword?: string;
   city?: string;
   force?: boolean;
   jobs?: FetchedJob[];
+  search_id?: string;
+  min_salary_k?: number;
 }): Promise<{ cached: boolean; report: MarketReport }> {
-  const res = await apiClient.post('/job/batch-analyze', payload, { timeout: 120000 });
+  const res = await apiClient.post('/job/batch-analyze', payload, { timeout: 300000 });
   return res.data;
 }
 
-/** 删除批量分析缓存（强制下次重新分析）。 */
-export async function deleteBatchAnalysis(): Promise<{ deleted: boolean }> {
-  const res = await apiClient.delete('/job/batch-analyze');
+/** 删除批量分析缓存（强制下次重新分析）。传 searchId 只删该次搜索的报告。 */
+export async function deleteBatchAnalysis(searchId?: string): Promise<{ deleted: boolean }> {
+  const res = await apiClient.delete('/job/batch-analyze', {
+    params: searchId ? { search_id: searchId } : undefined,
+  });
   return res.data;
 }
 
@@ -204,8 +209,50 @@ export interface LatestJobCache {
   keyword: string;
   city: string;
   min_salary_k: number;
+  search_id: string;
   jobs: FetchedJob[];
   count: number;
+}
+
+/** 搜索历史条目（一次搜索 = 一份职位列表 + 可选一份报告）。 */
+export interface SearchEntry {
+  search_id: string;
+  keyword: string;
+  city: string;
+  min_salary_k: number;
+  count: number;
+  ts: number;
+  /** 是否已过期（超 14 天：职位列表与报告已被清理） */
+  expired: boolean;
+  /** 职位列表是否还在（过期后为 false） */
+  has_jobs: boolean;
+  /** 是否有对应报告（未做过批量分析为 false） */
+  has_report: boolean;
+  /** 报告职位集合是否与当前职位列表严格一致（前端展示报告的约束） */
+  report_matched: boolean;
+}
+
+/** 列出搜索历史（过期条目会在后端被惰性清理：清空职位列表并删除报告）。 */
+export async function listSearches(): Promise<{ searches: SearchEntry[] }> {
+  const res = await apiClient.get<{ searches: SearchEntry[] }>('/job/searches');
+  return res.data;
+}
+
+/** 按 search_id 取某次搜索的职位列表。 */
+export interface SearchJobs {
+  search_id: string;
+  keyword: string;
+  city: string;
+  min_salary_k: number;
+  count: number;
+  ts: number;
+  expired: boolean;
+  jobs: FetchedJob[];
+}
+
+export async function getSearchJobs(searchId: string): Promise<SearchJobs> {
+  const res = await apiClient.get<SearchJobs>(`/job/cache/search/${encodeURIComponent(searchId)}`);
+  return res.data;
 }
 
 /** 获取某用户最后一次缓存的职位列表 + 对应筛选条件。 */
@@ -229,9 +276,12 @@ export async function listJobCaches(): Promise<{ caches: JobCacheSet[]; total: n
   return res.data;
 }
 
-/** 获取最后一次缓存的批量分析报告（14 天内，无则 report=null）。 */
-export async function getCachedBatchAnalysis(): Promise<{ cached: boolean; report: MarketReport | null }> {
-  const res = await apiClient.get<{ cached: boolean; report: MarketReport | null }>('/job/batch-analyze/cached');
+/** 获取缓存的批量分析报告（14 天内，无则 report=null）。
+ *  传 searchId 取该次搜索的报告；不传取最新一份。 */
+export async function getCachedBatchAnalysis(searchId?: string): Promise<{ cached: boolean; report: MarketReport | null }> {
+  const res = await apiClient.get<{ cached: boolean; report: MarketReport | null }>('/job/batch-analyze/cached', {
+    params: searchId ? { search_id: searchId } : undefined,
+  });
   return res.data;
 }
 

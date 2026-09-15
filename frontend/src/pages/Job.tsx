@@ -19,9 +19,10 @@ import {
   deleteJobReport,
   refreshJob,
   saveJobCache,
-  getLatestJobCache,
   getCachedBatchAnalysis,
   listJobCaches,
+  listSearches,
+  getSearchJobs,
   listApplyPlan,
   saveApplyPlan,
   deleteApplyPlan,
@@ -33,6 +34,7 @@ import {
   type ApplyPlanItem,
   type ApplyPlanStats,
   type JobCacheSet,
+  type SearchEntry,
 } from '@/services/job';
 
 const { Text, Paragraph } = Typography;
@@ -96,6 +98,11 @@ const Job: React.FC = () => {
   // 最近一次缓存的批量分析报告（用于「批量分析」tab 默认展示）
   const [cachedMarketReport, setCachedMarketReport] = useState<MarketReport | null>(null);
 
+  // 搜索历史（Tabs 上方的「当前搜索」上下文）
+  const [searches, setSearches] = useState<SearchEntry[]>([]);
+  const [currentSearchId, setCurrentSearchId] = useState<string>('');
+  const [searchesLoading, setSearchesLoading] = useState(false);
+
   // 投递作战计划
   const [planItems, setPlanItems] = useState<ApplyPlanItem[]>([]);
   const [planStats, setPlanStats] = useState<ApplyPlanStats | null>(null);
@@ -141,32 +148,86 @@ const Job: React.FC = () => {
     [jobCaches],
   );
 
-  // 挂载时：回填最近一次缓存的职位 + 筛选选项，并预取缓存的批量报告
+  /** 当前搜索的报告状态：
+   *  - matched：报告职位集合与当前列表严格一致 → 可直接展示
+   *  - stale：有报告但集合已不一致（删过职位）→ 提示「已过期」+ 重新分析
+   *  - none：该搜索还没做过批量分析 → 提示「马上分析」
+   */
+  const reportState = useMemo<'matched' | 'stale' | 'none'>(() => {
+    if (!cachedMarketReport) return 'none';
+    const rk = (j: FetchedJob) => j.job_id || `${j.title}-${j.company}`;
+    const reportKeys = new Set((cachedMarketReport.jobs || []).map(rk));
+    const listKeys = new Set(fetchedJobs.map(rk));
+    const same =
+      reportKeys.size > 0 &&
+      reportKeys.size === listKeys.size &&
+      [...reportKeys].every((k) => listKeys.has(k));
+    return same ? 'matched' : 'stale';
+  }, [cachedMarketReport, fetchedJobs]);
+
+  /** 当前选中的搜索历史条目。 */
+  const currentSearch = useMemo(
+    () => searches.find((s) => s.search_id === currentSearchId) || null,
+    [searches, currentSearchId],
+  );
+
+  /** 重新拉取搜索历史（后端会在此时惰性清理过期条目）。 */
+  const loadSearches = async (): Promise<SearchEntry[]> => {
+    setSearchesLoading(true);
+    try {
+      const { searches: list } = await listSearches();
+      setSearches(list);
+      return list;
+    } catch {
+      return [];
+    } finally {
+      setSearchesLoading(false);
+    }
+  };
+
+  /** 选中某次历史搜索 → 成为「当前搜索」上下文（回填筛选条件 + 载入职位与报告）。 */
+  const applySearch = async (s: SearchEntry) => {
+    setCurrentSearchId(s.search_id);
+    setFetchKeyword(s.keyword || '');
+    setLastFetchKeyword(s.keyword || '');
+    setFetchCity(s.city || '不限');
+    setFetchSalary(
+      s.min_salary_k > 0 && SALARY_OPTIONS.includes(`${s.min_salary_k}K+`) ? `${s.min_salary_k}K+` : '不限',
+    );
+    setSelectedRowKeys([]);
+    setMarketReport(null); // 重置会话内报告，由「批量分析」三态重新判断
+    setCachedMarketReport(null);
+
+    try {
+      if (!s.expired && s.has_jobs) {
+        const data = await getSearchJobs(s.search_id);
+        setFetchedJobs(data.jobs || []);
+      } else {
+        setFetchedJobs([]);
+      }
+    } catch {
+      setFetchedJobs([]);
+    }
+    try {
+      const { report } = await getCachedBatchAnalysis(s.search_id);
+      setCachedMarketReport(report);
+    } catch {
+      // 静默失败
+    }
+  };
+
+  // 挂载时：拉取搜索历史，并默认选中最近一次（未过期且有职位）的搜索
   useEffect(() => {
     let alive = true;
     (async () => {
-      try {
-        const cache = await getLatestJobCache();
-        if (!alive || !cache.cached || !cache.jobs?.length) return;
-        setFetchKeyword(cache.keyword || '');
-        setLastFetchKeyword(cache.keyword || '');
-        setFetchCity(cache.city || '不限');
-        const salaryLabel = cache.min_salary_k > 0 && SALARY_OPTIONS.includes(`${cache.min_salary_k}K+`)
-          ? `${cache.min_salary_k}K+`
-          : '不限';
-        setFetchSalary(salaryLabel);
-        setFetchedJobs(cache.jobs);
-      } catch {
-        // 静默失败
-      }
-      try {
-        const { report } = await getCachedBatchAnalysis();
-        if (alive && report) setCachedMarketReport(report);
-      } catch {
-        // 静默失败
-      }
+      const list = await loadSearches();
+      if (!alive) return;
+      const latest = list.find((s) => !s.expired && s.has_jobs);
+      if (latest) await applySearch(latest);
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   // 进入「批量分析」tab：仅当缓存报告的职位列表与当前采集列表严格一致时才默认展示
@@ -342,14 +403,19 @@ const Job: React.FC = () => {
     setBatchAnalyzing(true);
     try {
       // 带上本次采集的关键词/城市，避免后端回退到配置默认值（曾导致报告恒显示 Agent）
+      const salaryK = fetchSalary === '不限' ? 0 : parseInt(fetchSalary, 10) || 0;
       const { report } = await batchAnalyze({
         jobs: targetJobs,
         force,
         keyword: lastFetchKeyword.trim() || fetchKeyword.trim() || undefined,
         city: fetchCity || undefined,
+        search_id: currentSearchId || undefined,
+        min_salary_k: salaryK,
       });
       setMarketReport(report);
       message.success('批量分析完成');
+      // 报告状态（有报告 / 是否与列表一致）由后端计算，分析后刷新搜索历史
+      await loadSearches();
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '批量分析失败');
     } finally {
@@ -359,10 +425,11 @@ const Job: React.FC = () => {
 
   const handleDeleteReport = async () => {
     try {
-      await deleteBatchAnalysis();
+      await deleteBatchAnalysis(currentSearchId || undefined);
       setMarketReport(null);
       setCachedMarketReport(null);
       message.success('分析报告已删除，可重新分析');
+      await loadSearches();
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '删除失败');
     }
@@ -390,6 +457,14 @@ const Job: React.FC = () => {
         message.info('未采集到职位（接口可能被限流或关键词无结果）');
       } else {
         message.success(`采集到 ${data.count} 个职位`);
+      }
+      // 新采集即成为「当前搜索」：刷新搜索历史并切到它（此时通常还没有报告）
+      const list = await loadSearches();
+      const mine = list.find((s) => s.keyword === kw && !s.expired);
+      if (mine) {
+        setCurrentSearchId(mine.search_id);
+        setCachedMarketReport(null);
+        setMarketReport(null);
       }
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '职位采集失败');
@@ -448,7 +523,10 @@ const Job: React.FC = () => {
     const newJobs = fetchedJobs.filter((j) => jobKey(j) !== key);
     setFetchedJobs(newJobs);
     setSelectedRowKeys((prev) => prev.filter((k) => String(k) !== key));
+    // 职位集合变了：会话内报告不再可信，清掉交由「批量分析」三态判断（缓存报告若仍匹配会重新展示）
+    setMarketReport(null);
     await syncJobCache(newJobs);
+    await loadSearches(); // 刷新「报告是否与列表一致」状态
     message.success('已删除该职位');
   };
 
@@ -523,6 +601,71 @@ const Job: React.FC = () => {
 
   return (
     <div style={{ padding: 24, overflow: 'auto', background: '#fff', minHeight: '100%' }}>
+      {/* 搜索历史：Tabs 上方的「当前搜索」上下文（选中后各 tab 都围绕它展示） */}
+      <div style={{ maxWidth: 1080, margin: '0 auto 12px auto' }}>
+        <Card
+          size="small"
+          title={
+            <Space>
+              <HistoryOutlined />
+              <Text strong>搜索历史</Text>
+              <Text type="secondary" style={{ fontWeight: 400, fontSize: 12 }}>
+                选中即切换「当前搜索」：职位收集展示其职位列表，批量分析展示其报告
+              </Text>
+            </Space>
+          }
+          extra={
+            <Button size="small" icon={<ReloadOutlined />} onClick={() => loadSearches()}>
+              刷新
+            </Button>
+          }
+        >
+          <Spin spinning={searchesLoading}>
+            {searches.length === 0 ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="暂无搜索历史，先在「职位收集」输入关键词采集职位"
+              />
+            ) : (
+              <Space wrap size={[8, 8]}>
+                {searches.map((s) => {
+                  const active = s.search_id === currentSearchId;
+                  return (
+                    <Tag
+                      key={s.search_id}
+                      color={active ? 'blue' : undefined}
+                      onClick={() => applySearch(s)}
+                      style={{
+                        cursor: 'pointer',
+                        padding: '4px 10px',
+                        opacity: s.expired ? 0.6 : 1,
+                        border: active ? '1px solid #1677ff' : '1px solid #f0f0f0',
+                      }}
+                    >
+                      <Text strong>{s.keyword || '未命名'}</Text>
+                      <Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>
+                        {s.count} 个
+                      </Text>
+                      {s.expired ? (
+                        <Tag color="default" style={{ marginLeft: 6 }}>
+                          已过期
+                        </Tag>
+                      ) : s.has_report ? (
+                        <Tag color={s.report_matched ? 'green' : 'orange'} style={{ marginLeft: 6 }}>
+                          {s.report_matched ? '有报告' : '报告待更新'}
+                        </Tag>
+                      ) : (
+                        <Tag style={{ marginLeft: 6 }}>未分析</Tag>
+                      )}
+                    </Tag>
+                  );
+                })}
+              </Space>
+            )}
+          </Spin>
+        </Card>
+      </div>
+
       <Tabs
         activeKey={analysisMode}
         onChange={(k) => setAnalysisMode(k as 'collect' | 'batch' | 'single' | 'history' | 'plan')}
@@ -826,8 +969,50 @@ const Job: React.FC = () => {
               </>
             )}
           </div>
+        ) : currentSearch?.expired ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="该搜索已过期"
+            description="超过 14 天未使用：职位列表与批量分析报告已自动清理（搜索条目保留）。请重新采集职位。"
+          />
+        ) : reportState === 'stale' ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="报告已过期"
+            description={`「${currentSearch?.keyword || ''}」的报告与当前职位列表不一致（如删除过职位），建议重新分析。`}
+            action={
+              <Button
+                type="primary"
+                size="small"
+                icon={<BarChartOutlined />}
+                loading={batchAnalyzing}
+                onClick={() => handleBatchAnalyze(false)}
+              >
+                重新分析
+              </Button>
+            }
+          />
         ) : (
-          <Empty description="点击「一键分析」生成市场分析报告" />
+          <Alert
+            type="info"
+            showIcon
+            message="当前职位列表还未做过批量分析"
+            description="是否马上开始批量分析？（将分析「职位收集」中的全部职位）"
+            action={
+              <Button
+                type="primary"
+                size="small"
+                icon={<BarChartOutlined />}
+                loading={batchAnalyzing}
+                disabled={fetchedJobs.length === 0}
+                onClick={() => handleBatchAnalyze(false)}
+              >
+                马上分析
+              </Button>
+            }
+          />
         )}
                 </Card>
               </>
