@@ -59,8 +59,13 @@ class ChangePasswordRequest(BaseModel):
 
 
 class ResetPasswordRequest(BaseModel):
-    """忘记密码重置请求（简化流程：邮箱 + 新密码，无邮件验证）"""
+    """修改密码请求：邮箱 + **原密码** + 新密码。
+
+    2026-09-16 加固：原实现仅凭邮箱即可重置（知道邮箱=接管账号）。项目无邮件通道，
+    因此改为要求提供**原密码**校验——等价于「改密码」，而非「找回密码」。
+    """
     email: str = Field(..., pattern=r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+    old_password: str = Field(..., min_length=1, max_length=128)
     new_password: str = Field(..., min_length=8, max_length=128)
 
 

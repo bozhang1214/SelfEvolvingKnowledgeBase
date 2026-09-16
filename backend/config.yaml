@@ -297,8 +297,13 @@ api:
     news_generate_per_minute: 6         # 资讯生成（POST 调 LLM；已有文件锁互斥，无需更严）
   # 鉴权配置（Phase 3）
   auth:
-    token_expire_hours: 2160           # 90 天（配合前端滑动续租，实际接近免登录）
-    jwt_secret: "${JWT_SECRET:-sekb-dev-secret-change-in-production}"
+    # 登录有效期。2026-09-16 从 2160h(90 天) 收紧到 168h(7 天)：
+    # 90 天 + 前端滑动续租 ≈ 永不失效，token 一旦泄露窗口极大。
+    token_expire_hours: 168            # 7 天
+    # ⚠️ 本字段已废弃：代码实际只读环境变量 JWT_SECRET（auth.get_jwt_secret），
+    #    且启动时做强校验（缺失/含占位词即拒绝启动）。保留此行仅为兼容旧配置读取，
+    #    留空即可——**不要在这里填密钥**，请配 .env 的 JWT_SECRET。
+    jwt_secret: ""
     password_min_length: 8
     rate_limit_login_per_minute: 5
 

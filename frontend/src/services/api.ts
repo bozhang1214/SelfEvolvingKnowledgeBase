@@ -71,7 +71,10 @@ apiClient.interceptors.response.use(
     if (error.response?.status === 401 && !isAuthEndpoint) {
       localStorage.removeItem('sekb_token');
       localStorage.removeItem('sekb_user');
-      window.location.href = '/login';
+      // 生产部署在 /sekb/ 子路径下（main.tsx basename），硬编码 '/login' 会跳到不存在的
+      // 绝对路径 → nginx 404。用 BASE_URL 拼接以跟随子路径。
+      const base = import.meta.env.BASE_URL || '/';
+      window.location.href = `${base.replace(/\/$/, '')}/login`;
     }
     return Promise.reject(error);
   }

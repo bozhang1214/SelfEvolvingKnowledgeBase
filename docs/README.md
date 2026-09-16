@@ -6,7 +6,7 @@
 
 | 路径 | 内容 | 维护者建议 |
 |------|------|-----------|
-| [`docs/tech/00-README.md`](tech/00-README.md) | **技术文档总览**：12 篇编号文档的文档地图与阅读路线（完整版） | 所有人 |
+| [`docs/tech/00-README.md`](tech/00-README.md) | **技术文档总览**：编号文档 00–11 共 12 篇（+ 调研/清单等附录）的文档地图与阅读路线 | 所有人 |
 | `docs/tech/01-ARCHITECTURE.md` … `docs/tech/11-EVOLUTION.md` | 技术文档全集（架构/运行时/模块/数据/API/配置/设计模式/术语/可观测/测试/演进） | 开发者 |
 | [`docs/ops/`](ops/00-README.md) | 运维与部署手册（编号 00-15：部署/排障/采集渠道/MCP 端点，先读 00-README 索引） | 运维/后端 |
 | [`docs/CHANGELOG.md`](CHANGELOG.md) | 项目变更日志（活文档，持续更新） | 所有人 |

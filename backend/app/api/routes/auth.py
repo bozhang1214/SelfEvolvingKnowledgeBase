@@ -193,22 +193,21 @@ async def change_password(
 
 @router.post("/reset-password")
 async def reset_password(body: ResetPasswordRequest, request: Request):
-    """
-    忘记密码：邮箱 + 新密码直接重置（简化流程，无邮件验证）。
+    """修改密码：邮箱 + **原密码** + 新密码（2026-09-16 起强制校验原密码）。
 
-    注意：此流程仅凭邮箱即可重置，存在被冒用的风险；已通过 /auth 分组限流
-    （每 IP 5 次/分钟）与审计日志缓解。如需更强安全，可改为邮件验证码流程。
+    安全说明：原实现仅凭邮箱即可重置任意账号密码（知道邮箱即接管账号）。项目没有
+    邮件通道，因此改为「必须知道原密码」——等价于改密码而非找回密码；忘记密码需由
+    管理员直接修改 users.json。未知邮箱与原密码错误返回**同一响应**，同时避免枚举。
     """
     storage = _get_user_storage()
     client_ip = get_client_ip(request)
     user = storage.find_by_email(body.email)
-    if not user:
-        # 不泄露邮箱是否注册：统一返回成功语义（仍记录审计）
+    if not user or not verify_password(body.old_password, user.password_hash):
         audit_log(AuditAction.LOGIN_FAILED, success=False, ip=client_ip,
-                  detail={"reason": "reset_password_unknown_email"})
-        return {"status": "ok"}
+                  detail={"reason": "reset_password_bad_credentials"})
+        raise HTTPException(401, "邮箱或原密码不正确")
     storage.update(user.user_id, {"password_hash": hash_password(body.new_password)})
-    logger.info("用户重置密码", extra={"user_id": user.user_id})
+    logger.info("用户修改密码", extra={"user_id": user.user_id})
     audit_log(AuditAction.LOGIN, user_id=user.user_id, success=True, ip=client_ip,
               detail={"action": "reset_password"})
     return {"status": "ok"}

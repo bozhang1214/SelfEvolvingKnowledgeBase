@@ -27,9 +27,23 @@ _MAX_JOBS = 1000  # 单 key 最多缓存 1000 条
 # key / search_id
 # ============================================================
 
-def cache_key(user_id: str, keyword: str, city: str, min_salary_k: int) -> str:
-    """存储键（含中文，仅作 JSON map key 使用）。"""
-    return f"{user_id}|{keyword}|{city}|{min_salary_k}"
+def cache_key(
+    user_id: str,
+    keyword: str,
+    city: str,
+    min_salary_k: int,
+    page: int = 0,
+    limit: int = 20,
+) -> str:
+    """存储键（含中文，仅作 JSON map key 使用）。
+
+    page/limit 仅在**偏离默认值**时才并入 key：这样既修复「第 2 页结果覆盖第 1 页」，
+    又保证默认分页（page=0, limit=20）的 key 与历史缓存完全一致（不打断既有 search_id）。
+    """
+    base = f"{user_id}|{keyword}|{city}|{min_salary_k}"
+    if page or limit != 20:
+        return f"{base}|p{page}|l{limit}"
+    return base
 
 
 def make_search_id(key: str) -> str:

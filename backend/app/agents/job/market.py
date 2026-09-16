@@ -267,7 +267,10 @@ async def analyze_market(
 
     from_provided = jobs is not None
     if not from_provided:
-        cached = get_cached_report(user_id, sid if search_id else None)
+        # 用派生出的 sid 精确查缓存：此前传 `sid if search_id else None`，而 None 的语义是
+        # 「该用户最新一份报告」——search_id 缺省时会把上一次**完全不同搜索**的报告返回
+        # （跨搜索串档）。缓存本就按 sid 存储，直接查 sid 即可。
+        cached = get_cached_report(user_id, sid)
         if cached is not None:
             return {"cached": True, "report": cached, "search_id": sid}
 

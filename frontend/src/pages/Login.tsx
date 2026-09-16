@@ -14,18 +14,22 @@ const Login: React.FC = () => {
   const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
-  // 忘记密码：邮箱 + 新密码直接重置
+  // 修改密码：邮箱 + 原密码 + 新密码
   const [resetOpen, setResetOpen] = useState(false);
   const [resetForm] = Form.useForm();
 
-  const handleReset = async (values: { email: string; new_password: string }) => {
+  const handleReset = async (values: {
+    email: string;
+    old_password: string;
+    new_password: string;
+  }) => {
     try {
-      await resetPassword(values.email, values.new_password);
-      message.success('密码已重置，请使用新密码登录');
+      await resetPassword(values.email, values.old_password, values.new_password);
+      message.success('密码已修改，请使用新密码登录');
       setResetOpen(false);
       resetForm.resetFields();
     } catch (err: any) {
-      message.error(err?.response?.data?.detail || '重置失败，请稍后再试');
+      message.error(err?.response?.data?.detail || '修改失败，请稍后再试');
     }
   };
 
@@ -95,18 +99,18 @@ const Login: React.FC = () => {
             <Text>还没有账户？</Text>
             <Link to="/register">立即注册</Link>
             <span style={{ margin: '0 8px', color: '#d9d9d9' }}>|</span>
-            <a onClick={() => setResetOpen(true)}>忘记密码？</a>
+            <a onClick={() => setResetOpen(true)}>修改密码？</a>
           </div>
         </Space>
       </Card>
 
-      {/* 忘记密码：邮箱 + 新密码直接重置 */}
+      {/* 修改密码：邮箱 + 原密码 + 新密码（需校验原密码） */}
       <Modal
-        title="重置密码"
+        title="修改密码"
         open={resetOpen}
         onCancel={() => setResetOpen(false)}
         onOk={() => resetForm.submit()}
-        okText="重置密码"
+        okText="确认修改"
         cancelText="取消"
         destroyOnClose
       >
@@ -117,6 +121,13 @@ const Login: React.FC = () => {
             rules={[{ required: true, type: 'email', message: '请输入有效邮箱' }]}
           >
             <Input prefix={<MailOutlined />} placeholder="注册时使用的邮箱" />
+          </Form.Item>
+          <Form.Item
+            name="old_password"
+            label="原密码"
+            rules={[{ required: true, message: '请输入原密码' }]}
+          >
+            <Input.Password prefix={<LockOutlined />} placeholder="当前使用的密码" autoComplete="current-password" />
           </Form.Item>
           <Form.Item
             name="new_password"

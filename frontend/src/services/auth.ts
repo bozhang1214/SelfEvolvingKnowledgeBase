@@ -94,10 +94,15 @@ export async function changePassword(oldPassword: string, newPassword: string): 
   });
 }
 
-/** 忘记密码：邮箱 + 新密码直接重置 */
-export async function resetPassword(email: string, newPassword: string): Promise<void> {
+/** 修改密码：邮箱 + 原密码 + 新密码（需校验原密码，防仅凭邮箱接管账号） */
+export async function resetPassword(
+  email: string,
+  oldPassword: string,
+  newPassword: string,
+): Promise<void> {
   await apiClient.post('/auth/reset-password', {
     email,
+    old_password: oldPassword,
     new_password: newPassword,
   });
 }

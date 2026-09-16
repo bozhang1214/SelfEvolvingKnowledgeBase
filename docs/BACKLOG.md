@@ -74,7 +74,9 @@
 - **白名单**（ALLOWED_EMAILS 完整/预览隔离）+ **B1 思考过程流式** + **B2 发送快捷键**
 - **3×P0**：CON-02 并发丢数据（JSON 存储 `asyncio.Lock` + uvicorn `--workers 1`）、SEC-01 JWT 弱密钥（fail-closed + 移除硬编码回退 + 轮换）、SEC-02 端口收敛（`127.0.0.1:8000`）
 - **R2-06**：答案 token 真流式（完整：llm_factory astream + Executor 流式 + token_sink 回传）
-- **文档工程第一刀（C2）**：`docs/README.md` 导航收敛 + Phase 5 能力速览 + 归档标注
+- **文档工程第一刀（C2）**：`docs/README.md` 导航收敛 + 归档标注
+  （注：原条目还写了「Phase 5 能力速览」，但 `docs/README.md` 中并无该小节，
+  且全仓未定义 Phase 5 —— 文档审查 DOC-18 指出此「声称已做但实际不存在」，故更正为实际内容）
 - **测试工具链整合（代码审查批次 1+2，2026-09-09）**：见下「五、测试工具链清单与状态」
 
 **未做（按优先级登记，含 Qoder 新增项）**：

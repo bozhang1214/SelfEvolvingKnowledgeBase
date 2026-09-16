@@ -120,7 +120,7 @@ async def fetch_jobs(body: JobFetchRequest, user_id: str = Depends(get_current_u
     if city in ("不限", "全部", "全国"):
         city = ""
 
-    key = cache_key(user_id, keyword, city, body.min_salary_k)
+    key = cache_key(user_id, keyword, city, body.min_salary_k, body.page, body.limit)
 
     # 命中缓存直接返回（14 天内）；同时刷新 ts，使「最后一次搜索」反映到默认回填
     cached = get_cached_jobs(key)
@@ -312,27 +312,41 @@ async def list_searches(user_id: str = Depends(get_current_user)):
     for sid in by_id:
         report = get_cached_report(user_id, sid)
         by_id[sid]["has_report"] = report is not None
-        by_id[sid]["report_matched"] = _report_matched(user_id, sid, report)
+        coverage = _report_coverage(user_id, sid, report)
+        by_id[sid]["report_coverage"] = round(coverage, 2)
+        by_id[sid]["report_matched"] = coverage >= _REPORT_COVERAGE_MIN
 
     return {"searches": searches}
 
 
-def _report_matched(user_id: str, search_id: str, report: dict[str, Any] | None) -> bool:
-    """报告的职位集合是否与当前职位列表**严格一致**（前端展示报告的约束）。"""
+#: 报告覆盖当前职位列表多少比例才算「仍有效」。原先用严格集合相等，而职位列表天然
+#: 动态（增删一条即不等）→ 用户几乎永远看到「报告已过期」。改为覆盖率阈值。
+_REPORT_COVERAGE_MIN = 0.8
+
+
+def _report_coverage(user_id: str, search_id: str, report: dict[str, Any] | None) -> float:
+    """报告覆盖「当前职位列表」的比例（0~1）：报告里出现了多少当前职位。"""
     if not report:
-        return False
+        return 0.0
     from app.agents.job.job_cache import get_by_search_id
 
     entry = get_by_search_id(user_id, search_id)
     if entry is None:
-        return False
+        return 0.0
 
     def _ik(j: dict[str, Any]) -> str:
         return j.get("job_id") or f"{j.get('title', '')}-{j.get('company', '')}"
 
     report_keys = {_ik(j) for j in (report.get("jobs") or [])}
     list_keys = {_ik(j) for j in (entry.get("jobs") or [])}
-    return bool(report_keys) and report_keys == list_keys
+    if not list_keys:
+        return 0.0
+    return len(report_keys & list_keys) / len(list_keys)
+
+
+def _report_matched(user_id: str, search_id: str, report: dict[str, Any] | None) -> bool:
+    """报告的职位覆盖是否达到阈值（兼容旧调用方）。"""
+    return _report_coverage(user_id, search_id, report) >= _REPORT_COVERAGE_MIN
 
 
 @router.get("/cache/search/{search_id}")

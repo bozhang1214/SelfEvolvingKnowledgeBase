@@ -127,17 +127,24 @@ const News: React.FC = () => {
    *
    *  为什么需要：429 有两种来源（**应用侧限流中间件**按 IP+路由组 60s 滑动窗口，
    *  以及 nginx 的 limit_req），原来的通用文案「加载周期报告列表失败」让人以为是功能坏了。
-   *  这里不再猜是哪一层（对用户没意义），只告诉他「等一会儿再试」——窗口是 60 秒。
+   *  这里不再猜是哪一层（对用户没意义），而是把「要等多久」讲清楚并给出剩余秒数。
    */
   const describeError = (e: any, fallback: string): string => {
     const status = e?.response?.status;
-    if (status === 429) return '请求过于频繁，已自动重试；仍失败请等 1 分钟再试';
+    if (status === 429) {
+      const retryAfter = Number(e?.response?.headers?.['retry-after']) || 60;
+      return `请求过于频繁，请等约 ${Math.max(1, Math.round(retryAfter))} 秒后再试（已自动重试一次）`;
+    }
     if (status === 409) return e?.response?.data?.detail || '任务正在生成中，请稍候';
     if (status === 502 || status === 503 || status === 504) return '服务正在重启或过载，请稍后重试';
     return e?.response?.data?.detail || fallback;
   };
 
-  /** 对 429/5xx 做一次退避重试（网关限流与部署重启都是瞬时的）。 */
+  /** 对 429/5xx 做退避重试。
+   *
+   *  429 的窗口是 60 秒（服务端返回 `Retry-After`），固定等 1.5 秒重试必然还是 429——
+   *  因此优先按 `Retry-After` 退避（上限 5 秒，避免界面长时间卡住），再提示用户稍后手动重试。
+   */
   const withRetry = async <T,>(fn: () => Promise<T>, times = 2, delayMs = 1500): Promise<T> => {
     let lastErr: any;
     for (let i = 0; i < times; i += 1) {
@@ -147,7 +154,13 @@ const News: React.FC = () => {
         lastErr = e;
         const st = e?.response?.status;
         if (st !== 429 && !(st >= 500 && st < 600)) throw e;
-        if (i < times - 1) await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+        if (i < times - 1) {
+          const retryAfterMs = Number(e?.response?.headers?.['retry-after']) * 1000;
+          const wait = st === 429 && retryAfterMs > 0
+            ? Math.min(retryAfterMs, 5000)
+            : delayMs * (i + 1);
+          await new Promise((r) => setTimeout(r, wait));
+        }
       }
     }
     throw lastErr;
@@ -201,7 +214,7 @@ const News: React.FC = () => {
         await loadReports(true);
       } else {
         // 接口已改为「提交任务，立即返回」：结果靠轮询 /status 获取
-        message.info('已提交日报生成任务，正在后台生成…');
+        message.info('已提交日报生成任务（约 3~10 分钟）。可离开本页去做别的，完成后回来刷新即可。', 8);
         await finishTask('daily', prev, '日报生成完成');
       }
     } catch (e: any) {
@@ -223,7 +236,7 @@ const News: React.FC = () => {
     try {
       // 后端会在生成完成后把结果写进状态文件；这里只负责提交 + 轮询
       await generatePeriodic(type);
-      message.info(`已提交${label}生成任务，正在后台生成…`);
+      message.info(`已提交${label}生成任务（约 10 分钟）。可离开本页去做别的，完成后回来刷新即可。`, 8);
       await finishTask(type as TabKey, prev, `${label}生成完成，请查看列表`);
     } catch (e: any) {
       if (e?.response?.status === 409) {
