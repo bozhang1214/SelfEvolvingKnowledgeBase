@@ -124,9 +124,13 @@ class NewsStorage:
             return []
 
     def _write_index(self, index: list[dict]) -> None:
-        self._index_file.write_text(
+        # 原子写：先写临时文件再 replace。非原子写一旦崩溃截断，_read_index 会静默
+        # 返回空列表 → 全量日报索引丢失（md 还在但列表页空了）且无任何告警。
+        tmp = self._index_file.with_name(self._index_file.name + ".tmp")
+        tmp.write_text(
             json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        tmp.replace(self._index_file)
 
     def _cleanup(self) -> None:
         """清理超过保留天数的旧日报文件。"""
