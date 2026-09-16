@@ -43,9 +43,9 @@ flowchart LR
 | Actor | 关系 | 证据 |
 |-------|------|------|
 | 用户（浏览器） | 通过 nginx 访问 `/sekb/` SPA；`/sekb/share/*` 无登录访问 | docker-compose.prod.yml:119-161；frontend/src/App.tsx:26-52；deploy/nginx.conf:182-184 |
-| LLM 服务商（DeepSeek） | 唯一主 LLM；11 个角色统一 `deepseek-flash`（原 chat/reasoner 分级已统一） | backend/config.yaml:20-82 |
+| LLM 服务商（DeepSeek） | 唯一主 LLM；11 个角色<!-- fact:llm_roles=11 -->统一 `deepseek-flash`（原 chat/reasoner 分级已统一） | backend/config.yaml:20-82 |
 | 博查搜索 API | `web_search` 工具，联网增强 | backend/config.yaml:221-227 |
-| RSSHub + 38 个 RSS 源 | 资讯日报/周报/月报采集（APScheduler 定时） | backend/config.yaml:336-379 |
+| RSSHub + 38 个 RSS 源（数量权威见 `06-CONFIG-REFERENCE.md`） | 资讯日报/周报/月报采集（APScheduler 定时） | backend/config.yaml:336-379 |
 | 视觉模型（qwen-vl-plus） | 图片分析（**不经 llm_factory**） | backend/app/tools/image_processor.py:306-337 |
 | 招聘公开接口 / sekb-browser | 职位采集（猎聘/字节/腾讯/百度/小米/阿里/小红书）；**JD 分析委托内核** | backend/app/agents/job/fetcher.py、sources.py；分析链路见 03 §11.5 |
 | 监控栈 | Prometheus/Grafana/Loki/Alertmanager + 飞书 webhook | docker-compose.monitoring.yml:26-214 |

@@ -134,7 +134,7 @@ related: [01-ARCHITECTURE, 04-DATA-MODEL, 11-EVOLUTION]
 - host/port 仅启动日志引用（server.py:143-147；实际绑定由启动参数 `uvicorn --host/--port` 决定）。
 
 ### 2.13 `news`
-已引用：enabled、llm_role(news_report)、time_window_hours(24)、report_dir、retention_days(70)、daily/weekly/monthly_cron、timezone(Asia/Shanghai)、rss_sources(**38 条**)、keywords(**20 条**，含移动端/前端/跨端)、exclude_keywords([早报])、min_items_per_category(10)、categories(11 类)。死配置：max_items(100，无读取方)。
+已引用：enabled、llm_role(news_report)、time_window_hours(24)、report_dir、retention_days(70)、daily/weekly/monthly_cron、timezone(Asia/Shanghai)、rss_sources(**38 条**<!-- fact:rss_sources=38 -->)、keywords(**20 条**，含移动端/前端/跨端)、exclude_keywords([早报])、min_items_per_category(10)、categories(11 类)。死配置：max_items(100，无读取方)。
 
 ### 2.14 `job`
 已引用：enabled、llm_role、default_keyword(Agent)、default_city(北京)、default_min_salary_k(50)、exclude_companies。死配置：default_city_code。
@@ -144,7 +144,7 @@ related: [01-ARCHITECTURE, 04-DATA-MODEL, 11-EVOLUTION]
 
 ## 3. 死配置清单（汇总）
 
-> **状态（基于 HEAD 44dfed1）**：此前 D3/D6/P2 已删除的死键——`reflection.adaptive.*`/`sampling.*`、`cost_control` 预算 4 项、`tracing.sample_rate`/`local_json.*`、`tools.vector_store.enabled`/`provider`、`app.debug`——**已从 config.yaml 中移除，不再是配置项**。同时若干旧「死配置」已接线（`memory.l2_session.*`、`cost_control.usage.*`、`api.rate_limit.*`、`security.prompt_injection_*`/`max_input_length`/`blocked_patterns`、`evaluation.ragas.*`），勿再按本表历史版本误判。当前仍无读取方的死键如下：
+> **状态（基于 HEAD 44dfed1）**：此前 D3/D6/P2 已删除的死键——`reflection.adaptive.*`/`sampling.*`、`cost_control` 预算 4 项、`tracing.sample_rate`/`local_json.*`、`tools.vector_store.enabled`/`provider`、`app.debug`——**已从 config.yaml 中移除，不再是配置项**。同时若干旧「死配置」已接线（`memory.l2_session.*`、`cost_control.usage.*`、`api.rate_limit.*`、`security.prompt_injection_*`/`max_input_length`/`blocked_patterns`、`evaluation.ragas.*`），勿再按本表历史版本误判。当前仍无读取方的死键共 **29 个**<!-- fact:dead_config_keys=29 --> 如下：
 
 | 域 | 死配置 | 建议（归 11-EVOLUTION） |
 |----|--------|------------------------|

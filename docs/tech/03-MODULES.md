@@ -251,7 +251,7 @@ SEKB 不需要跟着改代码（`mcp_client.py:1-15`）。
 | 用量可见性 | 内核自己调 LLM，SEKB 的 LLMFactory 看不到 → 由内核回传 `usage` 并落结构化日志 | `generator.py:132-142`；`market.py:228-243` |
 | 版本可见性 | 构建期烧入 `JOBCOPILOT_COMMIT`；`/api/v1/health/` 暴露 `kernel.{commit,prompt_source,healthy}` | `core/kernel_info.py:28-71` |
 | 画像隔离 | **逐请求注入** `user_profile`（多用户系统不能用内核全局画像 / `save_profile`） | `generator.py:124-131`；`market.py:202-211` |
-| 云端平台入口 | 同一套内核另起 HTTP 入口（`/mcp` + `/sse`），令牌门禁 + BYOK | `docs/ops/15-MCP-ENDPOINT.md` |
+| 云端平台入口 | 同一套内核另起 HTTP 入口（`/mcp` + `/sse`），令牌门禁 + BYOK；对外暴露 **7 个**<!-- fact:mcp_tools=7 -->工具（`analyze_job` / `analyze_jobs_batch` / `self_check` / `get_profile` / `save_profile` / `list_prompt_packs` / `sync_prompts`） | `docs/ops/15-MCP-ENDPOINT.md` |
 
 **三个必须知道的行为**
 

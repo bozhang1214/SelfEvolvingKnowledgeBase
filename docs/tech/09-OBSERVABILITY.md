@@ -15,7 +15,7 @@ related: [02-RUNTIME-FLOWS, 04-DATA-MODEL, 11-EVOLUTION]
 > **适合谁读**：运维、SRE、后端排障。
 > **读完能做什么**：看懂 Grafana 面板与告警含义；按决策树定位故障；知道当前可观测性缺口。
 
-> **数据源**：事实表 [.facts/T8-observability.md](./.facts/T8-observability.md)（23 指标 + 12 告警 + file:line）。部署/操作命令见 `docs/ops/`。
+> **数据源**：事实表 [.facts/T8-observability.md](./.facts/T8-observability.md)（23 指标<!-- fact:metrics_defined=23 --> + 12 告警<!-- fact:alert_rules=12 --> + file:line）。部署/操作命令见 `docs/ops/`。
 > ⚠️ T8 事实表在「health 独立抓取 / 本地 JSON trace / record_llm_call 无调用方」三处已过时，以本文为准（待事实表同步）。
 
 ---

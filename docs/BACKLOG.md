@@ -20,6 +20,7 @@
 |---|------|------|------|
 | — | 测试工具链整合（代码审查批次 1+2） | ruff/mypy/eslint/pytest/vitest/pre-commit/gitleaks/pip-audit/npm audit 等已接入 CI 与脚本，见下「五、测试工具链清单与状态」 | ✅ 已接入，存量债按基线控制（mypy 310 / eslint any 告警待逐轮收窄） |
 | — | 文档工程剩余（C1/C3/C5/C9-C10） | 主 README 重构、子系统成篇、部署手册合并、文档守卫脚本化 | 暂缓（见 D15） |
+| **W2** | **文档防漂移机制（让漂移在提交那一刻就红）** | RC-1 没强制点 / RC-2 引用格式脆 / RC-3 快照冒充 SSOT / RC-4 同一数字多处抄 / RC-5 无触发无责任人 —— 五项各配一个机制：`doc_guard.sh` 单一入口 + CI `docs-guard` 与 pre-commit 阻断、全仓 `check-docs.py`（链接+引用越界+符号）、`check-facts.py`（活数字矛盾即失败）、`.facts` 过期横幅、`DOC-TEMPLATE` 引用写法优先级（首选 `file::symbol`） | ✅ 2026-09-16 落地 |
 | **W1** | **技术文档复核（docs/tech 00–11 逐篇对照代码）** | 12 篇技术文档的 `based-on-commit` 全部停在 **2026-09-09**（落后 HEAD 190–203 个提交；其中 `01-ARCHITECTURE` / `02-RUNTIME-FLOWS` 已越过 `check-freshness.sh` 的 `LOG_DEPTH=200` 告警线）。做法：逐篇把「模块/路径/`file:line` 引用/端点/配置键/指标名/测试命令」与当前代码核对，修正漂移，并把 `based-on-commit` 推进到复核时的 HEAD | 🔄 2026-09-16 启动（记录见 `docs/tech/漂移清单.md`「技术文档复核」节） |
 
 ## 二、暂缓 / 待办（Deferred）

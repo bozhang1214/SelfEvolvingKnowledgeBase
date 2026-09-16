@@ -54,3 +54,14 @@ repos:
         language: system
         always_run: true
         pass_filenames: false
+
+      # ---------- 文档守卫：断链 / 引用越界 / 符号不存在 / 文档过期（阻断）----------
+      # 2026-09-16 技术文档复核后新增：此前这些校验一个都没在必经之路上，
+      # 导致技术文档的行号与事实能静默漂移 200+ 个提交。
+      # 只改到 Markdown 或代码时才跑（代码改动会移动行号，必须一起查引用）。
+      - id: docs-guard
+        name: docs guard (links + citations + freshness)
+        entry: bash docs/tech/.validation/doc_guard.sh --no-warn
+        language: system
+        files: \.(md|py|ts|tsx|yaml|yml|sh)$
+        pass_filenames: false

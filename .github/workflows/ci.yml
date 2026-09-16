@@ -63,6 +63,23 @@ jobs:
         working-directory: backend
         run: bash scripts/mypy_gate.sh
 
+  # ============ 文档守卫（2026-09-16 技术文档复核后新增）============
+  # 为什么单列一个 job：复核时发现三个文档校验脚本**一个都没接在必经之路上**
+  # （links 只扫 tech/0*.md、freshness 从未接入 CI、doc-sync 默认 exit 0），
+  # 于是 12 篇技术文档的行号与事实静默漂移了 200+ 个提交无人发现。
+  # 这里把它变成阻断门禁：断链、引用越界、符号找不到、文档过期 → 直接红。
+  docs-guard:
+    name: Docs guard (links + citations + freshness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 引用校验依赖 git ls-files（只查被跟踪的 Markdown），无需子模块与依赖安装
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Doc guard
+        run: bash docs/tech/.validation/doc_guard.sh --no-warn
+
   # ============ 依赖与密钥安全扫描（Batch 2）============
   security-scan:
     name: Security (gitleaks + pip-audit)
