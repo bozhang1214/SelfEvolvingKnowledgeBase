@@ -40,7 +40,12 @@ services:
       - ./deploy/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     ports:
-      - "${PROMETHEUS_PORT:-9091}:9090"
+    # 监听地址由 MONITOR_BIND_IP 控制（默认 0.0.0.0）：
+    #   虽然 ufw 只放行 22/80/443，但 **Docker 发布的端口走 FORWARD 链**，
+    #   公网可达性实际由腾讯云安全组决定 —— 安全组一改，9091/3001/3101/9093
+    #   就直接暴露（Grafana 弱口令 = 读全部指标与日志）。
+    #   改成 100.71.24.105 后只剩 Tailscale 可达，不再依赖安全组。
+      - "${MONITOR_BIND_IP:-0.0.0.0}:${PROMETHEUS_PORT:-9091}:9090"
     networks:
       - sekb_network
     healthcheck:
@@ -76,7 +81,7 @@ services:
       # Grafana 持久化数据（用户、看板修改等）
       - grafana_data:/var/lib/grafana
     ports:
-      - "${GRAFANA_PORT:-3001}:3000"
+      - "${MONITOR_BIND_IP:-0.0.0.0}:${GRAFANA_PORT:-3001}:3000"
     networks:
       - sekb_network
     depends_on:
@@ -103,7 +108,7 @@ services:
       - ./deploy/loki-config.yml:/etc/loki/local-config.yaml:ro
       - loki_data:/loki
     ports:
-      - "${LOKI_PORT:-3101}:3100"
+      - "${MONITOR_BIND_IP:-0.0.0.0}:${LOKI_PORT:-3101}:3100"
     networks:
       - sekb_network
     # Loki 官方镜像为 distroless（无 /bin/sh、wget 等工具），无法使用 CMD-SHELL 健康检查。
@@ -150,7 +155,7 @@ services:
       - ./deploy/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager_data:/alertmanager
     ports:
-      - "${ALERTMANAGER_PORT:-9093}:9093"
+      - "${MONITOR_BIND_IP:-0.0.0.0}:${ALERTMANAGER_PORT:-9093}:9093"
     networks:
       - sekb_network
     depends_on:

@@ -32,6 +32,7 @@ NC='\033[0m'
 SKIP_BUILD=false
 SKIP_CHECK=false
 SKIP_MONITOR=false
+SKIP_BROWSER=false
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
@@ -48,6 +49,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_MONITOR=true
             shift
             ;;
+        --skip-browser)
+            SKIP_BROWSER=true
+            shift
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -61,6 +66,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --skip-build    跳过镜像构建（使用已构建的镜像）"
             echo "  --skip-check    跳过部署前检查"
             echo "  --skip-monitor  不启动监控栈"
+            echo "  --skip-browser  不构建/启动浏览器服务（browser）"
             echo "  --dry-run       仅打印命令，不实际执行"
             echo "  --help          显示帮助"
             exit 0
@@ -469,6 +475,44 @@ else
 fi
 
 # ============================================================
+# 阶段 3.6：启动浏览器服务（Playwright，采集 BOSS 等站点）
+# ============================================================
+# 此前 deploy.sh 完全不管 browser 容器：它由人手 `up -d` 起一次后就再没随部署更新，
+# 于是 browser-service/app.py 的任何改动（例如 S12 内部鉴权）**永远上不了线**。
+# 这里纳入部署流程；--build 使其与源码同步（Playwright 基础层有缓存，通常只重建 app.py 层）。
+# 用 --skip-browser 可在只改后端时跳过，节省时间。
+step "阶段 3.6/7：启动浏览器服务"
+
+if [ "$SKIP_BROWSER" = true ]; then
+    info "跳过（--skip-browser）"
+elif grep -q "^  browser:" docker-compose.prod.yml 2>/dev/null; then
+    if run "docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build browser"; then
+        if [ "$DRY_RUN" = false ]; then
+            sleep 5
+            BROWSER_STATE="$(docker inspect -f '{{.State.Status}}' sekb-browser 2>/dev/null || echo unknown)"
+            if [ "$BROWSER_STATE" = "running" ]; then
+                # token 必须与本机 .env.prod 一致：不一致时 browser 会 403，采集全挂。
+                if grep -qE "^BROWSER_INTERNAL_TOKEN=." .env.prod 2>/dev/null; then
+                    success "browser 已启动（内部鉴权已开启）"
+                else
+                    warn "browser 已启动，但 BROWSER_INTERNAL_TOKEN 为空 → **不鉴权**" \
+                         "同网容器可读写登录 Cookie；执行：echo \"BROWSER_INTERNAL_TOKEN=\$(openssl rand -hex 24)\" >> .env.prod 后重部署"
+                fi
+            else
+                warn "browser 启动后状态为 ${BROWSER_STATE}" \
+                     "查看日志：docker logs sekb-browser --tail 30"
+            fi
+        fi
+    else
+        # 不阻塞主流程：采集功能不可用，但资讯/对话等主链路不受影响。
+        warn "browser 构建/启动失败（不阻塞主流程）" \
+             "查看日志：docker compose -f docker-compose.prod.yml logs browser --tail 30"
+    fi
+else
+    info "compose 中没有 browser 服务，跳过"
+fi
+
+# ============================================================
 # 阶段 4：启动应用栈 - 前端
 # ============================================================
 step "阶段 4/7：启动前端"
@@ -563,9 +607,16 @@ if [ "$DRY_RUN" = false ]; then
     probe_endpoint "frontend /" "http://localhost/" "200 301" || EP_FAIL=$((EP_FAIL + 1))
 
     if [ "$SKIP_MONITOR" = false ]; then
-        probe_endpoint "prometheus" "http://localhost:9091/-/healthy" "200" || EP_FAIL=$((EP_FAIL + 1))
-        probe_endpoint "grafana" "http://localhost:3001/api/health" "200" || EP_FAIL=$((EP_FAIL + 1))
-        probe_endpoint "alertmanager" "http://localhost:9093/-/healthy" "200" || EP_FAIL=$((EP_FAIL + 1))
+        # 监控端口可能被 MONITOR_BIND_IP 绑到非回环地址（如 Tailscale IP）。
+        # 绑到具体网卡后 127.0.0.1 不再监听，探针必须跟着走，否则「部署成功」会误报失败。
+        MONITOR_HOST="$(grep -E '^MONITOR_BIND_IP=' .env.prod 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+        case "$MONITOR_HOST" in
+            ""|"0.0.0.0"|"::"|"*") MONITOR_HOST="localhost" ;;
+        esac
+        probe_endpoint "prometheus" "http://${MONITOR_HOST}:9091/-/healthy" "200" || EP_FAIL=$((EP_FAIL + 1))
+        probe_endpoint "grafana" "http://${MONITOR_HOST}:3001/api/health" "200" || EP_FAIL=$((EP_FAIL + 1))
+        probe_endpoint "alertmanager" "http://${MONITOR_HOST}:9093/-/healthy" "200" || EP_FAIL=$((EP_FAIL + 1))
+        # feishu-webhook 固定绑 127.0.0.1（只被 backend/Alertmanager 经内网调用）
         probe_endpoint "feishu-webhook" "http://localhost:5001/health" "200" || EP_FAIL=$((EP_FAIL + 1))
     fi
 
