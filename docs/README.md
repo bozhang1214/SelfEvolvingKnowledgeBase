@@ -1,6 +1,18 @@
+---
+title: SEKB 文档工程
+layer: 宪法层
+owner: SEKB Team
+status: active
+version: v1.0.0
+last-updated: 2026-09-16
+based-on-commit: 965b246
+related: [docs/tech/00-README, docs/ops/00-README, docs/codeReview/未修复问题跟踪]
+---
+
 # SEKB 文档工程
 
 > 本文档工程按 `prompt/1-6-工程逆向分析提示词-合并版.md` 重构，基于代码证据（`file:line`）维护。
+> 格式约束见 [`docs/tech/.validation/DOC-TEMPLATE.md`](tech/.validation/DOC-TEMPLATE.md)。
 
 ## 目录结构
 
@@ -8,12 +20,18 @@
 |------|------|-----------|
 | [`docs/tech/00-README.md`](tech/00-README.md) | **技术文档总览**：编号文档 00–11 共 12 篇（+ 调研/清单等附录）的文档地图与阅读路线 | 所有人 |
 | `docs/tech/01-ARCHITECTURE.md` … `docs/tech/11-EVOLUTION.md` | 技术文档全集（架构/运行时/模块/数据/API/配置/设计模式/术语/可观测/测试/演进） | 开发者 |
+| [`docs/tech/12-三平台MCP接入调研-百炼-千帆-HiAgent.md`](tech/12-三平台MCP接入调研-百炼-千帆-HiAgent.md) | 三平台 MCP 接入调研（附录，非编号正文） | 接入方 |
+| [`docs/research/20260915-volcengine-hiagent-mcp.md`](research/20260915-volcengine-hiagent-mcp.md) | 火山引擎 HiAgent/Ark 接入调研**证据与抓取方法**（结论在 `tech/12`，本文留可复现的抓取脚本） | 接入方 |
 | [`docs/ops/`](ops/00-README.md) | 运维与部署手册（编号 00-15：部署/排障/采集渠道/MCP 端点，先读 00-README 索引） | 运维/后端 |
-| [`docs/CHANGELOG.md`](CHANGELOG.md) | 项目变更日志（活文档，持续更新） | 所有人 |
-| [`docs/codeReview/未修复问题跟踪.md`](codeReview/未修复问题跟踪.md) | 代码审查问题跟踪表（已合并 Qoder/CodeBuddy/全域评审两轮问题；原始报告已归档，git 历史可查） | 架构师 |
+| [`docs/CHANGELOG.md`](CHANGELOG.md) | 项目变更日志（活文档，持续更新；新条目走 `docs/changelog.d/` 碎片） | 所有人 |
+| [`docs/codeReview/未修复问题跟踪.md`](codeReview/未修复问题跟踪.md) | 代码审查**总账**：已修/未修/排期（范围 3）与决策记录 | 架构师 |
+| [`docs/codeReview/2026-09-15/`](codeReview/2026-09-15/) | 2026-09-15 四方审查**原始报告**（`DSH-Agent/` `Trae/` `Qoder/` `CodeBuddy/`）+ 合并结论（`DSH-Agent/07-全问题总表.md`、`09-修复状态确认清单.md`） | 架构师 |
 | [`docs/BACKLOG.md`](BACKLOG.md) | 需求跟踪 / 待办 / 代码审计跟踪（活文档） | 所有人 |
-| `docs/tech/.validation/` | 文档工程校验脚本（链接/孤儿/编号/新鲜度） | 维护者 |
+| [`docs/COORDINATION.md`](COORDINATION.md) | 多协作者开工认领表（改共享文件前必看） | 所有人 |
+| `docs/tech/.validation/` | 文档工程校验脚本（链接/孤儿/编号/新鲜度）+ 格式模板 | 维护者 |
 | `docs/tech/.facts/` | 事实表 T1–T8（单一事实源 SSOT 工作产物） | 维护者 |
+| `docs/tmp/` | **本地讨论区**（gitignore，不进版本库）：设计草案、个人资料、一次性脚本。被跟踪文档会引用其中部分文件（如 RFC、REFACTORING-PLAN） | 本人 |
+| 仓库根 [`README.md`](../README.md) / [`AGENTS.md`](../AGENTS.md) | 门面（能力速览）+ 协作硬约定；两者都不复制 docs 内容，只做导览 | 所有人 |
 
 ## 文档工程维护约定
 
@@ -21,6 +39,9 @@
 2. **活文档**：每次功能/修复落地后，同步更新 `docs/CHANGELOG.md`、相关 `docs/tech/*.md`。
 3. **自动联动**：`git pre-commit` 会检查「本次改动的后端路由/配置/模块是否有对应文档章节」，未更新会提示（见 `docs/tech/.validation/`）。
 4. **过期标记**：每篇文档头部含 `last-updated` / `based-on-commit`；超过阈值由校验脚本告警。
+5. **不重复台账**：同一份结论只维护一处。原始审查报告只作**证据留存**（不再更新状态），
+   状态一律以 `未修复问题跟踪.md` 与总表为准。
+6. **单一日期目录**：`docs/codeReview/` 下的日期目录统一用 `YYYY-MM-DD`（2026-09-16 起，旧的 `20260915/` 已并入 `2026-09-15/`）。
 
 ## 快速开始
 

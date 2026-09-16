@@ -365,7 +365,7 @@ related: [docs/tech/09-OBSERVABILITY]
 bash deploy/pre-deploy-check.sh
 ```
 
-脚本会自动执行所有检查项并输出彩色报告，详见：[deploy/pre-deploy-check.sh](../deploy/pre-deploy-check.sh)
+脚本会自动执行所有检查项并输出彩色报告，详见：[deploy/pre-deploy-check.sh](../../deploy/pre-deploy-check.sh)
 
 ---
 

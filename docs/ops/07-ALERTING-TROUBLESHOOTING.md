@@ -12,7 +12,7 @@ related: [docs/tech/09-OBSERVABILITY]
 # 告警模块故障排查指南
 
 > 适用范围：Phase 4 告警通知链路（Prometheus 告警规则 → Alertmanager 路由 → feishu-webhook 中转 → 飞书/邮件）
-> 相关文件：[deploy/alertmanager.yml](../deploy/alertmanager.yml)、[deploy/alerts.yml](../deploy/alerts.yml)、[deploy/feishu-webhook/](../deploy/feishu-webhook/)、[docker-compose.monitoring.yml](../docker-compose.monitoring.yml)
+> 相关文件：[deploy/alertmanager.yml](../../deploy/alertmanager.yml)、[deploy/alerts.yml](../../deploy/alerts.yml)、[deploy/feishu-webhook/](../../deploy/feishu-webhook/)、[docker-compose.monitoring.yml](../../docker-compose.monitoring.yml)
 
 ---
 
@@ -188,7 +188,7 @@ docker inspect --format='{{range .State.Health.Log}}{{.Output}}{{end}}' sekb-fei
 # 若显示 "wget: executable file not found in $PATH" 即为此问题
 ```
 
-**修复**：[docker-compose.monitoring.yml](../docker-compose.monitoring.yml) 中健康检查改用 python：
+**修复**：[docker-compose.monitoring.yml](../../docker-compose.monitoring.yml) 中健康检查改用 python：
 
 ```yaml
 healthcheck:
@@ -635,7 +635,7 @@ curl -X DELETE http://localhost:9093/api/v2/silence/$SILENCE_ID
 
 ## 八、附录：告警规则清单
 
-当前配置的告警规则（[deploy/alerts.yml](../deploy/alerts.yml)）：
+当前配置的告警规则（[deploy/alerts.yml](../../deploy/alerts.yml)）：
 
 | 告警名称 | 级别 | 触发条件 | 持续时间 |
 |---------|------|---------|---------|
