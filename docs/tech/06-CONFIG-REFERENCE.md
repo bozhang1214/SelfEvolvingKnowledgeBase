@@ -36,12 +36,20 @@ related: [01-ARCHITECTURE, 04-DATA-MODEL, 11-EVOLUTION]
 |------|------|--------|
 | `DEEPSEEK_API_KEY` | 主 LLM key | config.yaml llm.api_key → llm_factory.py:497 |
 | `BOCHA_API_KEY` | web_search 工具 key | registry.py:154 |
+| `BOCHA_ENDPOINT` | 博查搜索端点（默认官方端点） | bocha_server.py:414 |
+| `BOCHA_MAX_RESULTS` | 博查返回条数（默认 5） | bocha_server.py:415 |
+| `BOCHA_TIMEOUT_SECONDS` | 博查超时秒数（默认 10） | bocha_server.py:416 |
+| `BOCHA_MAX_RETRIES` | 博查重试次数（默认 2） | bocha_server.py:417 |
 | `JWT_SECRET` | JWT 签名（≥32 字符，启动强校验，不读 config） | auth.py:39；bootstrap.py:128-130 |
-| `ALLOWED_EMAILS` | 白名单（full vs preview） | access.py:19-24 |
-| `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` | 可选链路追踪 | tracing.py:110-121 |
+| `ALLOWED_EMAILS` | 白名单（**留空=全员完整功能；填写则名单外降级为预览**） | access.py:19-24 |
+| `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` / `LANGSMITH_ENDPOINT` | 可选链路追踪 | tracing.py:41-42,110-121 |
+| `NEWS_ALERT_WEBHOOK_URL` | 资讯失败告警的飞书网关地址（默认同网网关；`off` 关闭） | alerts.py |
 | `VISION_LLM_BASE_URL` / `VISION_LLM_API_KEY` / `VISION_LLM_MODEL` | 图片视觉 LLM（**不经 config.yaml**） | upload.py:103-116 |
 | `IMAGE_ANALYSIS_ENABLED` / `OCR_ENABLED` / `OCR_LANG` | 图片分析开关 | upload.py:103-116 |
 | `SEKB_CONFIG_PATH` | 配置文件路径 | server.py:129 |
+| `SEKB_AUDIT_DIR` | 审计日志目录（默认 `data/audit`） | audit.py:62 |
+
+> 完整可复制模板见 `backend/.env.example`（已逐项注释用途/默认值/不填的后果）。
 
 ---
 

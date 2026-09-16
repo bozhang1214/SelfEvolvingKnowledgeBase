@@ -6,21 +6,26 @@
 
 ```
 prompt/
-├── README.md                    # 本文件
-├── news/                        # 科技资讯 Agent（Phase 1）
-│   ├── daily_report.md          #   日报生成主提示词
-│   └── weekly_report.md         #   周报/月报生成提示词
-└── job/                         # 职位分析 Agent（Phase 2）
-    ├── README.md                #   流程说明 + 用户画像
-    ├── 01_job_filter.md         #   职位筛选
-    ├── 02_job_analysis.md       #   职位深度分析
-    ├── 03_knowledge_priority.md #   知识点汇总与优先级
-    ├── 04_interview_qa.md       #   面试问题与回答要点
-    ├── 05_gap_analysis.md       #   能力差距分析
-    ├── 06_resume_advice.md      #   简历建议 + 简历变体
-    ├── 07_learning_plan.md      #   学习计划
-    ├── 08_project_iteration.md  #   项目迭代建议
-    └── 09_job_strategy.md       #   求职建议与投递策略
+├── README.md                          # 本文件
+├── 1-6-工程逆向分析提示词-合并版.md      # 工程逆向分析（合并版）
+├── news/                              # 科技资讯 Agent
+│   ├── daily_report.md                #   日报生成主提示词
+│   ├── headline.md                    #   头条分析
+│   └── comprehensive.md               #   综合分析（周报/月报按自然周期取数同走此提示词）
+└── job/                               # 职位分析 Agent
+    ├── README.md                      #   流程说明 + 用户画像
+    ├── 01_job_filter.md               #   职位筛选
+    ├── 02_job_analysis.md             #   职位深度分析
+    ├── 03_knowledge_priority.md       #   知识点汇总与优先级
+    ├── 04_interview_qa.md             #   面试问题与回答要点
+    ├── 05_gap_analysis.md             #   能力差距分析
+    ├── 06_resume_advice.md            #   简历建议 + 简历变体
+    ├── 07_learning_plan.md            #   学习计划
+    ├── 08_project_iteration.md        #   项目迭代建议
+    ├── 09_job_strategy.md             #   求职建议与投递策略
+    ├── 单职位探查.md                   #   单职位探查（中文可读版）
+    ├── 批量职位分析.md                 #   批量职位分析（中文可读版）
+    └── 职位知识迭代.md                 #   职位知识迭代（中文可读版）
 ```
 
 ## 约定

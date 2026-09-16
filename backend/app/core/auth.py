@@ -58,7 +58,10 @@ def get_jwt_secret() -> str:
 
 
 def hash_password(password: str) -> str:
-    """使用 SHA-256 + 随机盐值哈希密码（Phase 3 暂用，后续迁移到 bcrypt）。"""
+    """使用 PBKDF2-HMAC-SHA256（100000 次迭代 + 16 字节随机盐）哈希密码。
+
+    后续计划迁移到 bcrypt/argon2id（见 BACKLOG 密钥加固项）。
+    """
     salt = secrets.token_hex(16)
     pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100000)
     return f"{salt}${pwd_hash.hex()}"

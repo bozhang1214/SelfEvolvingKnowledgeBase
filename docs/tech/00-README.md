@@ -112,7 +112,7 @@ related: [01-ARCHITECTURE, 02-RUNTIME-FLOWS, 03-MODULES, 04-DATA-MODEL, 05-API-R
 
 | 位置 | 关系 |
 |------|------|
-| `docs/ops/` | 部署运维手册（编号 00-10，入口 00-README），09 讲技术口径 |
+| `docs/ops/` | 部署运维手册（编号 00-15，入口 00-README），09 讲技术口径 |
 | `docs/CHANGELOG.md` | 变更历史（按日期倒序），技术文档描述「现在」，CHANGELOG 描述「何时改了什么」 |
 | `docs/BACKLOG.md` | 待办与代码审计跟踪 |
 | 根 `README.md` | 项目 README（对外介绍 + 安装），入口链接到本工程 |
