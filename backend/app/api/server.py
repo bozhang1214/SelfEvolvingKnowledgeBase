@@ -22,7 +22,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.api.middleware import RateLimitMiddleware, setup_cors
@@ -238,6 +238,32 @@ def create_app() -> FastAPI:
                 "message": exc.message,
                 "details": exc.details,
             },
+        )
+
+    # ---------- 全局异常处理器：HTTPException（5xx 出口脱敏） ----------
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
+        """`HTTPException` 的 5xx 只回通用文案 + error_id（SEC-04）。
+
+        为什么在出口处做：业务路由里有 20+ 处 `raise HTTPException(500, f"... {e}")`，
+        会把内部异常原文（文件路径/表名/组件名）直接返回客户端。逐个改调用点易漏，
+        统一在这里脱敏即可根治。4xx 属业务语义（如「任务正在生成中」），保持原样。
+        """
+        if exc.status_code < 500:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+        import uuid as _uuid
+
+        error_id = _uuid.uuid4().hex[:12]
+        logger.warning(
+            "请求处理返回 5xx（详情已脱敏）",
+            status_code=exc.status_code,
+            error_id=error_id,
+            detail=str(exc.detail)[:300],
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": "服务内部错误，请稍后重试", "error_id": error_id},
         )
 
     # ---------- 全局兜底异常处理器 ----------

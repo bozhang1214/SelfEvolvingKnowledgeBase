@@ -133,11 +133,14 @@ class NewsStorage:
         tmp.replace(self._index_file)
 
     def _cleanup(self) -> None:
-        """清理超过保留天数的旧日报文件。"""
+        """清理超过保留天数的旧日报文件（**md 与结构化 json 一起删**）。
+
+        此前只删 `daily_*.md`，对应的 `daily_*.json` 永久堆积（结构化数据体量比 md 还大）。
+        """
         if self._retention <= 0:
             return
         cutoff = datetime.now(timezone.utc) - timedelta(days=self._retention)
-        for f in self._dir.glob("daily_*.md"):
+        for f in list(self._dir.glob("daily_*.md")) + list(self._dir.glob("daily_*.json")):
             try:
                 day = f.stem.replace("daily_", "")
                 d = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)

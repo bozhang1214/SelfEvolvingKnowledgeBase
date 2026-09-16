@@ -21,6 +21,7 @@ from typing import Any
 _FILE = Path("data/job_cache.json")
 _TTL_SECONDS = 14 * 24 * 3600  # 14 天
 _MAX_JOBS = 1000  # 单 key 最多缓存 1000 条
+_MAX_ENTRIES = 200  # 最多缓存 200 个 key（按 ts 淘汰最旧），防止缓存文件无限增长
 
 
 # ============================================================
@@ -94,7 +95,11 @@ def is_expired(entry: dict[str, Any], now: float | None = None) -> bool:
 
 
 def save_cached_jobs(key: str, jobs: list[dict[str, Any]]) -> None:
-    """保存（覆盖）某 key 的职位缓存，最多 1000 条（同时刷新 ts / search_id / count）。"""
+    """保存（覆盖）某 key 的职位缓存，最多 1000 条（同时刷新 ts / search_id / count）。
+
+    超出 `_MAX_ENTRIES` 个 key 时按 `ts` 淘汰最旧的条目——此前只限单 key 条数，
+    key 数量无上限，缓存文件会随搜索次数无限增长。
+    """
     data = _load()
     trimmed = jobs[:_MAX_JOBS]
     data[key] = {
@@ -103,6 +108,10 @@ def save_cached_jobs(key: str, jobs: list[dict[str, Any]]) -> None:
         "count": len(trimmed),
         "jobs": trimmed,
     }
+    if len(data) > _MAX_ENTRIES:
+        # 按最后写入时间淘汰最旧的 (len(data) - _MAX_ENTRIES) 条
+        keep = sorted(data.items(), key=lambda kv: (kv[1] or {}).get("ts", 0), reverse=True)
+        data = dict(keep[:_MAX_ENTRIES])
     _save(data)
 
 

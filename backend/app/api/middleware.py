@@ -30,9 +30,15 @@ def _parse_route_key(key: str) -> tuple[str, str, int]:
 
 
 def setup_cors(app: FastAPI) -> None:
-    """配置 CORS 中间件。"""
+    """配置 CORS 中间件。
+
+    ``allow_credentials=True`` 与 ``allow_origins=["*"]` 组合会**回显任意 Origin**（等于
+    允许任何站点带凭据请求）。因此这里不再在 cors_origins 为空时回退到 ``"*"``，而是
+    回退到空列表（不放开任何跨域）——本部署前后端同源（nginx 同域下的 /sekb 与 /sekb/api），
+    生产并不需要跨域；开发环境由 config.yaml 显式列出 localhost。
+    """
     config = get_config()
-    origins = config.api.cors_origins or ["*"]
+    origins = config.api.cors_origins or []
 
     app.add_middleware(
         CORSMiddleware,

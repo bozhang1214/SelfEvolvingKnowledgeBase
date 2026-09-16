@@ -21,7 +21,16 @@ def _cache_key(user_id: str, jd_text: str) -> str:
     # 全文哈希，不做 [:3000] 截断：前 3000 字相同、后续不同的 JD 会命中同一缓存，
     # 返回错误分析。md5 摘要长度固定，全文哈希开销可忽略。
     digest = hashlib.md5((jd_text or "").strip().encode("utf-8")).hexdigest()
-    return f"{user_id}:{digest}"
+    # key 纳入**用户画像指纹**：分析结果依赖画像，画像更新后必须失效，
+    # 否则 14 天内仍返回基于旧画像的匹配度/建议（静默错误结果）。
+    try:
+        from app.agents.job.profile import load_user_profile
+
+        profile = load_user_profile(user_id) or ""
+    except Exception:  # noqa: BLE001 - 画像不可用时退化为不纳入指纹，不阻断缓存
+        profile = ""
+    prof_fp = hashlib.md5(profile.encode("utf-8")).hexdigest()[:8]
+    return f"{user_id}:{prof_fp}:{digest}"
 
 
 def _load() -> dict[str, Any]:
