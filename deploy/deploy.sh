@@ -688,9 +688,14 @@ echo "  服务访问地址："
 echo "    前端:       http://localhost/"
 echo "    后端 API:   http://localhost:8000/api/v1/health/live"
 if [ "$SKIP_MONITOR" = false ]; then
-    echo "    Grafana:   http://localhost:3001（admin/admin，首次登录后改密码）"
-    echo "    Prometheus: http://localhost:9091"
-    echo "    Alertmgr:  http://localhost:9093"
+    # 监控端口可能被 MONITOR_BIND_IP 绑到非回环地址（生产绑 Tailscale IP），
+    # 此时 http://localhost:3001 是**打不开的** —— 提示必须跟着实际监听地址走，
+    # 否则照抄这行只会得到「连接被拒绝」。
+    MONITOR_HINT="$(grep -E '^MONITOR_BIND_IP=' .env.prod 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+    case "$MONITOR_HINT" in ""|"0.0.0.0"|"::"|"*") MONITOR_HINT="localhost" ;; esac
+    echo "    Grafana:   http://${MONITOR_HINT}:3001（口令见 .env.prod 的 GRAFANA_ADMIN_PASSWORD）"
+    echo "    Prometheus: http://${MONITOR_HINT}:9091"
+    echo "    Alertmgr:  http://${MONITOR_HINT}:9093"
 fi
 echo ""
 echo "  常用命令："

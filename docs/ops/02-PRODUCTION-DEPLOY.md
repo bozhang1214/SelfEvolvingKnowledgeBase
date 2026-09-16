@@ -496,7 +496,7 @@ curl -X POST http://localhost:8000/api/v1/chat/ \
 
 ```bash
 # Prometheus 抓取目标状态
-curl -s http://localhost:9091/api/v1/targets | python3 -c "
+curl -s http://100.71.24.105:9091/api/v1/targets | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 for t in d['data']['activeTargets']:
@@ -504,11 +504,11 @@ for t in d['data']['activeTargets']:
 "
 
 # Alertmanager 告警状态
-curl -s http://localhost:9093/api/v2/alerts | python3 -m json.tool
+curl -s http://100.71.24.105:9093/api/v2/alerts | python3 -m json.tool
 
 # 访问 Grafana
 # 浏览器访问 http://bos-studio.tech:3001（或通过 SSH 隧道）
-# 默认账号：admin / admin（首次登录后立即修改密码）
+# 账号：GRAFANA_ADMIN_USER / GRAFANA_ADMIN_PASSWORD（见 .env.prod；deploy.sh 阶段 0.5 自动生成强随机口令）
 ```
 
 ---
@@ -586,13 +586,13 @@ git push origin main
 
 | 服务 | 访问方式 | 默认账号 |
 |------|---------|---------|
-| Grafana | `http://server-ip:3001` 或 SSH 隧道 | admin / admin |
+| Grafana | `http://100.71.24.105:3001`（生产绑 Tailscale）或 SSH 隧道 | `.env.prod` 的 `GRAFANA_ADMIN_PASSWORD` |
 | Prometheus | `http://server-ip:9091` | 无需认证 |
 | Alertmanager | `http://server-ip:9093` | 无需认证 |
 
 > **安全建议**：通过 SSH 隧道访问监控面板，不要直接暴露端口：
 > ```bash
-> ssh -L 3001:localhost:3001 -L 9091:localhost:9091 deploy@your-server-ip
+> ssh -L 3001:100.71.24.105:3001 -L 9091:100.71.24.105:9091 deploy@your-server-ip
 > ```
 
 ### 8.2 修改 Grafana 密码

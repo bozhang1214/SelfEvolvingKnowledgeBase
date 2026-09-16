@@ -914,10 +914,10 @@ docker compose -f docker-compose.monitoring.yml --env-file .env.prod up -d
 
 | 服务 | URL | 账号 |
 |------|-----|------|
-| Grafana | http://localhost:3001 | admin / admin |
-| Prometheus | http://localhost:9091 | 无需认证 |
-| Alertmanager | http://localhost:9093 | 无需认证 |
-| Loki | http://localhost:3101 | 无需认证 |
+| Grafana | http://100.71.24.105:3001 | `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`（见 `.env.prod`；由 `deploy.sh` 阶段 0.5 自动生成，**不再有 admin/admin 默认口令**） |
+| Prometheus | http://100.71.24.105:9091 | 无需认证 |
+| Alertmanager | http://100.71.24.105:9093 | 无需认证 |
+| Loki | http://100.71.24.105:3101 | 无需认证 |
 
 Grafana 首次登录后请立即修改密码。
 
@@ -1165,9 +1165,9 @@ docker exec sekb-frontend nginx -s reload
 
 ### 11.1 访问监控面板
 
-- **Grafana 看板**：http://localhost:3001 → "SEKB" 文件夹 → "SEKB 系统总览"
-- **Prometheus**：http://localhost:9091 → Alerts 页面查看告警状态
-- **Alertmanager**：http://localhost:9093 → 查看告警通知
+- **Grafana 看板**：http://100.71.24.105:3001 → "SEKB" 文件夹 → "SEKB 系统总览"
+- **Prometheus**：http://100.71.24.105:9091 → Alerts 页面查看告警状态
+- **Alertmanager**：http://100.71.24.105:9093 → 查看告警通知
 
 ### 11.2 告警规则概览
 
@@ -1259,7 +1259,7 @@ curl -v -X POST http://localhost/api/v1/chat/stream \
 
 ```bash
 # 检查抓取目标状态
-curl http://localhost:9091/api/v1/targets | python3 -m json.tool
+curl http://100.71.24.105:9091/api/v1/targets | python3 -m json.tool
 
 # 常见原因：
 # 1. backend 容器未在 sekb_network 网络中

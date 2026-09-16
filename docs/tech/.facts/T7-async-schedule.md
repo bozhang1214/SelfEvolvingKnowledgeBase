@@ -30,7 +30,7 @@ version: v0.1.0
 | A12 | 手动触发日报/周报/月报 | HTTP API | POST /api/v1/news/refresh news.py:34-47；POST /api/v1/news/{weekly\|monthly} news.py:75-94 | — | 日报 force=false 走跳过；force=true 重跑 | 异常 → 500 | 错误日志 | 现役 |
 | A13 | 新闻调度器手动触发接口 | `NewsScheduler.trigger_now()` | scheduler.py:69-76 | — | — | — | — | 死代码（无调用方） |
 | A14 | 宿主机每日备份 | 推荐 crontab（仓库无 crontab 实体文件） | deploy/backup.sh:11-12（`0 3 * * *`）；scripts/backup_kb.sh:17-22（`30 3 * * *`） | — | 打包快照 | backup_kb.sh trap 兜底重启 backend | 写日志文件（脚本注释） | 外部部署项【推断·待验证：是否已装 crontab】 |
-| A15 | 灰度发布监控轮询 | 手动 nohup `while true`（非 cron） | deploy/canary_monitor.sh:9-10,27,116,184（30s 间隔） | 1 进程 | 读 Prometheus 判定 | 超阈值自动回滚 | 脚本 stdout 日志 | 手动工具 |
+| A15 | 灰度发布监控轮询 | 手动 nohup `while true`（非 cron） | deploy/canary_monitor.sh:9-10,30,121,189（30s 间隔） | 1 进程 | 读 Prometheus 判定 | 超阈值自动回滚 | 脚本 stdout 日志 | 手动工具 |
 | A16 | 前端日志批量上报 | 前端定时器 flush（5s / 队列满 20 条 / 页面隐藏） | frontend/src/utils/logger.ts:82-83,139-141,212-228 → POST /api/v1/monitoring/client-event（backend monitoring.py:50-100） | — | — | 后端恒返 202，前端不重试 | client_event_reports_total | 现役 |
 | A17 | Prometheus 周期抓取/告警评估 | scrape/evaluation interval 15s | deploy/prometheus.yml:8-13；容器级 compose | — | — | — | 见 T8 | 现役 |
 | A18 | 聊天/CLI 交互循环（非服务调度） | 终端 REPL `while True` | cli/chat.py:336-359 | — | — | — | — | 仅本地 CLI |
@@ -92,7 +92,7 @@ version: v0.1.0
 - deploy/backup.sh 头注释给出建议 cron `0 3 * * *`（backup.sh:11-12）；deploy/pre-deploy-check.sh:427-431 检查宿主机 crontab 是否含 backup.sh（`sudo crontab -l | grep backup.sh`），未配置仅 warn。
 - scripts/backup_kb.sh 建议 `30 3 * * *`（scripts/backup_kb.sh:17-22），脚本内含 `trap ... EXIT` 保证退出前重启 backend。
 - **仓库内无实际 crontab 文件**；以上均为“建议/校验引用”【推断·待验证：生产宿主机实际 crontab 不在仓库内】。
-- deploy/canary_monitor.sh：`while true` + `sleep CHECK_INTERVAL`（默认 30s，canary_monitor.sh:27,116,184），依赖 Prometheus（默认 http://localhost:9091，canary_monitor.sh:24）查询错误率/延迟，超阈值调 rollback；注释明确“建议 nohup 后台运行”（canary_monitor.sh:9-10）→ 非定时任务，手动工具。
+- deploy/canary_monitor.sh：`while true` + `sleep CHECK_INTERVAL`（默认 30s，canary_monitor.sh:30,121,189），依赖 Prometheus（地址取 `.env.prod` 的 `MONITOR_BIND_IP`，未设置回退 localhost，canary_monitor.sh:28-30）查询错误率/延迟，超阈值调 rollback；注释明确“建议 nohup 后台运行”（canary_monitor.sh:9-10）→ 非定时任务，手动工具。
 - deploy/deploy.sh / restart.sh 内的 `sleep` 均为部署流程等待，非周期任务。
 
 ### A16 前端周期性上报（backend 侧接收）

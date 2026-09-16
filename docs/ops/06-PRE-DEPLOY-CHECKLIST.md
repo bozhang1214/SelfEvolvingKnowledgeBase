@@ -278,7 +278,7 @@ related: [docs/tech/09-OBSERVABILITY]
 - [ ] **Grafana 默认密码已修改**（若已部署过）
   ```bash
   # 首次部署可跳过，已部署需确认
-  curl -sf http://localhost:3001/api/health
+  curl -sf http://100.71.24.105:3001/api/health
   ```
 
 - [ ] **.env.prod 权限为 600**

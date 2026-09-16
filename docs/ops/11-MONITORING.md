@@ -17,6 +17,20 @@ related: [docs/tech/09-OBSERVABILITY, docs/tech/00-README]
 
 > 技术口径（指标/告警清单、口径缺陷）见 `docs/tech/09-OBSERVABILITY.md`；本文是「操作 + 修改」手册。
 
+> ⚠️ **监听地址（2026-09-16 起，务必先读）**
+> 监控栈的对外端口由 `.env.prod` 的 `MONITOR_BIND_IP` 决定，**生产已设为 `100.71.24.105`（Tailscale）**：
+> Prometheus `9091` / Grafana `3001` / Loki `3101` / Alertmanager `9093` 只监听该地址，
+> **`127.0.0.1` 上没有任何进程监听** —— 所以：
+> - 在服务器上执行 `curl http://localhost:9091/...` 会**连接被拒**；请用 `http://100.71.24.105:9091/...`
+>   （本文所有示例已按此改写；若你改了 `MONITOR_BIND_IP`，请同步替换）。
+> - 本机浏览器直接访问 `http://100.71.24.105:3001` 即可（需在 Tailscale 网络内），不再需要 SSH 端口转发；
+>   仍想用隧道时，**目标侧必须写 Tailscale IP**：`ssh -L 3001:100.71.24.105:3001 bo@49.232.42.91`，
+>   然后浏览器开 `http://localhost:3001`。
+> - 背景：Docker 发布端口走 iptables **FORWARD** 链，`ufw`（INPUT 链）管不到，
+>   原先公网不可达只靠腾讯云安全组 —— 绑到 Tailscale 后不再依赖它。
+> - feishu-webhook `5001` 固定绑 `127.0.0.1`（只被 backend/Alertmanager 经内网调用）。
+> - 自检：`sudo ss -ltnp | grep -E ':(9091|3001|3101|9093)\b'` 应只看到 `100.71.24.105`。
+
 ---
 
 ## 1. 架构速览与访问入口
@@ -88,7 +102,7 @@ flowchart LR
 **验证数据真的在采集**（不依赖 Grafana）：
 ```bash
 # 到服务器执行
-curl -s "http://localhost:9091/api/v1/query" \
+curl -s "http://100.71.24.105:9091/api/v1/query" \
   --data-urlencode 'query=sum(rate(sekb_messages_total[24h]))'
 # 期望返回 {"status":"success","data":{"result":[{"value":[时间戳,"7.00…"]}]}}
 ```
@@ -172,7 +186,7 @@ Prometheus 网页（`http://<IP>:9091`）**不能建报表/看板**，它只提�
 
 | 文件 | 作用 | 修改后如何生效 |
 |------|------|--------------|
-| `deploy/prometheus.yml` | 抓取目标/频率 | Prometheus 已开 `--web.enable-lifecycle`：`curl -X POST http://localhost:9091/-/reload` 或重启容器 |
+| `deploy/prometheus.yml` | 抓取目标/频率 | Prometheus 已开 `--web.enable-lifecycle`：`curl -X POST http://100.71.24.105:9091/-/reload` 或重启容器 |
 | `deploy/alerts.yml` | 告警规则（12 条） | 同上 reload（规则变更立即重估） |
 | `deploy/alertmanager.yml` | 告警路由/接收器 | 重启 alertmanager |
 | `deploy/grafana/provisioning/datasources/datasources.yml` | Grafana 数据源 | 重启 grafana |
@@ -187,11 +201,11 @@ docker compose -f docker-compose.monitoring.yml ps
 # 重启某个组件
 docker compose -f docker-compose.monitoring.yml restart grafana
 # 热加载 Prometheus 配置/规则（无需重启）
-curl -X POST http://localhost:9091/-/reload
+curl -X POST http://100.71.24.105:9091/-/reload
 # 查看 Prometheus 是否加载了新规则
-curl -s http://localhost:9091/api/v1/rules | python3 -m json.tool | head -30
+curl -s http://100.71.24.105:9091/api/v1/rules | python3 -m json.tool | head -30
 # 查看告警状态
-curl -s http://localhost:9091/api/v1/alerts | python3 -m json.tool | head -30
+curl -s http://100.71.24.105:9091/api/v1/alerts | python3 -m json.tool | head -30
 ```
 
 ---

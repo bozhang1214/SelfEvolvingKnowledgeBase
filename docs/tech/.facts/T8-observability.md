@@ -152,7 +152,7 @@ version: v0.1.0
 
 - 未处理异常兜底：server.py:226-250 生成 `error_id`（uuid 前 12 位）仅回日志与响应，不外泄原始异常。
 - SEKBError 全局 handler 记 error_type/message/status_code/details（server.py:205-223）。
-- canary_monitor.sh（部署运维工具）：读 Prometheus（默认 http://localhost:9091）查询错误率阈值 0.05、P95 延迟阈值 30s，每 30s 轮询并自动回滚（deploy/canary_monitor.sh:13-18,24-30,116,184）——非告警规则，属发布期人工巡检工具。
+- canary_monitor.sh（部署运维工具）：读 Prometheus 查询错误率阈值 0.05、P95 延迟阈值 30s，每 30s 轮询并自动回滚；地址优先取 `.env.prod` 的 `MONITOR_BIND_IP`（生产绑 Tailscale，`localhost` 不可用），未设置才回退 `http://localhost:9091`（deploy/canary_monitor.sh:13-18,24-30,121,189）——非告警规则，属发布期人工巡检工具。
 - 日志脱敏仅按字段名（api_key/authorization/token），structlog 事件里未覆盖 request header 全量【推断·待验证】。
 
 ## 8. 漂移/异常清单（drift）

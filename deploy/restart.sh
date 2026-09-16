@@ -274,6 +274,9 @@ echo "  - 查看 backend 日志:  docker compose -f docker-compose.prod.yml --en
 echo "  - 查看 frontend 日志: docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f frontend"
 if $RESTART_MON; then
     echo "  - 查看监控栈日志:    docker compose -f docker-compose.monitoring.yml --env-file .env.prod logs -f prometheus"
-    echo "  - Grafana 页面:      http://localhost:3001（默认 admin/admin，建议经 Tailscale 访问）"
-    echo "  - Prometheus 页面:   http://localhost:9091"
+    # 监控端口可能只绑 Tailscale（见 .env.prod 的 MONITOR_BIND_IP），写死 localhost 会给出打不开的地址。
+    _MON="$(grep -E '^MONITOR_BIND_IP=' .env.prod 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+    case "$_MON" in ""|"0.0.0.0"|"::"|"*") _MON="localhost" ;; esac
+    echo "  - Grafana 页面:      http://${_MON}:3001（口令见 .env.prod 的 GRAFANA_ADMIN_PASSWORD）"
+    echo "  - Prometheus 页面:   http://${_MON}:9091"
 fi

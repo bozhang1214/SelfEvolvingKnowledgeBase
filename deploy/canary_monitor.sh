@@ -10,7 +10,8 @@
 #     nohup ./deploy/canary_monitor.sh > /var/log/sekb-canary.log 2>&1 &
 #
 # 环境变量：
-#   PROMETHEUS_URL   Prometheus 地址（默认 http://localhost:9091）
+#   PROMETHEUS_URL   Prometheus 地址（默认取 .env.prod 的 MONITOR_BIND_IP + :9091；
+#                    未设置时 http://localhost:9091）
 #   ERROR_THRESHOLD  错误率阈值（默认 0.05，即 5%）
 #   LATENCY_P95_THRESHOLD  P95 延迟阈值秒（默认 30）
 #   CHECK_INTERVAL   检查间隔秒（默认 30）
@@ -21,13 +22,18 @@
 set -euo pipefail
 
 # ---------- 配置 ----------
-PROMETHEUS_URL="${PROMETHEUS_URL:-http://localhost:9091}"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Prometheus 地址：默认取 .env.prod 的 MONITOR_BIND_IP（生产把监控栈只绑到 Tailscale IP，
+# 此时 http://localhost:9091 连不上，会让灰度监控静默拿不到数据 → 误判「无异常」）。
+# 未设置时回退 localhost；仍可用环境变量 PROMETHEUS_URL 显式覆盖。
+_MONITOR_BIND_IP="$(grep -E '^MONITOR_BIND_IP=' "${PROJECT_DIR}/.env.prod" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+case "$_MONITOR_BIND_IP" in ""|"0.0.0.0"|"::"|"*") _MONITOR_BIND_IP="localhost" ;; esac
+PROMETHEUS_URL="${PROMETHEUS_URL:-http://${_MONITOR_BIND_IP}:9091}"
 ERROR_THRESHOLD="${ERROR_THRESHOLD:-0.05}"
 LATENCY_P95_THRESHOLD="${LATENCY_P95_THRESHOLD:-30}"
 CHECK_INTERVAL="${CHECK_INTERVAL:-30}"
 DURATION_MIN="${DURATION_MIN:-30}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 START_TIME=$(date +%s)
 CHECK_COUNT=0

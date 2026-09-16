@@ -556,7 +556,7 @@ ssh -i ~/.ssh/sekb_tencent_key \
 
 | 服务 | 地址 | 账号 |
 |------|------|------|
-| Grafana | http://localhost:3001 | admin / admin（首次登录后改密码） |
+| Grafana | http://localhost:3001 | `.env.prod` 的 `GRAFANA_ADMIN_PASSWORD`（首部署自动生成；**本项目生产绑 Tailscale，见 `11-MONITORING.md` 监听地址一节**） |
 | Prometheus | http://localhost:9091 | 无需认证 |
 | Alertmanager | http://localhost:9093 | 无需认证 |
 

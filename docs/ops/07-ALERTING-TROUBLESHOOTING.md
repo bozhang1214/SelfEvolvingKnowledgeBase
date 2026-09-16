@@ -72,10 +72,10 @@ docker ps -a --filter "name=sekb-alertmanager" --filter "name=sekb-feishu-webhoo
   --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
 # 2. 检查 Alertmanager 是否有告警待发送
-curl -sf http://localhost:9093/api/v2/alerts | python3 -m json.tool
+curl -sf http://100.71.24.105:9093/api/v2/alerts | python3 -m json.tool
 
 # 3. 检查 Prometheus 是否有触发的告警
-curl -sf http://localhost:9091/api/v1/alerts | python3 -m json.tool
+curl -sf http://100.71.24.105:9091/api/v1/alerts | python3 -m json.tool
 
 # 4. 手动测试 feishu-webhook 是否正常响应
 curl -sf http://localhost:5001/health
@@ -338,7 +338,7 @@ Alertmanager 有分组聚合机制，告警不会立即发送：
 
 ```bash
 # 查看 Alertmanager 内部状态
-curl -sf http://localhost:9093/api/v2/alerts | python3 -m json.tool
+curl -sf http://100.71.24.105:9093/api/v2/alerts | python3 -m json.tool
 # 关注 "status.state" 字段：active / suppressed
 ```
 
@@ -366,7 +366,7 @@ curl -X POST http://localhost:5001/webhook \
 
 ```bash
 # 检查 Prometheus 是否加载了告警规则
-curl -sf http://localhost:9091/api/v1/rules | python3 -m json.tool | head -30
+curl -sf http://100.71.24.105:9091/api/v1/rules | python3 -m json.tool | head -30
 
 # 若返回空 rules 列表，检查 prometheus.yml 配置
 docker exec sekb-prometheus cat /etc/prometheus/prometheus.yml | grep rule_files
@@ -391,7 +391,7 @@ docker logs sekb-prometheus 2>&1 | grep -i "error\|rule\|fail"
 
 ```bash
 # 检查 Prometheus 抓取目标状态
-curl -sf http://localhost:9091/api/v1/targets | python3 -c "
+curl -sf http://100.71.24.105:9091/api/v1/targets | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 for t in d.get('data',{}).get('activeTargets',[]):
@@ -408,7 +408,7 @@ alerts.yml 中告警通常配置 `for: 2m` 或 `for: 5m`，指标需持续超阈
 
 ```bash
 # 查看告警的 pending/firing 状态
-curl -sf http://localhost:9091/api/v1/alerts | python3 -c "
+curl -sf http://100.71.24.105:9091/api/v1/alerts | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 for a in d.get('data',{}).get('alerts',[]):
@@ -510,8 +510,8 @@ curl -X POST "http://localhost:5001/test?source=news"
 
 | 服务 | 健康检查命令 | 说明 |
 |------|-------------|------|
-| prometheus | `curl http://localhost:9091/-/healthy` | 返回 200 即健康 |
-| alertmanager | `curl http://localhost:9093/-/healthy` | 返回 200 即健康 |
+| prometheus | `curl http://100.71.24.105:9091/-/healthy` | 返回 200 即健康 |
+| alertmanager | `curl http://100.71.24.105:9093/-/healthy` | 返回 200 即健康 |
 | feishu-webhook | `curl http://localhost:5001/health` | 返回 JSON 含 feishu_configured 字段 |
 
 ### 4.2 自动重启策略
@@ -575,7 +575,7 @@ done
 echo ""
 echo "=== 2. 测试 Prometheus → Alertmanager 链路 ==="
 # 通过 Prometheus API 手动触发告警评估
-curl -sf http://localhost:9091/api/v1/alerts | python3 -c "
+curl -sf http://100.71.24.105:9091/api/v1/alerts | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 alerts = d.get('data',{}).get('alerts',[])
@@ -601,17 +601,17 @@ echo "  请检查飞书群是否收到 'SEKB 告警通知（1 条）' 卡片消�
 
 ```bash
 # 创建静默规则（模拟维护期）
-SILENCE_ID=$(curl -s -X POST http://localhost:9093/api/v2/silences \
+SILENCE_ID=$(curl -s -X POST http://100.71.24.105:9093/api/v2/silences \
   -H "Content-Type: application/json" \
   -d '{"matchers":[{"name":"alertname","value":"TestAlert","isRegex":false}],"startsAt":"2026-08-19T00:00:00Z","endsAt":"2026-08-19T23:59:59Z","createdBy":"ops","comment":"测试静默"}' \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['silenceID'])")
 echo "静默规则已创建: $SILENCE_ID"
 
 # 查看静默规则
-curl -sf http://localhost:9093/api/v2/silences | python3 -m json.tool
+curl -sf http://100.71.24.105:9093/api/v2/silences | python3 -m json.tool
 
 # 删除静默规则
-curl -X DELETE http://localhost:9093/api/v2/silence/$SILENCE_ID
+curl -X DELETE http://100.71.24.105:9093/api/v2/silence/$SILENCE_ID
 ```
 
 ---
@@ -627,7 +627,7 @@ curl -X DELETE http://localhost:9093/api/v2/silence/$SILENCE_ID
 | 任务失败但飞书无消息（应用侧） | `grep send_alert backend/app/agents/news/service.py` | 调用点缺失 / 被 `off` 关掉 / 5 分钟去重 |
 | 改了网关代码部署后行为没变 | `docker inspect sekb-feishu-webhook --format '{{.Created}}'` | compose 少了 `--build`，镜像没重建 |
 | 飞书返回签名错误 | `FEISHU_SECRET` 是否正确 | 签名密钥不匹配 |
-| Prometheus 无告警 | `curl localhost:9091/api/v1/rules` | 规则未加载 / 指标未采集 |
+| Prometheus 无告警 | `curl 100.71.24.105:9091/api/v1/rules` | 规则未加载 / 指标未采集 |
 | 告警一直 pending | alerts.yml 的 `for` 持续时间 | 时间未到，属正常 |
 | 邮件未收到 | alertmanager.yml 的 SMTP 配置 | SMTP 未配置或配置错误 |
 

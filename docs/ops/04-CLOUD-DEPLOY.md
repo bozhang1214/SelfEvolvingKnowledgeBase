@@ -427,7 +427,7 @@ docker compose -f docker-compose.monitoring.yml down
 ssh -i ~/.ssh/sekb_cloud_key -L 3001:localhost:3001 -L 9091:localhost:9091 -L 9093:localhost:9093 deploy@43.136.xx.xx
 
 # 保持此终端不关，浏览器访问：
-# Grafana:    http://localhost:3001  (admin/admin，首次登录后改密码)
+# Grafana:    http://localhost:3001  (账号见 .env.prod 的 GRAFANA_ADMIN_PASSWORD；本项目生产绑 Tailscale)
 # Prometheus: http://localhost:9091
 # Alertmanager: http://localhost:9093
 ```
