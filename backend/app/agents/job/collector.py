@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 import httpx
@@ -44,6 +45,9 @@ class BossBrowserSource:
         if not keyword or not keyword.strip():
             return []
         try:
+            # 内部服务鉴权（S12）：浏览器服务持有登录 Cookie，需带 X-Internal-Token
+            token = os.getenv("BROWSER_INTERNAL_TOKEN", "").strip()
+            headers = {"X-Internal-Token": token} if token else {}
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
                     f"{self._base_url}/scrape",
@@ -54,6 +58,7 @@ class BossBrowserSource:
                         "page": page,
                         "limit": limit,
                     },
+                    headers=headers,
                 )
                 if resp.status_code != 200:
                     logger.warning("BOSS 浏览器服务返回非 200", status=resp.status_code)

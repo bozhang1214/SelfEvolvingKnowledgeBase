@@ -82,6 +82,8 @@ services:
       # 任务失败告警（飞书）网关地址。默认走同网内的 feishu-webhook 网关；
       # 想关掉就设成 off/none/0（见 app/core/alerts.py 的 _DISABLED_VALUES）。
       NEWS_ALERT_WEBHOOK_URL: ${NEWS_ALERT_WEBHOOK_URL:-http://sekb-feishu-webhook:5001/webhook}
+      # 浏览器服务内部鉴权（S12）：与 browser 服务共用；留空=不鉴权（向后兼容）
+      BROWSER_INTERNAL_TOKEN: ${BROWSER_INTERNAL_TOKEN:-}
     volumes:
       # 数据持久化：会话/索引/向量库/日志/trace 全部写入挂载卷
       - sekb_data:/app/data
@@ -193,6 +195,8 @@ services:
     restart: unless-stopped
     environment:
       DATA_DIR: /data
+      # 内部服务鉴权（S12）：与 backend 共用同一个 token；留空=不鉴权（向后兼容）
+      BROWSER_INTERNAL_TOKEN: ${BROWSER_INTERNAL_TOKEN:-}
     volumes:
       - sekb_browser_data:/data
     networks:

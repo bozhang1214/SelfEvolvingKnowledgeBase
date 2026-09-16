@@ -30,9 +30,33 @@ async def test_post_returns_json():
 
     ac_cls.assert_called_once_with(timeout=15)
     yielded.post.assert_awaited_once_with(
-        "http://browser:1300/login/qr/status", json={"site": "boss"}
+        "http://browser:1300/login/qr/status",
+        json={"site": "boss"},
+        headers={},  # 未设置 BROWSER_INTERNAL_TOKEN 时不带内部鉴权头
     )
     assert result == {"phase": "done"}
+
+
+@pytest.mark.asyncio
+async def test_post_sends_internal_token(monkeypatch):
+    """设置了 BROWSER_INTERNAL_TOKEN 时，必须带上 X-Internal-Token（S12 内部鉴权）。"""
+    monkeypatch.setenv("BROWSER_INTERNAL_TOKEN", "tok-123")
+    resp = MagicMock()
+    resp.json.return_value = {"ok": True}
+    resp.raise_for_status = MagicMock()
+
+    yielded = AsyncMock()
+    yielded.post = AsyncMock(return_value=resp)
+
+    ac_mock = MagicMock()
+    ac_mock.__aenter__ = AsyncMock(return_value=yielded)
+    ac_mock.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.services.browser_client.httpx.AsyncClient", return_value=ac_mock):
+        await BrowserClient().post("/cookies", {"site": "boss"})
+
+    _, kwargs = yielded.post.await_args
+    assert kwargs["headers"] == {"X-Internal-Token": "tok-123"}
 
 
 @pytest.mark.asyncio

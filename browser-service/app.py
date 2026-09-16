@@ -13,13 +13,15 @@ Cookie 持久化在 ``/data/cookies.json``。
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
@@ -27,6 +29,21 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 COOKIES_FILE = DATA_DIR / "cookies.json"
 
 app = FastAPI(title="sekb-browser", version="2.0.0")
+
+# 内部服务鉴权（S12）：本服务持有 BOSS 等站点的**登录 Cookie**，此前所有端点零鉴权——
+# 同一 Docker 网络内任意容器都读写登录态（等于账号劫持）。设置 BROWSER_INTERNAL_TOKEN
+# 后，除 /health 外所有请求必须带匹配的 `X-Internal-Token`（backend 侧自动携带）。
+# 未设置该变量时保持向后兼容（开放），但启动日志会提示。
+_INTERNAL_TOKEN = os.getenv("BROWSER_INTERNAL_TOKEN", "").strip()
+
+
+@app.middleware("http")
+async def _internal_token_mw(request: Request, call_next):  # type: ignore[no-untyped-def]
+    if _INTERNAL_TOKEN and request.url.path != "/health":
+        token = request.headers.get("x-internal-token", "")
+        if not hmac.compare_digest(token, _INTERNAL_TOKEN):
+            return JSONResponse({"detail": "invalid internal token"}, status_code=403)
+    return await call_next(request)
 
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -60,6 +77,11 @@ def _read_cookies() -> dict[str, dict[str, Any]]:
 
 def _write_cookies(data: dict[str, dict[str, Any]]) -> None:
     COOKIES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 最小权限：Cookie 是登录凭据，只允许属主读写（S12）
+    try:
+        os.chmod(COOKIES_FILE, 0o600)
+    except OSError:
+        pass
 
 
 # ---------------- 数据模型 ----------------
