@@ -191,6 +191,44 @@ else
 fi
 
 # ============================================================
+# 阶段 0.5：密钥自举（缺失即生成，不留「空值 = 不鉴权」的口子）
+# ============================================================
+# 背景（安全审查 SEC-11/SEC-12）：
+#   browser-service 持有 BOSS 等站点的登录 Cookie，其内部鉴权在 token 为空时
+#   **退化为放行**（`if _INTERNAL_TOKEN:`）。也就是说「忘了配」等于「没有防护」，
+#   而同 Docker 网络内任意容器都能读写登录态。Grafana 同理：不配就是 admin/admin。
+# 因此这里在构建/启动之前补齐，把「可选」变成「默认开启」；已配置则不覆盖。
+step "阶段 0.5/7：密钥自举"
+
+bootstrap_secret() {
+    local key="$1" gen="$2"
+    if [ ! -f ".env.prod" ]; then
+        warn "未找到 .env.prod，跳过 $key 自举" "cp deploy/.env.prod.example .env.prod 后重试"
+        return 0
+    fi
+    if grep -qE "^${key}=." .env.prod 2>/dev/null; then
+        info "$key 已配置，保持不变"
+        return 0
+    fi
+    local val
+    val="$(eval "$gen")"
+    if grep -qE "^${key}=" .env.prod 2>/dev/null; then
+        # 存在但为空 → 原地替换（保留该行位置，便于人工核对）
+        sed -i.bak "s|^${key}=.*|${key}=${val}|" .env.prod && rm -f .env.prod.bak
+    else
+        printf '\n%s=%s\n' "$key" "$val" >> .env.prod
+    fi
+    success "$key 已自动生成并写入 .env.prod（查看：grep ^${key}= .env.prod）"
+}
+
+if [ "$DRY_RUN" = false ]; then
+    bootstrap_secret BROWSER_INTERNAL_TOKEN "openssl rand -hex 24"
+    bootstrap_secret GRAFANA_ADMIN_PASSWORD "openssl rand -base64 24"
+else
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} 自举 BROWSER_INTERNAL_TOKEN / GRAFANA_ADMIN_PASSWORD"
+fi
+
+# ============================================================
 # 阶段 1：部署前备份
 # ============================================================
 step "阶段 1/7：部署前备份"
