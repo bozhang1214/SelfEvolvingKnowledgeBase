@@ -69,7 +69,7 @@ curl -s -N --max-time 8 https://bos-studio.tech/jobcopilot/sse \
 #   data: /jobcopilot/sse/messages/?session_id=...
 ```
 
-完整链路（列工具 / 调工具 / BYOK）用官方客户端跑：`docs/tmp/verify_public_mcp.py`
+完整链路（列工具 / 调工具 / BYOK）用官方客户端跑：`scripts/verify_public_mcp.py`
 （需 `JOBCOPILOT_HTTP_TOKEN` 与 `DEEPSEEK_API_KEY` 环境变量）。
 
 ## 5. 安全边界（改之前先读）
@@ -156,7 +156,7 @@ https://bos-studio.tech/jobcopilot/sse?token=<访问令牌>
 | 4 | `GET /jobcopilot/sse?token=<正确令牌>`（千帆路径） | 同上；`?token=bogus` → **401** |
 | 5 | 官方客户端全链路（列工具 / `list_prompt_packs` / 无 Key 报错 / 带 Key 出七段 / SSE 列工具） | 5 项全过：工具 7 个；`analyze_job` 带 BYOK **7/7 段** |
 
-复现 1–4 见 §4；复现 5：`JOBCOPILOT_HTTP_TOKEN=… DEEPSEEK_API_KEY=… python docs/tmp/verify_public_mcp.py`。
+复现 1–4 见 §4；复现 5：`JOBCOPILOT_HTTP_TOKEN=… DEEPSEEK_API_KEY=… python scripts/verify_public_mcp.py`。
 
 ### 每个平台都先做这一步：调 `self_check`
 

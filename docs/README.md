@@ -30,7 +30,8 @@ related: [docs/tech/00-README, docs/ops/00-README, docs/codeReview/未修复问�
 | [`docs/COORDINATION.md`](COORDINATION.md) | 多协作者开工认领表（改共享文件前必看） | 所有人 |
 | `docs/tech/.validation/` | 文档工程校验脚本（链接/孤儿/编号/新鲜度）+ 格式模板 | 维护者 |
 | `docs/tech/.facts/` | 事实表 T1–T8（单一事实源 SSOT 工作产物） | 维护者 |
-| `docs/tmp/` | **本地讨论区**（gitignore，不进版本库）：设计草案、个人资料、一次性脚本。被跟踪文档会引用其中部分文件（如 RFC、REFACTORING-PLAN） | 本人 |
+| `docs/RFC-自迭代闭环设计.md` | 自迭代研发-运维闭环平台**设计 RFC**（draft）：变更发布策略（`ops/14`）、Gitea 版本管理（`ops/12`）的决策依据 | 架构师 |
+| `docs/tmp/` | **本地讨论区**（gitignore，不进版本库）：个人资料、已完成方案的过程稿、一次性脚本。⚠️ **被跟踪文档不要链接到这里的文件**——干净克隆里没有它（`doc_guard` 会拦） | 本人 |
 | 仓库根 [`README.md`](../README.md) / [`AGENTS.md`](../AGENTS.md) | 门面（能力速览）+ 协作硬约定；两者都不复制 docs 内容，只做导览 | 所有人 |
 
 ## 文档工程维护约定

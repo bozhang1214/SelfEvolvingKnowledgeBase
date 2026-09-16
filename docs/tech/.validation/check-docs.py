@@ -66,7 +66,10 @@ PREFIX_ROOTS = [
     "deploy/", "scripts/", "jobcopilot/", "jobcopilot/src/jobcopilot/", "docs/",
 ]
 
-CODE_EXT = r"(?:py|ts|tsx|js|jsx|yaml|yml|sh|conf|json|toml|sql|css|html)"
+# 注意：**必须包含 md**。否则「反引号里写的 .md 路径」既不被链接检查（它没有 []() 形式）
+# 也不被引用检查，形成盲区——2026-09-16 首跑就因此漏掉了 docs/BACKLOG.md 指向
+# 未版本化 docs/tmp/ 的引用。
+CODE_EXT = r"(?:md|py|ts|tsx|js|jsx|yaml|yml|sh|conf|json|toml|sql|css|html)"
 CITE_RE = re.compile(
     r"`(?P<path>[A-Za-z0-9_][A-Za-z0-9_./\-]*\." + CODE_EXT + r")"
     r"(?:(?:::(?P<symbol>[A-Za-z_][A-Za-z0-9_.]*))|(?::(?P<start>\d+)(?:-(?P<end>\d+))?))?`"
@@ -78,6 +81,31 @@ def _git(*args: str) -> list[str]:
     out = subprocess.run(["git", "-C", ROOT, "ls-files", "-z", *args],
                          capture_output=True, text=True, check=True).stdout
     return [p for p in out.split("\0") if p]
+
+
+def tracked_with_submodules() -> set:
+    """父仓 + 各子模块的被跟踪文件（子模块文件在父仓 `git ls-files` 里看不到，
+    但它们**确实是版本控制的**，例如 `jobcopilot/docs/integrations/*.md`）。
+    漏掉这层会把子模块内的正常引用误判成断链。
+    """
+    tracked = set(_git())
+    try:
+        mods = subprocess.run(
+            ["git", "-C", ROOT, "config", "--file", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$"],
+            capture_output=True, text=True).stdout
+    except OSError:
+        mods = ""
+    for line in mods.splitlines():
+        _, _, sub = line.partition(" ")
+        sub = sub.strip()
+        if not sub:
+            continue
+        out = subprocess.run(["git", "-C", os.path.join(ROOT, sub), "ls-files", "-z"],
+                             capture_output=True, text=True).stdout
+        for f in out.split("\0"):
+            if f:
+                tracked.add(f"{sub}/{f}")
+    return tracked
 
 
 def is_living(rel: str) -> bool:
@@ -102,18 +130,23 @@ def build_index(paths: list[str]) -> dict[str, list[str]]:
     return idx
 
 
-def candidates(raw: str, index: dict[str, list[str]]) -> list[str]:
-    """所有可能的目标路径（显式前缀优先，其次同名文件）。"""
+def candidates(raw: str, index: dict[str, list[str]], tracked: set) -> list[str]:
+    """所有可能的目标路径（显式前缀优先，其次同名文件）。
+
+    **只接受被 git 跟踪的文件**：这样「本地存在但被 gitignore」的文件（典型是
+    `docs/tmp/*`）不会被判为通过——否则本地绿、干净克隆（CI/服务器）红，
+    守卫给出的信号就不可信了。
+    """
     out: list[str] = []
     raw = raw.strip()
     for prefix in PREFIX_ROOTS:
         cand = os.path.normpath(os.path.join(ROOT, prefix, raw))
         if os.path.isfile(cand) and cand.startswith(ROOT):
             rel = os.path.relpath(cand, ROOT)
-            if rel not in out:
+            if rel in tracked and rel not in out:
                 out.append(rel)
     for rel in index.get(os.path.basename(raw), []):
-        if rel not in out:
+        if rel in tracked and rel not in out:
             out.append(rel)
     return out
 
@@ -162,7 +195,8 @@ def main() -> int:
     if not mds:
         print("⚠️  没有找到被跟踪的 Markdown 文件（不在 git 仓库根？）")
         return 0
-    index = build_index(_git())
+    TRACKED = tracked_with_submodules()
+    index = build_index(sorted(TRACKED))
     TOP_LEVEL = top_level_entries()
 
     errors: list[tuple[str, str]] = []
@@ -190,8 +224,14 @@ def main() -> int:
                 continue
             n_links += 1
             resolved = os.path.normpath(os.path.join(parent, urllib.parse.unquote(target)))
-            if not os.path.exists(resolved):
-                report(f, f"断链: {link}", hard=True)
+            if os.path.isdir(resolved):
+                continue                      # 目录（如 ../ops）放行
+            rel_t = os.path.relpath(resolved, ROOT)
+            if not (os.path.isfile(resolved) and rel_t in TRACKED):
+                report(f, f"断链: {link}"
+                          + ("" if os.path.exists(resolved) else "（目标不存在）")
+                          + ("（目标存在但**未被版本库跟踪**，干净克隆里没有）"
+                             if os.path.exists(resolved) else ""), hard=True)
 
         for lineno, line in enumerate(text.splitlines(), 1):
             if "check-docs:ignore" in line:
@@ -201,7 +241,7 @@ def main() -> int:
                 n_cites += 1
                 if raw.startswith(RUNTIME_PREFIXES):
                     continue
-                cands = candidates(raw, index)
+                cands = candidates(raw, index, TRACKED)
                 if not cands:
                     # 外部/API 路径（首段不是仓库一级目录）→ 不是文件引用，跳过
                     if "/" in raw and raw.split("/")[0] not in TOP_LEVEL:

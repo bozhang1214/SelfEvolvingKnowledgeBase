@@ -15,7 +15,7 @@ related: [docs/tech/09-OBSERVABILITY]
 > 京东社招因需逆向签名，本手册建议放弃自动化、改手动粘贴 JD。
 > 最后更新：2026-09-04
 > **更新要点**：BOSS 扫码登录已跑通（前端「BOSS 扫码登录」按钮自动完成两步扫码 + 保存 Cookie），
-> 无需再手动复制 Cookie；当前 BOSS 的卡点从「登录」变成了「搜索接口 sign 签名」（见 `docs/job-sources.md` 跟踪项）。
+> 无需再手动复制 Cookie；当前 BOSS 的卡点从「登录」变成了「搜索接口 sign 签名」（见 `docs/ops/10-JOB-SOURCES.md` 跟踪项）。
 
 ---
 
@@ -84,7 +84,7 @@ BOSS 的「APP扫码登录」已完整逆向并跑通，前端「BOSS 扫码登�
 3. 在 App 上点「确认登录」→ 自动把 `wt2`/`zp_at`/`bst`/`wbg` 等 Cookie 持久化。
 
 > **当前卡点已从「登录」变成「采集」**：搜索接口 `search/joblist.json` 返回 `code:37 环境异常`，
-> 需要逆向 `sign` 签名（与登录 Cookie 无关）。详情见 `docs/job-sources.md` 的「BOSS 直聘采集跟踪项」。
+> 需要逆向 `sign` 签名（与登录 Cookie 无关）。详情见 `docs/ops/10-JOB-SOURCES.md` 的「BOSS 直聘采集跟踪项」。
 > 手动复制 Cookie 仍是备用方案（下面方案二/三），但正常情况用不到。
 
 ---

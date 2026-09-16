@@ -6,12 +6,12 @@ status: active
 version: v1.0.0
 last-updated: 2026-09-09
 based-on-commit: 45b7961
-related: [docs/ops/00-README, docs/tmp/自迭代闭环设计RFC]
+related: [docs/ops/00-README, docs/RFC-自迭代闭环设计]
 ---
 
 # 变更与发布操作规约（14-CHANGE-RELEASE-POLICY）
 
-> 本文定义 SEKB 的**变更与发布操作规则**：谁能改什么、上线前要过哪些确认、如何留痕、事故如何回滚。依据《自迭代闭环设计 RFC》（docs/tmp/），Human-In-Loop（HIL）为强制原则。
+> 本文定义 SEKB 的**变更与发布操作规则**：谁能改什么、上线前要过哪些确认、如何留痕、事故如何回滚。依据《[自迭代闭环设计 RFC](../RFC-自迭代闭环设计.md)》（2026-09-16 起随版本库分发），Human-In-Loop（HIL）为强制原则。
 > 适用于：代码发布、配置变更、数据操作、凭据轮换、依赖升级、回滚。
 
 ---
@@ -142,5 +142,5 @@ flowchart LR
 ## 相关文档
 
 - [docs/ops/00-README.md](./00-README.md)
-- [docs/tmp/自迭代闭环设计RFC.md](../tmp/自迭代闭环设计RFC.md)
+- [自迭代闭环设计 RFC](../RFC-自迭代闭环设计.md)
 - [docs/tech/09-OBSERVABILITY.md](../tech/09-OBSERVABILITY.md)
