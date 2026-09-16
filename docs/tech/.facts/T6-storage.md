@@ -74,7 +74,7 @@ scope: backend 全部持久化（ChromaDB/JSON/记忆/缓存/上传）+ 数据�
 | 项 | 现状（证据） |
 |---|---|
 | 路径 | `data/profile/{user_id}.json`，一用户一文件（profile_storage.py:1-6）；路径对 / \\ 转义兜底（profile_storage.py:28-30） |
-| schema | `UserProfile`：user_id、bio、skills[]、career_goal、job_preferences{target_roles,target_cities,min_salary_k,company_types,keywords}、news_interests[]、updated_at（models/profile.py:33-42） |
+| schema | `UserProfile`：user_id、bio、skills[]、career_goal、job_preferences{target_roles,target_cities,min_salary_k,company_types,keywords}、news_interests[]、updated_at（models/profile.py:35-44） |
 | 写入方 | chat 偏好回流 upsert_update（chat.py:297,347）；profile 路由 upsert_update（profile.py:51）；job/profile.py:114 读取（应聘助手） |
 | 读取方 | chat.py:226 读画像；profile 路由；job/profile.py:114 |
 | 原子性 | 写 = 临时文件 + os.replace（profile_storage.py:42-50）；**无锁**——upsert_update 是“读-改-写”（profile_storage.py:58-75），并发会丢更新；嵌套 job_preferences 浅合并（profile_storage.py:64-71） |

@@ -172,7 +172,7 @@ flowchart LR
 | 任务 | 触发 | 是否阻塞主请求 | 幂等 | 证据 |
 |------|------|--------------|------|------|
 | 知识自迭代入库 | 主对话内 `await ingest`（注释称不阻塞，实际同步 await） | **是**（实现与注释漂移） | 冲突检测 coexist | chat.py:578-600；T7 D-T7-4 |
-| 后台偏好抽取 | skill=应聘助手 时 `asyncio.create_task` | 否 | 无 | chat.py:393-404（skill 已从前端移除，入口存留） |
+| 求职偏好回流 | 内联 `await extract_and_update_profile`（`<PREF>` 标签，方案 A） | 否（阻塞在 `_run_chat` 内） | 无 | chat.py:260；**方案 B（后台抽取）已随 skill 删除而失去触发点，当前无调用方** |
 | 上传后台入库 | Starlette BackgroundTasks | 否（响应先回，/status 轮询） | 覆盖上传可重复 | upload.py:561-578 |
 | 资讯定时调度 | APScheduler cron（日报/周报/月报） | 否（同进程） | 日报 skip+文件锁；周/月报无 | scheduler.py:34-54；T7 |
 | client-event 上报 | 前端 5s flush | 否 | 非幂等 | monitoring.py |
@@ -234,7 +234,9 @@ flowchart TD
 - 知识入库注释「不阻塞」与实际同步 await 不符（漂移，已在 T7 记录）。
 - `_conv_inflight` 新会话锁键退化（`user|`），同用户两个新会话互斥串行（T1 异常）。
 - SSE 前端无自动重连/断线续传。
-- skill（应聘助手）入口已从前端移除，但后端偏好抽取分支存留（待清理，见 BACKLOG）。
+- skill（应聘助手/资讯助手）模式已**彻底移除**：前端技能按钮（`c9d948a`）与后端分支（`daa76bd`）都不在了；
+  随之失去触发点的是「方案 B 后台偏好抽取」（`profile_service.record_preferences_task`，无调用方），
+  保留待「求职意图识别」落地后重新接上（见 `11-EVOLUTION`）。
 
 ---
 

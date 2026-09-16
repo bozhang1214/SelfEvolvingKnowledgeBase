@@ -4,8 +4,8 @@ layer: 设计层
 owner: SEKB Team
 status: active
 version: v1.0.0
-last-updated: 2026-09-09
-based-on-commit: 1ffb13c
+last-updated: 2026-09-16
+based-on-commit: d7dae46
 related: [01-ARCHITECTURE, 02-RUNTIME-FLOWS, 05-API-REFERENCE, 08-GLOSSARY]
 ---
 
@@ -222,6 +222,52 @@ flowchart TB
 
 ---
 
+## 11.5 JobCopilot 内核接入（招聘分析链路）
+
+> 招聘分析不是 SEKB 自己实现的：**分析能力全部来自 `jobcopilot` 内核**（git 子模块），
+> SEKB 只做「采集 → 传参 → 展示」。这一节是这段接线的唯一技术说明。
+
+**一句话架构**：SEKB 是内核的**客户端**（不是调用方）。内核可独立发版/部署，
+SEKB 不需要跟着改代码（`mcp_client.py:1-15`）。
+
+```
+前端 → FastAPI(/api/v1/job) → JobAgent
+        ├─ 采集：JobCollector → sources.py → browser-service(BOSS 扫码登录态)
+        └─ 分析：JobCopilotMCP(stdio 长连接) → jobcopilot-mcp 子进程 → LLM
+                                               （同一套内核也经 HTTP 入口服务云端平台）
+```
+
+| 关注点 | 实现 | 位置 |
+|---|---|---|
+| 传输选择 | `job.transport`：`mcp`（默认）/ `direct`（**应急回滚**，进程内 import） | `config.yaml` job 段；`generator.py:67-92` |
+| 单职位 | 工具 `analyze_job`（jd_text / job_meta / user_profile） | `generator.py:124-144` |
+| 批量 | 工具 `analyze_jobs_batch`（jobs / keyword / city / user_profile） | `market.py:185-225` |
+| 连接复用 | **每进程一条**长连接 + 双重检查锁；超时/异常即丢弃重连 | `mcp_client.py:105-123,182-189` |
+| 超时 | `job.mcp_timeout_s`（默认 180s，批量必需）；另有建连超时 30s | `config.yaml`；`mcp_client.py:55-56` |
+| 错误语义 | 连接/超时/内核结构化 `error` 一律转 `KernelMCPError`（带排查方向），不抛 500 堆栈 | `mcp_client.py:36-37,146-180` |
+| 提示词热改 | 把 SEKB 的 `prompt/job` 经 `JOBCOPILOT_PROMPTS_DIR` 传给子进程 | `mcp_client.py:92-103`；`generator.py:25-37` |
+| 提示词优先级 | 请求级 override → **宿主 local** → `packs/<族>` → 包内 `base/`（pack 是**章节合并**） | 内核 `core/prompts/resolver.py:132-168` |
+| BYOK | 内核是独立进程自己调 LLM，必须把 `DEEPSEEK_API_KEY` 翻成 `JOBCOPILOT_LLM_*` 传过去 | `generator.py:40-53` |
+| 用量可见性 | 内核自己调 LLM，SEKB 的 LLMFactory 看不到 → 由内核回传 `usage` 并落结构化日志 | `generator.py:132-142`；`market.py:228-243` |
+| 版本可见性 | 构建期烧入 `JOBCOPILOT_COMMIT`；`/api/v1/health/` 暴露 `kernel.{commit,prompt_source,healthy}` | `core/kernel_info.py:28-71` |
+| 画像隔离 | **逐请求注入** `user_profile`（多用户系统不能用内核全局画像 / `save_profile`） | `generator.py:124-131`；`market.py:202-211` |
+| 云端平台入口 | 同一套内核另起 HTTP 入口（`/mcp` + `/sse`），令牌门禁 + BYOK | `docs/ops/15-MCP-ENDPOINT.md` |
+
+**三个必须知道的行为**
+
+1. **缺 Key 不致命**：内核无 Key 也照常启动，只在需要 LLM 的工具上返回可操作错误
+   （否则 MCP 客户端只会显示「没有工具」，连 `list_prompt_packs` 都用不了）。
+2. **`prompt_source` 是热改是否生效的信号**：`/health` 里为 `local` 才说明用的是宿主目录；
+   变 `base` 表示宿主的提示词**没被读到**（历史上这个变量曾「文档写了代码没读」，静默失效）。
+3. **`source_path` 默认可用**（stdio 传输，服务端就是本机）——几十个职位用 `source_path`
+   传路径比塞进参数省大量 token；但**公网 HTTP 入口刻意禁用**该开关（否则等于任意文件读取）。
+
+**坑**：`direct` 回滚模式与 `mcp` 共用同一套内核实现，所以行为差异只可能来自传输层
+（超时/序列化/环境变量传递）——排查时优先怀疑这三样。子模块指针改了要同步
+（`scripts/check_kernel.sh`），否则「仓库钉的版本」≠「容器里跑的版本」。
+
+---
+
 ## 12. 评测（app/eval）
 
 | 组件 | 说明 |
@@ -269,3 +315,5 @@ user.py / share.py / profile.py / chat_share.py：各域 Pydantic 模型（UserP
 - [04-DATA-MODEL.md](./04-DATA-MODEL.md)
 - [05-API-REFERENCE.md](./05-API-REFERENCE.md)
 - 事实表：T3/T4/T5/T6/T7/T8（.facts/）
+- 内核侧宿主接线说明（供嵌入方参考）：`jobcopilot/docs/integrations/sekb.md`
+- 内核对外 HTTP 端点（云端平台接入）：[`docs/ops/15-MCP-ENDPOINT.md`](../ops/15-MCP-ENDPOINT.md)

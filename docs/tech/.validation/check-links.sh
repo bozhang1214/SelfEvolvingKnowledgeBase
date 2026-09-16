@@ -21,6 +21,10 @@ for f in docs/tech/0*.md; do
       ../ops) resolved="$ROOT/docs/ops";;
       ../BACKLOG.md) resolved="$ROOT/docs/BACKLOG.md";;
       ../CHANGELOG.md) resolved="$ROOT/docs/CHANGELOG.md";;
+      # 兄弟目录下的文件（如 ../ops/15-MCP-ENDPOINT.md）：
+      # 此前无此分支，被下面的 `../*.md` 兜成 docs/<basename> → **误报断链**
+      # （真实路径是 docs/ops/<basename>）。这里按「去掉开头的 ../ 后拼到 docs/」解析。
+      ../*/*.md) resolved="$ROOT/docs/${target#../}";;
       ./[0-9]*.md) resolved="$ROOT/docs/tech/$(basename "$target")";;
       ./.facts/*.md) resolved="$ROOT/docs/tech/.facts/$(basename "$target")";;
       ./*.md) resolved="$ROOT/docs/tech/$(basename "$target")";;

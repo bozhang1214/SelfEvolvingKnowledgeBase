@@ -103,7 +103,8 @@ curl -X POST https://bos-studio.tech/sekb/api/v1/auth/login \
 
 ## 3. chat（`/api/v1/chat`，router 级 require_full_access）
 
-> 两端点共用 `_run_chat`（chat.py:407-623）。请求体 `ChatRequest`：`message` 必填、`conversation_id`?（None=新建）、`user_id`（被忽略，真实取 JWT）、`skill`（空=普通）。
+> 两端点共用 `_run_chat`（chat.py:407-623）。请求体 `ChatRequest`：`message` 必填、`conversation_id`?（None=新建）、`user_id`（被忽略，真实取 JWT）。
+**`skill` 字段已移除**（2026-09，skill 模式整体删除）；未知字段按 Pydantic 默认被忽略。
 
 | 端点 | 请求/响应 | 说明 | 证据 |
 |------|-----------|------|------|
@@ -219,7 +220,7 @@ curl -X POST https://bos-studio.tech/sekb/api/v1/auth/login \
 | GET `` | — | UserProfile | 无画像返回默认空 | profile.py:28-37 |
 | PUT `` | ProfileUpdate(全可选) | UserProfile | upsert_update 深合并（只合并非 None 字段） | profile.py:40-53 |
 
-**UserProfile**：user_id/bio/skills[]/career_goal/job_preferences{target_roles,target_cities,min_salary_k,company_types,keywords}/news_interests[]/updated_at（models/profile.py:33-42）。
+**UserProfile**：user_id/bio/skills[]/career_goal/job_preferences{target_roles,target_cities,min_salary_k,company_types,keywords}/news_interests[]/updated_at（models/profile.py:35-44）。
 
 ---
 

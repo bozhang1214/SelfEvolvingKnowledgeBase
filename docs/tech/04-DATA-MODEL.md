@@ -141,7 +141,7 @@ erDiagram
 - **无持久化**，重启即失；生产者 graph 各节点，压缩角色 scribe。
 
 ### 5.2 Profile 画像
-- `data/profile/{user_id}.json`：UserProfile（user_id/bio/skills/career_goal/job_preferences/news_interests/updated_at，models/profile.py:33-42）。
+- `data/profile/{user_id}.json`：UserProfile（user_id/bio/skills/career_goal/job_preferences/news_interests/updated_at，models/profile.py:35-44）。
 - 写：chat 偏好回流（chat.py:297,347）、profile 路由（profile.py:51）；临时文件+os.replace，**无锁 RMW**（并发丢更新）。
 
 ### 5.3 News 存储

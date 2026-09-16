@@ -4,7 +4,7 @@
 - ``GET /api/v1/profile``          获取当前用户画像（无则返回默认空画像）
 - ``PUT /api/v1/profile``          更新画像（沿字段合并，不覆盖未传字段）
 
-画像供「应聘助手 / 科技资讯助手」skill 与招聘分析、资讯模块联动使用。
+画像供招聘分析、资讯模块消费（早期 skill 模式已于 2026-09 移除）。
 """
 from __future__ import annotations
 

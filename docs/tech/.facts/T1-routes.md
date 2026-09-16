@@ -179,7 +179,7 @@ auth 6 / chat 2 / chat_share 3 / conversations 7 / health 3 / job 14 / knowledge
 
 | 端点 | 鉴权 | 请求字段 | 响应 | 错误 | 副作用 | 幂等性/备注 | 证据 |
 |---|---|---|---|---|---|---|---|
-| GET `` | 登录 | — | UserProfile（profile.py:33-42）；无画像→返回默认空画像（35-36） | 无显式 HTTPException | 只读 | 幂等 | profile.py:28-37 |
+| GET `` | 登录 | — | UserProfile（profile.py:35-44）；无画像→返回默认空画像（35-36） | 无显式 HTTPException | 只读 | 幂等 | profile.py:28-37 |
 | PUT `` | 登录 | ProfileUpdate（body）：`bio` str|None、`skills` list[str]|None、`career_goal` str|None、`job_preferences` JobPreferences|None（target_roles/target_cities/min_salary_k/company_types/keywords，profile.py:23-30）、`news_interests` list[str]|None——全可选（45-52） | UserProfile | 无显式 HTTPException（存储异常走全局兜底→500） | 写 `ProfileStorage.upsert_update`（深合并，只合并非 None 字段，47-51）；logger（52） | 幂等（字段级合并覆盖；重复同 body 结果一致） | profile.py:40-53 |
 
 ---

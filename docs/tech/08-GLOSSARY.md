@@ -106,7 +106,7 @@ related: [00-README, 01-ARCHITECTURE, 02-RUNTIME-FLOWS]
 | 会话（Conversation） | 图任务（Graph run） | 前者持久；后者单次请求 |
 | 草稿答案（draft_answer） | 最终答案（final_answer） | Executor 产出草稿；Scribe 产出最终 |
 | 短期记忆（L1） | 长期知识库（L3） | 内存 vs 向量库；生命周期不同 |
-| skill 技能模式 | 任务规划（plan） | skill 已被前端移除（2026-09）；plan 是图内环节 |
+| ~~skill 技能模式~~ | 任务规划（plan） | skill **已整体移除**（2026-09：前端技能按钮 `c9d948a` + 后端分支 `daa76bd`）；plan 是图内环节 |
 | thinking（思考事件） | token（答案事件） | SSE 两种不同事件类型 |
 
 ---

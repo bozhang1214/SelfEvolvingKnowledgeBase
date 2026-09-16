@@ -36,7 +36,7 @@ related: [01-ARCHITECTURE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 09-OBSERVABI
 | TD-11 | 注释 | 「不阻塞」vs await、72h vs 90 天等漂移 | T1/T2/T7 | 误导 | 低 | P2 |
 | TD-12 | 前端 | no-explicit-any 114 处 warning | 10 | 类型安全 | 低 | P2 |
 | TD-13 | 质量 | mypy strict 310 存量债 | 10 | 类型保障 | 高 | P1(渐进) |
-| TD-14 | 数据 | skill 应聘助手入口已移除，后端偏好抽取/画像分支存留 | chat.py:393-404 | 死代码 | 低 | P2 |
+| ~~TD-14~~ | 数据 | ~~skill 应聘助手入口已移除，后端偏好抽取/画像分支存留~~ | — | ✅ **已清理（2026-09-16）**：全仓已无 skill 残留（`ChatRequest` 无该字段、`chat.py` 0 处引用）；方案 A（`<PREF>` 内联）为现役路径，方案 B 无调用方待求职意图接入 | — | 已关闭 |
 
 ---
 
