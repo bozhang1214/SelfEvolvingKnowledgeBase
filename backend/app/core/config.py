@@ -309,7 +309,9 @@ class RateLimitConfig(BaseModel):
 
 class AuthConfig(BaseModel):
     """鉴权配置"""
-    token_expire_hours: int = 2160  # 90 天（配合前端滑动续租，实际接近免登录）
+    # 2026-09-16：默认值由 2160h(90 天) 收紧为 168h(7 天)，与 config.yaml 保持一致。
+    # 此处是「yaml 漏配/写错键名」时的兜底——默认值若停在 90 天，安全收紧会被静默绕过。
+    token_expire_hours: int = 168  # 7 天
     jwt_secret: str = ""
     password_min_length: int = 8
     rate_limit_login_per_minute: int = 5

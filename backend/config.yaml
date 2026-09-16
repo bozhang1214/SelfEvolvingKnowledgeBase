@@ -332,7 +332,7 @@ news:
   weekly_cron: "0 8 * * 1"              # 周报：每周一 08:00（北京时间）
   monthly_cron: "0 8 1 * *"             # 月报：每月 1 日 08:00（北京时间）
   timezone: "Asia/Shanghai"             # 定时任务时区（容器默认 UTC，必须显式指定北京时间）
-  # RSS 源（已实测可用的 15 个中英文源，服务器上逐一 curl 验证 HTTP 200 + XML）
+  # RSS 源（38 条中英文源；早期 15 条已逐一 curl 验证 HTTP 200 + XML，后续批次未逐个复验）
   rss_sources:
     # ---- 中文（5）----
     - https://www.qbitai.com/feed                    # 量子位（AI 媒体）

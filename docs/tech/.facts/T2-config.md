@@ -7,6 +7,13 @@ status: draft（阶段1 SSOT 工作产物）
 
 # T2 配置项清单
 
+> ⚠️ **本表是 2026-09-09 逆向分析期的「编写用工作产物」，可能已落后。**
+> 2026-09-16 复核确认：`T1-routes`（65 条 vs 实测 75 个端点）、`T2-config`、
+> `T8-observability` 的**行号与计数已过期**。写文档时请以
+> **代码本身 + `docs/tech/*.md`** 为准；本表仅作线索索引，不要把它的行号当断言。
+> （不随技术文档一起维护的原因见 `docs/tech/漂移清单.md` DOC-11。）
+
+
 > 来源：`backend/config.yaml`（417 行）+ `backend/app/core/config.py`（464 行，Pydantic v2 模型）。grep 范围：`backend/app/**/*.py`。
 > 状态列：**已引用** = 代码真实读取（附 文件:行号）；**死配置** = config.yaml / 模型中有定义，但 backend/app 无读取处（含「仅模型默认、yaml 未定义但被读」单独标注）。
 > 环境变量一律只写变量名，真实值不写。

@@ -4,8 +4,8 @@ layer: 宪法层
 owner: SEKB Team
 status: active
 version: v1.0.0
-last-updated: 2026-09-09
-based-on-commit: 010d83e
+last-updated: 2026-09-16
+based-on-commit: 44dfed1
 related: [01-ARCHITECTURE, 02-RUNTIME-FLOWS, 03-MODULES, 04-DATA-MODEL, 05-API-REFERENCE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 08-GLOSSARY, 09-OBSERVABILITY, 10-TESTING, 11-EVOLUTION]
 ---
 
@@ -89,9 +89,18 @@ related: [01-ARCHITECTURE, 02-RUNTIME-FLOWS, 03-MODULES, 04-DATA-MODEL, 05-API-R
 
 ### 4.2 文档-代码自动联动
 
-1. **git pre-commit 检查**（`.validation/pre-commit-check.sh`）：改动后端路由→提示更新 05；改 config→提示更新 06；改 graph/agents→提示更新 02/03；改 frontend→提示更新 03§前端。提示非阻断。
-2. **过期标记**：每篇头部 `last-updated` + `based-on-commit`；`.validation/check-freshness.sh` 对超过阈值未更新文档告警。
-3. **变更日志**：代码行为变化须在 `docs/CHANGELOG.md` 登记。
+1. **git pre-commit 检查**（钩子 `doc-sync-check` → `docs/tech/.validation/check-doc-sync.sh`）：
+   改动后端路由 → 提示更新 05；改 `config.yaml` → 提示 06；改 graph/agents → 提示 02/03；
+   改 frontend → 提示 03§前端。**默认只提示、不阻断提交**（exit 0）；
+   需要强制阻断时设 `DOC_SYNC_FORCE=1`。
+   （`.pre-commit-config.yaml` 另有 ruff / mypy 回归 / tsc / eslint 四个代码门禁钩子。）
+2. **过期标记**：每篇头部 `last-updated` + `based-on-commit`；
+   `docs/tech/.validation/check-freshness.sh` 对 `last-updated` 超过 90 天、
+   或 `based-on-commit` 落后 HEAD 超过 200 个提交的文档告警（**未接入 pre-commit**，需手动/CI 调用）。
+3. **链接与孤儿**：`docs/tech/.validation/check-links.sh`。
+   ⚠️ 它**只扫 `docs/tech/0*.md`**（覆盖面外的文档不受检查，其「✅」不代表全仓无断链）。
+4. **格式宪法**：新增/改版技术文档须遵循 `docs/tech/.validation/DOC-TEMPLATE.md`。
+5. **变更日志**：代码行为变化须在 `docs/CHANGELOG.md` 登记（走 `docs/changelog.d/` 碎片）。
 
 ### 4.3 编号与链接规范
 
@@ -105,6 +114,8 @@ related: [01-ARCHITECTURE, 02-RUNTIME-FLOWS, 03-MODULES, 04-DATA-MODEL, 05-API-R
 
 - 术语权威：`08-GLOSSARY.md`。
 - 事实表 SSOT（编写用工作产物）：`.facts/T1-routes.md` … `T8-observability.md`。
+- 格式模板与校验脚本：`docs/tech/.validation/`（`DOC-TEMPLATE.md` + `check-{doc-sync,links,freshness}.sh`）。
+- 内核（JobCopilot）接入的唯一技术说明：`03-MODULES.md §11.5`；对外 HTTP 端点见 `docs/ops/15-MCP-ENDPOINT.md`。
 
 ---
 

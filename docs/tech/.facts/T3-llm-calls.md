@@ -7,6 +7,13 @@ status: as-is
 
 # T3 LLM 调用点清单
 
+> ⚠️ **本表是 2026-09-09 逆向分析期的「编写用工作产物」，可能已落后。**
+> 2026-09-16 复核确认：`T1-routes`（65 条 vs 实测 75 个端点）、`T2-config`、
+> `T8-observability` 的**行号与计数已过期**。写文档时请以
+> **代码本身 + `docs/tech/*.md`** 为准；本表仅作线索索引，不要把它的行号当断言。
+> （不随技术文档一起维护的原因见 `docs/tech/漂移清单.md` DOC-11。）
+
+
 > 数据来源：`backend/config.yaml`、`backend/app/core/llm_factory.py`、`backend/app/core/config.py` 与 `backend/app/` 全量 grep（`ainvoke_with_stats|astream_with_stats|llm_factory.get|.ainvoke(|.astream(|ChatOpenAI|ChatDeepseek`）。
 > 证据纪律：每条带 `backend/…:行号`；推断处标注【推断·待验证】；密钥脱敏。
 > 本文只描述现状（as-is）。

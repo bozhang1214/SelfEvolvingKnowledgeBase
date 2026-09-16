@@ -7,6 +7,13 @@ status: draft（阶段1 SSOT 工作产物）
 
 # T1 路由清单
 
+> ⚠️ **本表是 2026-09-09 逆向分析期的「编写用工作产物」，可能已落后。**
+> 2026-09-16 复核确认：`T1-routes`（65 条 vs 实测 75 个端点）、`T2-config`、
+> `T8-observability` 的**行号与计数已过期**。写文档时请以
+> **代码本身 + `docs/tech/*.md`** 为准；本表仅作线索索引，不要把它的行号当断言。
+> （不随技术文档一起维护的原因见 `docs/tech/漂移清单.md` DOC-11。）
+
+
 > 覆盖 backend/app/api/routes/ 下 13 个业务路由文件（auth / chat / chat_share / conversations / health / job / knowledge / metrics / monitoring / news / profile / share / upload）全部 `@router` 端点，共 **65 个**。
 > 证据纪律：每条记录附 `文件:行号`；未读到的代码不写；推断标【推断·待验证】；密钥一律 `<REDACTED>`。
 

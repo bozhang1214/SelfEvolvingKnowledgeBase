@@ -150,7 +150,7 @@ jobs:
           JWT_SECRET: test-secret
         # 包含增量测试：test_auth_metrics.py（登录/注册失败原因细分指标）
         # 与 test_monitoring_endpoint.py（客户端事件上报与 Prometheus 指标写入）
-        # --cov-fail-under=40：覆盖率门禁（基线 44%，随测试扩充逐步上调）
+        # --cov-fail-under=40：覆盖率门禁（2026-09-16 实测 54%，随测试扩充逐步上调）
         run: pytest tests/unit -x --cov=app --cov-report=xml --cov-report=term --cov-fail-under=40 -q
       - name: Upload coverage
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

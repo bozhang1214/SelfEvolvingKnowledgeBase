@@ -4,8 +4,8 @@ layer: 评价层
 owner: SEKB Team
 status: active
 version: v1.0.0
-last-updated: 2026-09-09
-based-on-commit: 1ffb13c
+last-updated: 2026-09-16
+based-on-commit: 44dfed1
 related: [01-ARCHITECTURE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 09-OBSERVABILITY]
 ---
 
@@ -27,15 +27,15 @@ related: [01-ARCHITECTURE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 09-OBSERVABI
 | TD-02 | 数据 | JSON 存储无 SQL/索引/事务，软删不 purge | json_storage.py:318-341 | 数据增长与查询 | 高 | P1 |
 | TD-03 | 配置 | **49 个死配置**（预算/评估/限流/淘汰等定义未接线） | T2 §15 | 认知负担/假安全感 | 低-中 | P1 |
 | TD-04 | 一致性 | 多存储无锁 RMW（profile/shares/caches/news storage） | T6 | 并发丢更新 | 中 | P1 |
-| TD-05 | 观测 | 4 指标未埋点 + record_llm_call 无调用方 + user/tool 标签失真 | T8 D-T8-1..6 | 监控盲区 | 低 | P1 |
-| TD-06 | 架构 | LLM 统一入口被绕过 10 处（news/job/classifier/image/share） | T3 | 成本/统计/重试缺失 | 中 | P1 |
+| TD-05 | 观测 | 3 指标未埋点（conversations/reflection/tool_latency，原 4 项）+ user/tool 标签失真；`record_llm_call` 已于 2026-09 接线 | T8 D-T8-1..6；llm_factory.py:597 | 监控盲区 | 低 | P1 |
+| TD-06 | 架构 | LLM 统一入口曾绕过 10 处；2026-09 已收口 9 处，仅剩 image_processor 直连 ChatOpenAI | T3；tools/image_processor.py:294-337 | 成本/统计/重试缺失 | 中 | P1 |
 | TD-07 | 架构 | ~~RateLimitMiddleware 未挂载~~（已挂载生效，读写分离）；`_conv_inflight` 仍仅进程内 | server.py:204-219；T1 | 并发防护（多 worker 前） | 低 | P2 |
-| TD-08 | 安全 | 无 refresh 黑名单/jti；分享过期无清扫；image 段配置静默丢 | T2/T6/BACKLOG | 安全纵深不足 | 中 | P1 |
-| TD-09 | 代码 | 上帝路由 chat.py:407-623 | 03 §2 | 可维护性 | 中 | P2 |
+| TD-08 | 安全 | jti 黑名单已实现（单 worker 内存）；分享过期无清扫；image 段配置静默丢 | T2/T6/BACKLOG；auth.py:26-29,93-103 | 安全纵深不足 | 中 | P1 |
+| TD-09 | 代码 | 上帝路由 chat.py:419-648（`chat`/`chat_stream`；核心逻辑另在 `_run_chat` 108-379） | 03 §2 | 可维护性 | 中 | P2 |
 | TD-10 | 数据 | ChromaDB eviction 未实现；News/Job 清理不彻底 | T6 | 磁盘增长 | 低 | P2 |
-| TD-11 | 注释 | 「不阻塞」vs await、72h vs 90 天等漂移 | T1/T2/T7 | 误导 | 低 | P2 |
+| TD-11 | 注释 | 「不阻塞」vs await（chat.py:320 注释 vs 325 await）、72h vs 90 天等漂移 | T1/T2/T7；chat.py:320,325 | 误导 | 低 | P2 |
 | TD-12 | 前端 | no-explicit-any 114 处 warning | 10 | 类型安全 | 低 | P2 |
-| TD-13 | 质量 | mypy strict 310 存量债 | 10 | 类型保障 | 高 | P1(渐进) |
+| TD-13 | 质量 | mypy strict 存量债（2026-09-16 实测 **300**，门禁基线 310） | 10 | 类型保障 | 高 | P1(渐进) |
 | ~~TD-14~~ | 数据 | ~~skill 应聘助手入口已移除，后端偏好抽取/画像分支存留~~ | — | ✅ **已清理（2026-09-16）**：全仓已无 skill 残留（`ChatRequest` 无该字段、`chat.py` 0 处引用）；方案 A（`<PREF>` 内联）为现役路径，方案 B 无调用方待求职意图接入 | — | 已关闭 |
 
 ---
@@ -46,9 +46,9 @@ related: [01-ARCHITECTURE, 06-CONFIG-REFERENCE, 07-DESIGN-PATTERNS, 09-OBSERVABI
 
 > **2026-09 重构已落地**：死配置已删 11 键（D3/P2-12/P2-P2-05/D6）；cost_control 预算占位已删、RateLimitMiddleware 已挂载生效（2026-09-10 启用，2026-09-15 资讯读写分离）；LLM 统一入口 9 处已收口（`ainvoke_with_stats`/`astream_with_stats`，仅剩 image_processor 独立视觉模型 T3 漂移）；画像偏好抽取（方案 B）随 skill 删除而解耦，待「求职意图」识别后按意图触发。以下为未完成项：
 
-- 修 `${VAR:-default}` 展开缺陷（T2 §4），清理剩余死配置（evaluation 5 项 / app.debug / vector_store.provider 等）。
-- 启用 RateLimitMiddleware（`rate_limit.enabled=true`，需先验证 SSE 流式不受影响）。
-- 补齐观测：4 指标埋点、record_llm_call 接线或删除、标签失真修复。
+- 清理剩余死配置（T2 §15；`${VAR:-default}` 展开缺陷已于 2026-09 修复（config.py:411-431），app.debug / vector_store.provider 已删）。
+- ~~启用 RateLimitMiddleware（`rate_limit.enabled=true`，需先验证 SSE 流式不受影响）~~ ✅ **已完成（2026-09-10）**：server.py:204-219 挂载，auth/share/upload/job/news 按路由分组独立限流。
+- 补齐观测：3 指标埋点（conversations/reflection/tool_latency）、标签失真修复；`record_llm_call` 已于 2026-09 接线（llm_factory.py:597）。
 - 画像偏好抽取（方案 B）按「求职意图」重新触发 + 复用原 `_build_job_analysis_context` 职位分析上下文注入。
 - 知识入库改后台执行（对齐注释）或改注释。
 

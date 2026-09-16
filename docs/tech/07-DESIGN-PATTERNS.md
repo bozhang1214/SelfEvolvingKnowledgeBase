@@ -4,8 +4,8 @@ layer: 评价层
 owner: SEKB Team
 status: active
 version: v1.0.0
-last-updated: 2026-09-09
-based-on-commit: 1ffb13c
+last-updated: 2026-09-16
+based-on-commit: 44dfed1
 related: [01-ARCHITECTURE, 11-EVOLUTION]
 ---
 
@@ -21,7 +21,7 @@ related: [01-ARCHITECTURE, 11-EVOLUTION]
 ## 1. 设计模式识别与评价
 
 ### 1.1 工厂模式：LLMFactory / AgentFactory
-- **落点证据**：`app/core/llm_factory.py:143-211`（LLMFactory.get 缓存+降级）；`app/agents/factory.py`（AgentFactory）；`app/core/config.py:453-464`（get_config 单例工厂）。
+- **落点证据**：`app/core/llm_factory.py:137-213`（LLMFactory.get 缓存+降级，get 定义于 :154）；`app/agents/factory.py:31-132`（AgentFactory）；`app/core/config.py:490-501`（get_config 单例工厂，lru_cache）。
 - **实现**：LLM 按角色缓存、创建失败降级 reasoner→chat；Agent 统一 create_all。
 - **恰当性评价**：
   - ✅ LLMFactory 集中了角色配置/降级/统计，是好的封装点。
@@ -31,12 +31,12 @@ related: [01-ARCHITECTURE, 11-EVOLUTION]
 - **过度设计？** 否。
 
 ### 1.2 门面模式：AppContext / Bootstrap
-- **落点证据**：`app/core/bootstrap.py:52-95`（AppContext dataclass 聚合全部组件）、`:97-267`（initialize_app 装配）、`get_app_context()`（:270-274）。
+- **落点证据**：`app/core/bootstrap.py:57-105`（AppContext dataclass 聚合全部组件）、`:133-355`（initialize_app 装配）、`get_app_context()`（:358-362）。
 - **评价**：✅ 统一装配顺序清晰、CLI/API 共用；✅ 条件装配（L3/news/job）用 enabled 开关。⚠️ 全局单例 `_app_context` 使测试需要 reset/替换（test_p0_fixes 已处理 get_app 懒加载）；可观测为模块级单例。
 
 ### 1.3 策略模式：ReflectionStrategy
-- **落点证据**：`app/agents/strategies/`（always/adaptive/sampling）+ `factory.py:28-39`。
-- **评价**：✅ 提供了策略接口，配置 `reflection.policy` 选择。⚠️ **adaptive/sampling 实际降级回 always**（factory.py:32-39）——策略抽象大于实现（YAGNI 见 §2）。
+- **落点证据**：`app/agents/strategies/`（仅 always.py）+ `strategies/factory.py:13-25`（按 `reflection.policy` 创建）。
+- **评价**：✅ 提供了策略接口，配置 `reflection.policy` 选择。⚠️ adaptive/sampling 已删除（D3），当前仅 always 一种实现——策略抽象大于实现（YAGNI 见 §2）。
 
 ### 1.4 模板方法：BaseAgent
 - **落点证据**：`app/agents/base.py`（BaseAgent，子类实现 `__call__`）。
@@ -47,23 +47,23 @@ related: [01-ARCHITECTURE, 11-EVOLUTION]
 - **评价**：✅ 存储抽象隔离了 Chroma 实现细节，便于未来换向量库。⚠️ JSONStorage 未走统一存储抽象（与 memory/base 分离）；两套存储体系并存（T6）。
 
 ### 1.6 注册表：ToolRegistry / 路由注册
-- **落点证据**：`app/tools/registry.py`、`app/api/server.py:268-280`（include_router）。
+- **落点证据**：`app/tools/registry.py:63-93`（ToolRegistry）、`app/api/server.py:312-324`（include_router，13 个路由）。
 - **评价**：✅ 工具注册与路由注册集中。⚠️ 实际注册工具仅 web_search（T5），注册表能力>使用；`metrics`/`monitoring` 路由注释建议网关保护。
 
 ### 1.7 装饰器/中间件（鉴权/限流/日志）
 - **落点**：路由 `Depends`（get_current_user / require_full_access）、FastAPI 异常处理器、middleware.py RateLimitMiddleware。
-- **评价**：✅ 鉴权用依赖注入清晰；✅ 全局异常统一脱敏（server.py:226-250）。✅ **RateLimitMiddleware 已挂载生效**（server.py:204-219，读写分离）；⚠️ 日志上下文注入无请求级中间件（T8），仅 chat 路由手动 bind。
+- **评价**：✅ 鉴权用依赖注入清晰；✅ 全局异常统一脱敏（server.py:223-294，SEKBError/HTTPException 5xx/兜底三层）。✅ **RateLimitMiddleware 已挂载生效**（server.py:204-219，读写分离）；⚠️ 日志上下文注入无请求级中间件（T8），仅 chat 路由手动 bind（chat.py:190）。
 
 ### 1.8 观察者/发布-订阅（SSE、后台任务）
-- **落点**：chat_stream 的 asyncio.Queue（chat.py:719-758）+ token sink（core/token_sink.py）；知识入库/偏好抽取 create_task。
+- **落点**：chat_stream 的 asyncio.Queue（chat.py:509-554，跑图任务→队列→SSE）+ token sink（core/token_sink.py）；知识入库/偏好抽取后台任务（chat.py:530、services/profile_service.py:158）。
 - **评价**：✅ 流式生产者-消费者模型清晰（图任务→queue→SSE）。⚠️ 后台任务无完成回调/编排（fire-and-forget + GC set），缺 shutdown drain（T7）。
 
 ### 1.9 单例模式
-- **落点**：get_config（lru_cache）、_app_context 全局、metrics 模块级、ProfileStorage 模块级单例（profile.py:25）。
+- **落点**：get_config（lru_cache, config.py:490）、_app_context 全局（bootstrap.py:54）、metrics 模块级（core/metrics.py）、ProfileStorage 模块级单例（api/routes/profile.py:25）。
 - **评价**：✅ 配置单例合理。⚠️ 过多模块级可变单例使并行测试需要小心清理。
 
 ### 1.10 建造者：GraphBuilder
-- **落点**：graph/builder.py GraphBuilder.build()。
+- **落点**：graph/builder.py:272-305（GraphBuilder.build）。
 - **评价**：✅ 图构建集中。⚠️ 与节点依赖（agents/factory）耦合，扩展节点需改 builder。
 
 ---
@@ -72,19 +72,19 @@ related: [01-ARCHITECTURE, 11-EVOLUTION]
 
 | 原则 | 评分 | 证据（好/坏） | 改进建议 |
 |------|------|--------------|---------|
-| 单一职责 SRP | 5/5 | 好：AppContext/各 storage 单域；chat.py 已瘦身（828→538，画像/skill 下沉 profile_service，WP2/WP3） | 已收口 |
+| 单一职责 SRP | 5/5 | 好：AppContext/各 storage 单域；chat.py 已瘦身（828→675，画像下沉 profile_service，skill 已删除，WP2/WP3） | 已收口 |
 | 开闭 OCP | 5/5 | 好：向量库/反思/工具可扩展；LLM 绕过点已收口（WP4，仅剩 image_processor 独立视觉模型） | 已收口 |
 | 里氏替换 LSP | 4/5 | BaseAgent/KnowledgeBaseBackend 子类可替换；证据：base.py 接口 | 补充抽象契约测试 |
 | 接口隔离 ISP | 3/5 | storage.base 接口较全但 JSONStorage 与 memory/base 未统一 | 统一存储抽象 |
 | 依赖倒置 DIP | 4/5 | 延迟导入 + AppContext 注入（bootstrap.py:39-48）；坏：部分模块直接 import 单例 | 收敛依赖方向 |
 | DRY | 5/5 | 好：llm_factory 统一统计 + core/utils + rag/format 收敛重复（WP1）；LLM 绕过 9 处已收口（WP4） | 已收口 |
 | KISS | 5/5 | 整体直白；adaptive/sampling 占位已删除（D3） | 已清理 |
-| YAGNI | 4/5 | 49 死配置已删 11 键（WP6）+ 本地 trace 已裁剪（D6）；l2 记忆预留 | 剩余 Phase2 预留已记 06-CONFIG |
-| 关注点分离 | 4/5 | 分层清晰；chat/upload/share/job 已下沉服务层（WP2，services 2→7 模块） | 服务层已抽取 |
+| YAGNI | 4/5 | 死配置已删 11 键（WP6）+ 本地 trace 已裁剪（D6）；**现存死键 29 个**（2026-09-16 按 06-CONFIG 复核口径重算，含 `l3_knowledge.eviction.*`、`tools.image_analysis.*`、`security.pii_masking`、`evaluation.*`、`storage.postgres.*` 等） | 剩余 Phase2 预留已记 06-CONFIG；死键治理见 BACKLOG A8/A9 |
+| 关注点分离 | 4/5 | 分层清晰；chat/upload/share/job 已下沉服务层（WP2，services 2→9 模块） | 服务层已抽取 |
 | 依赖方向 | 4/5 | 分层无环；靠目录纪律 | 加架构约束测试 |
 | 失败显式化 | 3/5 | 好：异常统一映射/error_id；坏：多处静默降级（RAG 吞异常、知识入库吞错、图兜底） | 区分可预期降级 vs 静默错误 |
-| 可测试性 | 4/5 | 528+ 单测全绿、TestClient/隔离重构；坏：全局单例需小心清理 | 依赖注入收口 |
-| 可观测性 | 3/5 | 23 指标+12 告警；坏：4 指标未埋点、LLM 单次延迟缺失（T8） | 补埋点 + record_llm_call 接线 |
+| 可测试性 | 4/5 | 841 单测全绿、TestClient/隔离重构；坏：全局单例需小心清理 | 依赖注入收口 |
+| 可观测性 | 3/5 | 23 指标+12 告警；坏：**3 个指标定义了但从未写入**（`conversations_total` / `reflection_pass_rate` / `tool_call_latency_seconds`，metrics.py:31,113,144）；LLM 单次延迟 `sekb_llm_call_latency_seconds` **已接线**（llm_factory.py:597） | 补这 3 个的埋点 |
 | 最小惊讶 | 4/5 | REST 语义直观；坏：知识入库"注释不阻塞"实为 await（T7） | 修注释/改实现 |
 | 契约优先 | 3/5 | Pydantic 强校验；坏：image_analysis 配置未建模被静默丢（T2） | 显式 schema |
 
@@ -94,9 +94,9 @@ related: [01-ARCHITECTURE, 11-EVOLUTION]
 
 | 反模式 | 落点 | 影响 |
 |--------|------|------|
-| 上帝路由 | ~~chat.py:407-623（单函数承载 7 步流程）~~ → 已下沉服务层（WP2/WP3，chat.py 828→538） | 已修复 |
-| 静默吞错 | knowledge_ingestor 异常仅日志（chat.py:597-600）；RAG 异常降级空（builder.py:235-241） | 问题不可见 |
-| 注释-实现漂移 | chat.py:586「不阻塞」vs await；auth.py:68「72h」vs 90 天 | 误导排障 |
+| 上帝路由 | ~~chat.py:407-623（单函数承载 7 步流程）~~ → 已下沉服务层（WP2/WP3，chat.py 828→675） | 已修复 |
+| 静默吞错 | knowledge_ingestor 异常仅日志（chat.py:342-345）；RAG 异常降级空（builder.py:259-264） | 问题不可见 |
+| 注释-实现漂移 | chat.py:320「不阻塞」vs await（:325）；auth.py:219-222「90 天」vs config.yaml:302（168h/7 天） | 误导排障 |
 | 死配置/死代码 | ~~49 死配置 + trigger_now + LocalTraceCollector~~ → 已删 11 键 + trigger_now + LocalTraceCollector（WP6/D6） | 已清理 |
 | 硬编码标签 | metrics user_id="default"、tool="web_search"（T8） | 观测失真 |
 | 配置两套来源 | image_analysis yaml 段丢弃 vs 环境变量（T2） | 配置陷阱 |

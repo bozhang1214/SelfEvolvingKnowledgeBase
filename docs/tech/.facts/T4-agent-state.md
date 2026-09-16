@@ -7,6 +7,13 @@ status: as-is
 
 # T4 AgentState 字段矩阵
 
+> ⚠️ **本表是 2026-09-09 逆向分析期的「编写用工作产物」，可能已落后。**
+> 2026-09-16 复核确认：`T1-routes`（65 条 vs 实测 75 个端点）、`T2-config`、
+> `T8-observability` 的**行号与计数已过期**。写文档时请以
+> **代码本身 + `docs/tech/*.md`** 为准；本表仅作线索索引，不要把它的行号当断言。
+> （不随技术文档一起维护的原因见 `docs/tech/漂移清单.md` DOC-11。）
+
+
 > 数据来源：`backend/app/graph/state.py`、`backend/app/graph/builder.py`、`backend/app/agents/{supervisor,planner,executor,critic,scribe}.py`、`backend/app/agents/strategies/{base,always}.py`、`backend/app/api/routes/chat.py`。
 > 证据纪律：每条带 `backend/…:行号`；推断处标注【推断·待验证】。
 > 现状：`GraphState` 为 `TypedDict(total=False)`（state.py:123-128），LangGraph 各节点返回“部分更新 dict”，逐 key 覆盖合并。

@@ -51,7 +51,7 @@ function decodeJwtExp(token: string): number | null {
   }
 }
 
-/** 滑动续租：用当前仍有效的 token 换取新的 90 天 token。 */
+/** 滑动续租：用当前仍有效的 token 换取新的 token（有效期取配置 token_expire_hours，2026-09-16 起为 7 天）。 */
 export async function refreshToken(): Promise<string | null> {
   try {
     const res = await apiClient.post<LoginResponse>('/auth/refresh');
@@ -64,7 +64,7 @@ export async function refreshToken(): Promise<string | null> {
 
 /**
  * 自动续租：token 临近过期（<7 天）时刷新；返回 token 是否仍可用。
- * 用于进入页面时静默续租，实现「90 天有效期 + 到期自动续租」。
+ * 用于进入页面时静默续租，实现「有效期 + 到期自动续租」（当前 7 天，见 config.yaml 的 token_expire_hours）。
  */
 export async function ensureFreshToken(): Promise<boolean> {
   const token = getToken();
