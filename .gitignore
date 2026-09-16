@@ -57,6 +57,10 @@ backend/data/
 .env.local
 .env.*.local
 .env.prod
+# .env.prod 的备份**含真实密钥**（JWT_SECRET 等），绝不能被 git add 卷进来。
+# 备份请放仓库外（生产上已移到 /opt/self-evolving-kb/env-backups/）。
+.env.prod.bak*
+*.pre-deploy-*.bak
 
 # ============ Docker ============
 deploy/certs/
