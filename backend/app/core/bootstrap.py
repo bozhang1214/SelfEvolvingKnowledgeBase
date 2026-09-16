@@ -49,6 +49,10 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# 全局应用上下文：模块级先声明为 None，保证未初始化就调用 get_app_context()
+# 时抛出声明的 RuntimeError（而不是 NameError: name '_app_context' is not defined）。
+_app_context: "AppContext | None" = None
+
 
 @dataclass
 class AppContext:
