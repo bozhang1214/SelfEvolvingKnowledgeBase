@@ -186,7 +186,9 @@ services:
       # 前端应用地址（含 /sekb 子路径、不带尾斜杠）；「查看对话记录」深链到 /chat 由网关拼接
       FRONTEND_URL: ${FRONTEND_URL:-https://bos-studio.tech/sekb}
     ports:
-      - "${FEISHU_GATEWAY_PORT:-5001}:5001"
+      # 仅绑回环：网关只被 backend 与 Alertmanager 通过 sekb_network 内网调用，
+      # 不需要对外暴露；此前绑 0.0.0.0 时，可达者能直接伪造告警卡片灌飞书群。
+      - "127.0.0.1:${FEISHU_GATEWAY_PORT:-5001}:5001"
     networks:
       - sekb_network
     healthcheck:
