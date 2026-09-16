@@ -31,6 +31,25 @@ export async function deleteConversation(convId: string): Promise<void> {
   await apiClient.delete(`/conversations/${convId}`);
 }
 
+/**
+ * 给某条 AI 回复打分（thumbs_up / thumbs_down）。
+ *
+ * 后端 `POST /conversations/{id}/rate` 早就实现了（含「反馈飞轮」：点赞提升被引用
+ * 知识条目重要性、点踩降权），但前端一直没有入口 —— 用户无法反馈，自迭代闭环形同虚设。
+ */
+export async function rateMessage(
+  convId: string,
+  msgId: string,
+  rating: 'thumbs_up' | 'thumbs_down',
+  comment?: string,
+): Promise<void> {
+  await apiClient.post(`/conversations/${convId}/rate`, {
+    msg_id: msgId,
+    rating,
+    comment: comment || null,
+  });
+}
+
 /** 获取当前对话与用户累计的 token / 费用统计 */
 export async function getUsage(conversationId?: string): Promise<UsageResponse> {
   const res = await apiClient.get<ApiResponse<UsageResponse>>('/chat/usage', {

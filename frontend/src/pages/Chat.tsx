@@ -7,13 +7,14 @@ import {
   PlusOutlined, DeleteOutlined, EditOutlined, SendOutlined, StopOutlined,
   PushpinOutlined, PushpinFilled, CopyOutlined, CheckOutlined, RedoOutlined,
   ShareAltOutlined, DownloadOutlined, CheckSquareOutlined, HistoryOutlined, ArrowDownOutlined,
+  LikeOutlined, DislikeOutlined,
 } from '@ant-design/icons';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
 import { logger } from '@/utils/logger';
 import { copyText, downloadTextFile } from '@/utils/clipboard';
 import { createChatShare } from '@/services/share';
-import { getUsage } from '@/services/chat';
+import { getUsage, rateMessage } from '@/services/chat';
 import type { Message, UsageStats } from '@/types/chat';
 import { CodeBlock, buildConversationMarkdown, joinSelectedMessages } from '@/features/chat/markdown';
 import ReactMarkdown from 'react-markdown';
@@ -43,6 +44,8 @@ const Chat: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  // 已打分消息：message_id -> thumbs_up / thumbs_down（仅用于按钮高亮）
+  const [rates, setRates] = useState<Record<string, string>>({});
   // 多选模式与已选消息索引集合（针对 currentMessages 下标）
   const [multiSelect, setMultiSelect] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -250,6 +253,18 @@ const Chat: React.FC = () => {
       setTimeout(() => setCopiedIdx((cur) => (cur === idx ? null : cur)), 2000);
     } else {
       antMsg.error('复制失败');
+    }
+  };
+
+  /** 给 AI 回复点赞/点踩：接通后端已有 rate 接口（含反馈飞轮：点赞提升被引用知识条目重要性）。 */
+  const handleRate = async (msg: any, rating: 'thumbs_up' | 'thumbs_down') => {
+    if (!currentConvId || !msg?.message_id) return;
+    try {
+      await rateMessage(currentConvId, msg.message_id, rating);
+      setRates((prev) => ({ ...prev, [msg.message_id]: rating }));
+      antMsg.success(rating === 'thumbs_up' ? '感谢反馈，已用于改进知识质量' : '已记录，我们会据此调整');
+    } catch (e: any) {
+      antMsg.error(e?.response?.data?.detail || '反馈失败，请稍后再试');
     }
   };
 
@@ -700,6 +715,23 @@ const Chat: React.FC = () => {
                             }
                           }}
                           title="转发"
+                        />
+                        {/* 点赞 / 点踩：驱动「反馈飞轮」（调整被引用知识条目重要性） */}
+                        <Button
+                          size="small"
+                          type="text"
+                          className="msg-action-btn"
+                          icon={<LikeOutlined style={rates[(msg as any).message_id] === 'thumbs_up' ? { color: '#52c41a' } : undefined} />}
+                          onClick={() => handleRate(msg, 'thumbs_up')}
+                          title="答得好"
+                        />
+                        <Button
+                          size="small"
+                          type="text"
+                          className="msg-action-btn"
+                          icon={<DislikeOutlined style={rates[(msg as any).message_id] === 'thumbs_down' ? { color: '#ff4d4f' } : undefined} />}
+                          onClick={() => handleRate(msg, 'thumbs_down')}
+                          title="答得不好"
                         />
                       </>
                     )}

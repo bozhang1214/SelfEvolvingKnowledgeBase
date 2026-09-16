@@ -61,11 +61,8 @@ const SharedKnowledge: React.FC = () => {
   // 加载分享信息
   useEffect(() => {
     if (!shareId) return;
-    if (!isLoggedIn) {
-      // 未登录跳转登录，并记住回跳地址
-      navigate(`/login?redirect=/share/${shareId}`);
-      return;
-    }
+    // 未登录时不自动跳转：渲染下面的「登录引导页」，由用户主动点「去登录」
+    if (!isLoggedIn) return;
     setLoadingInfo(true);
     apiClient
       .get(`/share/${shareId}`)
@@ -227,6 +224,27 @@ const SharedKnowledge: React.FC = () => {
   const allMessages = streaming && streamContent
     ? [...messages, { role: 'assistant', content: streamContent }]
     : messages;
+
+  // 未登录：不静默跳转，而是给出**明确的登录引导页**（告知「为什么需要登录」+ 一键去登录，
+  // 登录后自动回到本分享）。分享按策略**必须登录**才能查看，不做公开只读。
+  if (!isLoggedIn) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f5f5f5' }}>
+        <Card style={{ maxWidth: 420, textAlign: 'center' }}>
+          <Text strong style={{ fontSize: 16 }}>需要登录后才能查看该分享</Text>
+          <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 20 }}>
+            分享内容仅对已登录账号开放。登录或注册后会自动回到这个分享页面。
+          </Paragraph>
+          <Space>
+            <Button type="primary" onClick={() => navigate(`/login?redirect=/share/${shareId}`)}>
+              去登录
+            </Button>
+            <Button onClick={() => navigate('/register')}>注册账号</Button>
+          </Space>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <Layout style={{ height: '100vh' }}>

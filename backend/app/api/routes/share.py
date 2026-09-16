@@ -67,8 +67,9 @@ class CreateShareRequest(BaseModel):
     category_l1: str = Field(default="", description="分享范围·一级分类")
     category_l2: str = Field(default="", description="分享范围·二级分类")
     category_l3: str = Field(default="", description="分享范围·三级分类")
-    # 有效期天数：默认 30 天；<=0 表示永不过期
-    expires_days: int = Field(default=30, description="分享有效期天数，<=0 永不过期")
+    # 有效期天数：默认 7 天（2026-09-16 从 30 天收紧，降低链接泄露后的暴露窗口）；
+    # 上限 30 天；<=0 表示永不过期（不推荐）
+    expires_days: int = Field(default=7, ge=-1, le=30, description="分享有效期天数（默认 7，上限 30；<=0 永不过期）")
 
 
 class SharedChatRequest(BaseModel):
@@ -90,7 +91,11 @@ def _require_share_storage(ctx: AppContext) -> Any:
 
 async def _get_valid_share(ctx: AppContext, share_id: str):
     """获取并校验分享有效性（实现收敛至 share_service.get_valid_share）。"""
-    return await get_valid_share(_require_share_storage(ctx), share_id)
+    storage = _require_share_storage(ctx)
+    share = await get_valid_share(storage, share_id)
+    # 记录一次访问：所有者能在列表里看到 view_count / last_accessed_at（此前完全无感知）
+    await storage.record_view(share_id)
+    return share
 
 
 def _owner_display_name(ctx: AppContext, owner_user_id: str) -> str:
@@ -224,8 +229,11 @@ async def list_my_shares(
             "category_l3": s.category_l3,
             "category_label": s.category_label(),
             "created_at": _fmt_dt(s.created_at),
+            "expires_at": _fmt_dt(s.expires_at),
             "is_active": s.is_active,
             "has_expired": not s.is_valid(),
+            "view_count": s.view_count,
+            "last_accessed_at": _fmt_dt(s.last_accessed_at),
             "share_url": f"/sekb/share/{s.share_id}",
             "entries_count": entries_count,
         })

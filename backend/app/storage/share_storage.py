@@ -114,6 +114,16 @@ class ShareStorage:
         result.sort(key=lambda s: s.created_at, reverse=True)
         return result
 
+    async def record_view(self, share_id: str) -> None:
+        """记录一次访问（view_count +1，刷新 last_accessed_at），供所有者查看使用情况。"""
+        self._ensure_initialized()
+        data = self._shares.get(share_id)
+        if data is None:
+            return
+        data["view_count"] = int(data.get("view_count", 0) or 0) + 1
+        data["last_accessed_at"] = datetime.now(timezone.utc).isoformat()
+        await self._save()
+
     async def delete_share(self, share_id: str) -> bool:
         self._ensure_initialized()
         if share_id not in self._shares:

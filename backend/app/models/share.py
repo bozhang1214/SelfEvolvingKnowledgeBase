@@ -43,6 +43,9 @@ class SharedKnowledge(BaseModel):
     created_at: datetime = Field(default_factory=_now_iso)
     expires_at: datetime | None = None
     is_active: bool = True
+    # 访问审计：所有者可看出「分享被看了多少次、最后一次何时」——此前完全无感知
+    view_count: int = 0
+    last_accessed_at: datetime | None = None
 
     def is_valid(self, now: datetime | None = None) -> bool:
         """判断分享是否有效（启用且未过期）。"""

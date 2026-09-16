@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  Layout, Typography, Spin, Empty, Button, Space, Avatar, Popconfirm, message,
+  Layout, Typography, Spin, Empty, Button, Space, Avatar, Popconfirm, message, Card,
 } from 'antd';
 import {
   ArrowLeftOutlined, UserOutlined, MessageOutlined, DeleteOutlined,
@@ -11,7 +11,7 @@ import remarkGfm from 'remark-gfm';
 import { getChatShare, revokeChatShare, type SharedChatInfo } from '@/services/share';
 import { useUserStore } from '@/stores/user';
 
-const { Text } = Typography;
+const { Text, Paragraph } = Typography;
 const { Header, Content } = Layout;
 
 /**
@@ -30,11 +30,8 @@ const SharedChat: React.FC = () => {
 
   useEffect(() => {
     if (!shareId) return;
-    if (!isLoggedIn) {
-      // 未登录跳转登录，并记住回跳地址
-      navigate(`/login?redirect=/share/chat/${shareId}`);
-      return;
-    }
+    // 未登录时不自动跳转：渲染下面的「登录引导页」，由用户主动点「去登录」
+    if (!isLoggedIn) return;
     setLoading(true);
     getChatShare(shareId)
       .then((data) => setInfo(data))
@@ -66,6 +63,26 @@ const SharedChat: React.FC = () => {
       <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh', gap: 16 }}>
         <Empty description="分享不存在或已失效" />
         <Button type="primary" onClick={() => navigate('/')}>返回首页</Button>
+      </div>
+    );
+  }
+
+  // 未登录：给出明确的登录引导页（分享按策略必须登录后查看，不做公开只读）
+  if (!isLoggedIn) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f5f5f5' }}>
+        <Card style={{ maxWidth: 420, textAlign: 'center' }}>
+          <Text strong style={{ fontSize: 16 }}>需要登录后才能查看该分享</Text>
+          <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 20 }}>
+            分享内容仅对已登录账号开放。登录或注册后会自动回到这个分享页面。
+          </Paragraph>
+          <Space>
+            <Button type="primary" onClick={() => navigate(`/login?redirect=/share/chat/${shareId}`)}>
+              去登录
+            </Button>
+            <Button onClick={() => navigate('/register')}>注册账号</Button>
+          </Space>
+        </Card>
       </div>
     );
   }
