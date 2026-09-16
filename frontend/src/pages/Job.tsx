@@ -8,6 +8,7 @@ import {
   SendOutlined, PlusOutlined, UnorderedListOutlined,
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   analyzeJob,
   fetchJobs,
@@ -1491,7 +1492,7 @@ const Job: React.FC = () => {
                 </Space>
               )
             ) : (
-              <ReactMarkdown>{reportDetail.markdown}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{reportDetail.markdown}</ReactMarkdown>
             )}
           </div>
         ) : null}
