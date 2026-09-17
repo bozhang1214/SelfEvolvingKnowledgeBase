@@ -63,9 +63,9 @@ TIERS: dict[str, str] = {
     "news_report": "quality",
 }
 MODELS = {
-    "short": "qwen3.5:2b-mlx",
-    "default": "qwen3.5:4b-mlx",
-    "quality": "qwen3.5:9b-mlx",
+    "short": "qwen3.5-2b",
+    "default": "qwen3.5-4b",
+    "quality": "qwen3.5-9b",
 }
 
 HEADER = """# ⚠️ 本文件由 scripts/make_local_profile.py 从 config.yaml 生成，请勿手工编辑。

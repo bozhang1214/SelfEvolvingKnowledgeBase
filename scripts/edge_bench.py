@@ -109,9 +109,14 @@ def _with_nonce(task: dict[str, Any], nonce: str) -> dict[str, Any]:
     return {**task, "system": f"[run:{nonce}] {task['system']}"}
 
 
-def bench_ollama(model: str, task: dict[str, Any]) -> dict[str, Any]:
-    """本地：原生 /api/chat，拿精确的 prefill / decode 计时。"""
-    body = {
+def bench_ollama(model: str, task: dict[str, Any], think: bool = False) -> dict[str, Any]:
+    """本地：原生 /api/chat，拿精确的 prefill / decode 计时。
+
+    `think=False` 是**默认**，因为实测差距极大：qwen3.5-2b 对同一个意图分类任务，
+    开思考 = 190 token / 1926ms，关思考 = **6 token / 96ms**（答案完全相同，20 倍延迟差）。
+    端侧的短任务（分类/路由/改写）必须关思考——否则白烧 10–30 倍算力。需要长推理时用 --think。
+    """
+    body: dict[str, Any] = {
         "model": model,
         "messages": [
             {"role": "system", "content": task["system"]},
@@ -119,6 +124,7 @@ def bench_ollama(model: str, task: dict[str, Any]) -> dict[str, Any]:
         ],
         "stream": False,
         "options": {"temperature": 0, "num_predict": task["max_tokens"]},
+        "think": bool(think),
     }
     t0 = time.perf_counter()
     r = httpx.post(f"{OLLAMA}/api/chat", json=body, timeout=600)
@@ -214,6 +220,8 @@ def main() -> int:
     ap.add_argument("--local", nargs="*", default=[], help="本地 Ollama 模型（可多个）")
     ap.add_argument("--cloud", nargs="*", default=[], help="云端模型（OpenAI 兼容）")
     ap.add_argument("--only", default="", help="只跑某个任务（intent/short_qa/structured/long_context）")
+    ap.add_argument("--think", action="store_true",
+                    help="本地开启思考模式（默认关；短任务开思考会让延迟涨 10-20 倍）")
     ap.add_argument("--no-nonce", action="store_true",
                     help="不加一次性 nonce（会命中 Ollama 前缀缓存，prefill 数字偏高）")
     args = ap.parse_args()
@@ -225,7 +233,7 @@ def main() -> int:
     for model in args.local:
         for task in tasks:
             try:
-                res = bench_ollama(model, _with_nonce(task, nonce))
+                res = bench_ollama(model, _with_nonce(task, nonce), think=args.think)
             except Exception as e:  # noqa: BLE001
                 res = {"ok": False, "err": f"{type(e).__name__}: {str(e)[:80]}"}
             rows.append(("本地 Ollama", model, {"task": task["name"], **res}))
