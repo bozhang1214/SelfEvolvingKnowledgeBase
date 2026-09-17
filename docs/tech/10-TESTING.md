@@ -21,13 +21,13 @@ related: [00-README, 07-DESIGN-PATTERNS, 11-EVOLUTION]
 
 | 层 | 数量 | 技术栈 | 说明 |
 |----|------|--------|------|
-| 后端单元 | 894 用例（57 文件）<!-- fact:backend_unit_cases=894 --> | pytest + pytest-asyncio + respx | 覆盖 config/graph/agent/storage/memory/news/job/state/plane_router 等 |
+| 后端单元 | 932 用例（58 文件）<!-- fact:backend_unit_cases=932 --> | pytest + pytest-asyncio + respx | 覆盖 config/graph/agent/storage/memory/news/job/state/plane_router 等 |
 | 后端集成 | 16 | pytest | storage+memory 集成、eval pipeline |
 | 后端 API 路由级 | 7（**已含在上面的 894 内**，此处单列只为标注技术栈） | FastAPI TestClient | test_api_client.py（知识列表/搜索/401/403） |
 | 前端单元 | 68<!-- fact:frontend_unit_cases=68 --> | vitest + @testing-library/react | frontend/tests/ 下 api/auth-service/chat-store/file/home/logger/news/series-tree/user-store |
 | Eval | golden_qa.json | app.eval | 黄金问答评估 |
 
-**全量口径**：`pytest tests/` = **910**（894 单元 + 16 集成；API 路由级 7 条在单元目录内，
+**全量口径**：`pytest tests/` = **948**（932 单元 + 16 集成；API 路由级 7 条在单元目录内，
 不重复计数）。加用例时请一并更新上面的活数字 `backend_unit_cases`。
 
 **运行方式**：
@@ -89,7 +89,7 @@ related: [00-README, 07-DESIGN-PATTERNS, 11-EVOLUTION]
 | 流式/SSE | 无端到端 SSE 测试（仅有 mock streamChat） | 加 SSE 帧级测试 |
 | eval | 非阻断、需真实 key | 固定 CI key 后转阻断；扩充 golden |
 | E2E | 无浏览器级 E2E | 可选 Playwright（成本高，暂缓） |
-| mypy | **300 存量债（基线 310）**（2026-09-16 实测 `scripts/mypy_gate.sh`）<!-- fact:mypy_debt=300 --> | 逐文件清零，下调基线 |
+| mypy | **308 存量债（基线 310）**（2026-09-17 实测 `scripts/mypy_gate.sh`）<!-- fact:mypy_debt=308 --> | 逐文件清零，下调基线 |
 | 前端 any | 114 warning | 逐步收窄 no-explicit-any |
 | 数据层 | ChromaDB/存储层并发无测试 | 补原子性/隔离测试 |
 
