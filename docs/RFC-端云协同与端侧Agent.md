@@ -695,6 +695,9 @@ M1 的机制（路由决策 / 升级 / 交接 / 版本戳 / 路由日志）**两
 | 平面路由 + 升级 + 交接 | `backend/app/core/plane_router.py` | `PlaneRouter.decide/evaluate/should_escalate/versions` + `RoutedLLM` 门面 |
 | 平面端点配置 | `backend/app/core/config.py` 的 `PlaneEndpointConfig`/`RoutingConfig`/`PlanesConfig` | `llm.planes.edge` + `llm.planes.routing`；不配 = 单平面（行为与改造前完全一致） |
 | 按平面取实例 | `backend/app/core/llm_factory.py` | 支持 `get(role, plane)` 与 `ainvoke_with_stats(..., plane=...)`；记账按平面分开，避免两平面互相覆盖 |
+| **主链路接入** | `LLMFactory.attach_router()` | **一处挂载、全链路生效**：agents/graph/tools/memory 那十余处 `ainvoke_with_stats(role, msgs)` 调用点**零改动**即具备端云路由与自动升级（挂载点在 `bootstrap.py` 第 4.5 步） |
+| **端侧预热** | `LLMFactory.warmup_edge()` | 走 Ollama `/api/generate` 空调起 + `keep_alive=30m`，消除 ~6.5s 冷启动；失败不阻塞启动 |
+| **端侧关思考** | `PlaneEndpointConfig.disable_thinking`（默认 true） | 注入 `reasoning_effort="none"`：同一意图分类 **2283ms/236token → 89ms/7token（25 倍）**。注意 `think=false` 会被 OpenAPI 客户端拒掉，必须用这个字段 |
 | 路由事件流水 | `backend/app/storage/edge_route_storage.py` | append-only JSONL + 幂等键 + 行数裁剪（原子替换）；产出**两个北极星指标** |
 | 可观测接口 | `backend/app/api/routes/edge.py` | `GET /api/v1/edge/routes/stats`、`GET /routes`、`POST /route-events`（供 M2 的 Android 上报） |
 | 端云协同配置档 | `scripts/make_local_profile.py` → `backend/config.edge-cloud.yaml` | 与「全本地档」并列，都是**生成物**（`--check` 进 CI，防漂移） |
@@ -711,7 +714,21 @@ M1 的机制（路由决策 / 升级 / 交接 / 版本戳 / 路由日志）**两
    单元测试用假工厂盖不到，**端到端冒烟一跑就现形**。修正：`_edge_model_for()`
    （角色 → 档位 → `planes.edge.models`），并补了两条接线回归测试。
 
-> 这两条正好说明为什么「单元测试 + 真实端点冒烟」两层都要有：前者验逻辑，后者验接线。
+3. **M0 的「关思考」经验没接进 SEKB 路径**：主链路首次跑出来 1898ms，而基准是 222ms——
+   一查是端侧平面没关思考（236 token 全花在推理上）。修正后 **128ms**。
+   **教训**：bench 脚本里验证过的优化，不等于产品路径上生效；必须两端都验。
+4. **`_create_llm(plane="edge")` 能绕过档位映射**（直接调用又变回"把云端模型名发给 Ollama"）：
+   把解析下沉进 `_create_llm`，让"绕过"在结构上不可能发生。
+
+> 这几条正好说明为什么「单元测试 + 真实端点冒烟」两层都要有：前者验逻辑，后者验接线；
+> 而"bench 里验证过"与"产品路径生效"是**两件事**，必须分别验。
+
+### 15.3.1 顺带核实的代码事实
+
+`_create_llm` 里原本写着「优先 langchain-deepseek，失败回退 langchain-openai」，但
+`from langchain_deepseek import ChatDeepseek` 的**类名拼错**（实际是 `ChatDeepSeek`），
+该分支从未生效过——生产一直跑的是 `ChatOpenAI`（行为正确，因为 DeepSeek/Ollama 都是
+OpenAI 兼容端点）。已删掉这个假分支与误导性注释，改为显式使用 `ChatOpenAI`。
 
 ### 15.4 M1 冒烟结果（真实双平面）
 
@@ -721,15 +738,21 @@ role=planner     平面=cloud  原因=output_over_edge_budget(600>300)   模型=
 路由统计：端侧决策=1 端侧完成=1 升级=0 → 端侧完成率 100% / 升级率 0%
 版本戳：embedding_space=bge-small-zh-v1.5@512 / edge_model / cloud_model / tier / tool_schema
 交接摘要：<handoff from="edge" reason="...">…（以上是已建立背景，请直接续接，不要重复已完成的工作）
+
+主链路（factory.attach_router 后，用**普通** ainvoke_with_stats 调用，不带 plane 参数）：
+   路由已挂载: True      预热 qwen3.5-2b: 13ms
+   调用结果: 平面=edge  模型=qwen3.5-2b  延迟=128ms（未关思考时 1898ms；冷启动 6547ms）
 ```
 
 ### 15.5 M1 待补
 
-- [ ] 把 `RoutedLLM` 接进 chat 主链路（当前是独立门面，聊天仍走单平面）
-- [ ] 流式路径的路由与升级（`astream_with_stats` + SSE 的「已输出多少字符」续写）
+- [x] ~~把 `RoutedLLM` 接进 chat 主链路~~ → 已通过 `attach_router()` 在工厂层挂载（零调用点改动）
+- [x] ~~端侧预热~~ → `warmup_edge()` 已实现并在 bootstrap 调用（实测 13ms 完成预热）
+- [x] ~~路由日志纳入数据卷~~ → bootstrap 用 `config.storage.data_dir/edge/routes.jsonl`
+- [ ] 流式路径的**升级**（当前只做决策不做升级：token 已吐给用户收不回，
+      需要 SSE 的「已输出多少字符」续写协议，见 §4.5-C）
 - [ ] 交接摘要的**自动生成**（当前 `handoff_note()` 只负责包装，摘要内容需由回合上下文生成）
-- [ ] 端侧**预热**（消除 ~6.5s 冷启动，见 §2.4）
-- [ ] 路由日志纳入数据卷与备份
+- [ ] 路由日志的**备份**纳入 `scripts/backup_kb.sh`
 
 ---
 

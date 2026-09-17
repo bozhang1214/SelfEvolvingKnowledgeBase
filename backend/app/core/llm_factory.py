@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from tenacity import (
@@ -46,6 +47,12 @@ from app.core.metrics import record_llm_call
 from app.core.tracing import get_trace_config
 
 logger = get_logger(__name__)
+
+#: 流式路径只记决策、不产生完整事件，这里用 RouteEvent 的轻量替身
+try:
+    from app.core.plane_router import RouteEvent as RouterEventLite
+except Exception:  # noqa: BLE001
+    RouterEventLite = None  # type: ignore[assignment,misc]
 
 
 # ============================================================
@@ -150,6 +157,64 @@ class LLMFactory:
         self._degraded_roles: set[str] = set()
         self.stats = LLMCallStats()
         self._lock = asyncio.Lock()
+        # 端云平面路由（未挂载时全是 None → 行为与引入端云协同之前一致）
+        self._routed: Any = None
+        #: 最近一次路由事件（按角色）。上层要展示"这次走端还是走云、为什么"时读它。
+        self.last_route_event: dict[str, Any] = {}
+
+    def attach_router(self, store: Any = None) -> bool:
+        """挂载端云平面路由（**一处挂载，全链路生效**）。
+
+        为什么挂在工厂上：项目里所有 LLM 调用都走
+        :meth:`ainvoke_with_stats` / :meth:`astream_with_stats`
+        （agents / graph / tools / memory 共十余处），挂在工厂意味着
+        **零调用点改动**即可让主链路具备端云路由与自动升级。
+
+        Returns:
+            是否真的启用了路由（未配置 ``llm.planes`` 时返回 False）。
+        """
+        from app.core.plane_router import PlaneRouter, RoutedLLM
+
+        router = PlaneRouter(self.config)
+        if not router.enabled:
+            self._routed = None
+            return False
+        self._routed = RoutedLLM(self, self.config, store=store)
+        logger.info("端云平面路由已挂载", edge_base_url=router.edge.base_url,
+                    prefer=getattr(router._routing, "prefer", "edge"))
+        return True
+
+    @property
+    def routing_enabled(self) -> bool:
+        """主链路是否处于端云路由模式。"""
+        return self._routed is not None
+
+    async def warmup_edge(self, tiers: tuple[str, ...] = ("short", "default")) -> list[str]:
+        """预热端侧模型：把它们加载进内存并保持，消除首次调用的冷启动。
+
+        为什么必须做：实测 2B 首次调用要 **~6.5s**（加载权重），之后同模型 0.2–0.7s。
+        不预热的话「端侧赢延迟」在第一次调用上完全不成立（见 RFC §2.4）。
+
+        实现走 Ollama 原生 ``/api/generate`` 的空调起 + ``keep_alive``：
+        比发一次真请求更省（不产生 token），且能指定保持时长。
+        """
+        if self._routed is None:
+            return []
+        edge = self._routed.router.edge
+        warmed: list[str] = []
+        for tier in tiers:
+            model = (edge.models or {}).get(tier)
+            if not model:
+                continue
+            try:
+                async with httpx.AsyncClient(timeout=120) as client:
+                    await client.post(f"{edge.base_url.rstrip('/')}/../api/generate",
+                                      json={"model": model, "prompt": "", "keep_alive": "30m"})
+                warmed.append(model)
+                logger.info("端侧模型已预热", model=model, tier=tier)
+            except Exception as e:  # noqa: BLE001 - 预热失败不该阻塞启动
+                logger.warning("端侧模型预热失败（忽略）", model=model, error=str(e)[:120])
+        return warmed
 
     def get(self, role: str, plane: str | None = None) -> BaseChatModel:
         """
@@ -250,6 +315,8 @@ class LLMFactory:
         role: str,
         messages: list[Any],
         plane: str | None = None,
+        device_data: bool = False,
+        expected_output_tokens: int | None = None,
         **kwargs: Any,
     ) -> Any:
         """
@@ -269,6 +336,15 @@ class LLMFactory:
         Raises:
             LLMError: 调用失败（含重试后仍失败）
         """
+        if plane is None and self._routed is not None:
+            # 自动路由：决策 → 调用 → 评估 → 需要时在同一请求内升级到云端。
+            # RoutedLLM 回调本方法时会显式带 plane，所以不会递归。
+            resp, event = await self._routed.ainvoke(
+                role, messages, device_data=device_data,
+                max_output_tokens=expected_output_tokens, **kwargs)
+            self.last_route_event[role] = event
+            return resp
+
         llm = self.get(role, plane)
         role_config = self._get_role_config(role)
         configured_model = role_config.model if role_config else "unknown"
@@ -384,6 +460,9 @@ class LLMFactory:
         self,
         role: str,
         messages: list[Any],
+        plane: str | None = None,
+        device_data: bool = False,
+        expected_output_tokens: int | None = None,
         **kwargs: Any,
     ):
         """
@@ -393,9 +472,22 @@ class LLMFactory:
         不做 tenacity 重试（流式重试需重放整个流，成本高且易错），
         调用方（Executor）在失败时自行兜底。
         """
-        llm = self.get(role)
-        actual_model = self.get_actual_model(role)
-        is_degraded = self.is_degraded(role)
+        # 流式路径只做**决策**不做升级：token 一旦吐给用户就收不回，
+        # 升级需要"已输出多少字符"的续写协议（RFC §4.5-C，属 M1 后续项）。
+        stream_plane: str | None = plane
+        if plane is None and self._routed is not None:
+            decision = self._routed.router.decide(
+                role, messages, max_output_tokens=expected_output_tokens,
+                device_data=device_data)
+            stream_plane = decision.plane
+            self.last_route_event[role] = RouterEventLite(
+                role=role, plane=decision.plane, reason=decision.reason + "|stream_no_escalate",
+                tier=decision.tier, input_tokens=decision.input_tokens,
+                versions=self._routed.router.versions(role))
+
+        llm = self.get(role, stream_plane)
+        actual_model = self.get_actual_model(role, stream_plane)
+        is_degraded = self.is_degraded(role, stream_plane)
         start_time = time.time()
         chunks: list[str] = []
         try:
@@ -519,6 +611,13 @@ class LLMFactory:
 
         return models.get(derive_tier(role, role_config.max_tokens, models))
 
+    def _role_of(self, role_config: LLMRoleConfig) -> str:
+        """由角色配置对象反查角色名（供 role-keyed 的端侧模型映射使用）。"""
+        for name, cfg in self.config.llm.roles.items():
+            if cfg is role_config:
+                return name
+        return ""
+
     def _plane_endpoint(self, plane: str | None) -> tuple[str, str, str | None]:
         """解析平面端点：返回 ``(api_key, base_url)``。
 
@@ -541,15 +640,26 @@ class LLMFactory:
         plane: str | None = None,
         model_override: str | None = None,
     ) -> BaseChatModel:
-        """根据配置创建 LLM 实例（可按平面覆盖端点与模型）。"""
-        # 优先使用 langchain-deepseek
-        try:
-            from langchain_deepseek import ChatDeepseek
-        except ImportError:
-            # 降级到 langchain-openai（DeepSeek 兼容 OpenAI 接口）
-            from langchain_openai import ChatOpenAI as ChatDeepseek
+        """根据配置创建 LLM 实例（可按平面覆盖端点与模型）。
+
+        客户端统一用 ``langchain_openai.ChatOpenAI``：DeepSeek、Ollama 都是
+        **OpenAI 兼容**端点，一套客户端即可覆盖云端与端侧两个平面。
+
+        历史说明（2026-09-17 核实）：这里原来写成「优先 langchain-deepseek，
+        导入失败则回退 langchain-openai」，但 `from langchain_deepseek import ChatDeepseek`
+        **类名拼错**（实际是 `ChatDeepSeek`），所以那个 try 分支从来没生效过、
+        一直在走回退分支。也就是说生产一直跑的是 ChatOpenAI —— 行为本身没问题，
+        但"优先 deepseek"的说法是假的，故删掉该分支，不再制造误导。
+        """
+        from langchain_openai import ChatOpenAI as ChatDeepseek
 
         api_key, base_url = self._plane_endpoint(plane)
+        # 端侧平面：即使调用方没给 model_override，也要按档位解析本地模型。
+        # 否则直接调 `_create_llm(..., plane="edge")` 就会把**云端的模型名**发给 Ollama
+        # （实测报 `model ... not found`）。把解析下沉到这里，"绕过映射"变得不可能。
+        if plane == "edge" and model_override is None:
+            role_name = self._role_of(role_config)
+            model_override = self._edge_model_for(role_name, role_config)
         kwargs: dict[str, Any] = {
             "model": model_override or role_config.model,
             "api_key": api_key,
@@ -563,6 +673,15 @@ class LLMFactory:
         # DeepSeek 支持 response_format=json
         if role_config.response_format == "json":
             kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
+
+        # 端侧默认关思考（实测 25 倍延迟差，见 PlaneEndpointConfig.disable_thinking）。
+        # 走顶层 `reasoning_effort` 而不是 `think`：后者会被 OpenAI 客户端判为非法参数，
+        # 而 Ollama 的 OpenAI 兼容层会把 reasoning_effort="none" 映射成关闭 think。
+        if plane == "edge":
+            planes = getattr(self.config.llm, "planes", None)
+            edge = getattr(planes, "edge", None) if planes else None
+            if edge is not None and getattr(edge, "disable_thinking", True):
+                kwargs["reasoning_effort"] = "none"
 
         return ChatDeepseek(**kwargs)
 

@@ -185,6 +185,21 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
     # 4. 创建 LLM 工厂
     llm_factory = LLMFactory(config)
 
+    # 4.5 挂载端云平面路由（仅当配置了 llm.planes；否则本段是空操作）
+    #     挂在工厂上 = 零调用点改动让 agents/graph/tools/memory 全部具备端云路由与自动升级。
+    try:
+        from app.storage.edge_route_storage import EdgeRouteStore
+
+        data_dir = config.storage.data_dir or str(Path(config_path).parent / "data")
+        route_store = EdgeRouteStore(Path(data_dir) / "edge" / "routes.jsonl")
+        if llm_factory.attach_router(store=route_store):
+            # 预热端侧档位模型：消除 ~6.5s 冷启动（RFC §2.4），失败不影响启动
+            warmed = await llm_factory.warmup_edge()
+            logger.info("端云协同就绪", edge_models=warmed or "未预热",
+                        route_log=str(route_store.path))
+    except Exception as e:  # noqa: BLE001 - 端云协同装配失败不应阻断主链路
+        logger.warning("端云平面路由装配失败（继续单平面运行）", error=str(e)[:160])
+
     # 5. 创建 JSON 存储
     storage = JSONStorage(
         index_file=config.storage.index_file,

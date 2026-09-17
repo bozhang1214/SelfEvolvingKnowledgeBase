@@ -87,6 +87,7 @@ DUAL_BLOCK = """
       max_output_tokens: 300      # 超过就不该端侧硬扛（2B 生成 500 token ≈ 4.3s）
       max_input_tokens: 2048      # 长输入虽不崩，但 TTFT 会抬高
       max_ttft_ms: 800
+      disable_thinking: true      # 实测关思考快 25 倍（2283ms→89ms），端侧默认关
     routing:
       enabled: true
       prefer: edge

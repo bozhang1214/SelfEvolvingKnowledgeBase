@@ -172,6 +172,55 @@ class TestEdgeModelWiring:
         f.get("supervisor", "cloud")
         assert f.get_actual_model("supervisor", "cloud") == "deepseek-flash"
 
+    def _capture_create_kwargs(self, monkeypatch, cfg) -> dict:
+        """捕获 `_create_llm` 传给客户端的 kwargs。
+
+        `ChatOpenAI` 是在 `_create_llm` 内部按需导入的，所以要打桩**源模块**
+        （`langchain_openai.ChatOpenAI`），而不是某个模块级名字。
+        """
+        captured: dict = {}
+
+        class _Spy:
+            def __init__(self, **kw):
+                captured.update(kw)
+
+        monkeypatch.setattr("langchain_openai.ChatOpenAI", _Spy)
+        return captured
+
+    def test_edge_plane_disables_thinking_by_default(self, monkeypatch):
+        """端侧平面默认关思考：走 `reasoning_effort="none"`。
+
+        实测同一意图分类任务：开思考 2283ms / 236 token，关思考 89ms / 7 token（**25 倍差**）。
+        直接传 `think=False` 会被 OpenAI 客户端判为非法参数，故必须用这个字段。
+        """
+        from app.core.llm_factory import LLMFactory
+
+        cfg = make_config()
+        captured = self._capture_create_kwargs(monkeypatch, cfg)
+        LLMFactory(cfg)._create_llm(cfg.llm.roles["supervisor"], plane="edge")
+        assert captured.get("reasoning_effort") == "none"
+        assert captured.get("model") == "qwen3.5-2b"
+
+    def test_edge_plane_keeps_thinking_when_flag_off(self, monkeypatch):
+        """显式关闭该优化 → 不注入 `reasoning_effort`（留给需要长推理的档位）。"""
+        from app.core.llm_factory import LLMFactory
+
+        cfg = make_config()
+        cfg.llm.planes.edge.disable_thinking = False
+        captured = self._capture_create_kwargs(monkeypatch, cfg)
+        LLMFactory(cfg)._create_llm(cfg.llm.roles["supervisor"], plane="edge")
+        assert "reasoning_effort" not in captured
+
+    def test_cloud_plane_never_gets_edge_thinking_flag(self, monkeypatch):
+        """云端平面不受端侧"关思考"影响（云端自己的模型行为由云端决定）。"""
+        from app.core.llm_factory import LLMFactory
+
+        cfg = make_config()
+        captured = self._capture_create_kwargs(monkeypatch, cfg)
+        LLMFactory(cfg)._create_llm(cfg.llm.roles["supervisor"], plane="cloud")
+        assert "reasoning_effort" not in captured
+        assert captured.get("base_url") == "https://api.deepseek.com/v1"
+
     def test_edge_plane_requires_endpoint(self):
         """没配端侧端点却要端侧实例 → 明确报错，而不是悄悄走云端。"""
         from app.core.exceptions import LLMError
@@ -410,6 +459,110 @@ class TestRoutedLLM:
         assert "<handoff" in note and 'reason="timeout"' in note
         assert "不要重复" in note                     # 明确"是背景不是新任务"
         assert "市场分析" in note
+
+
+# ============================================================
+# 主链路接入：工厂挂载路由后，**既有调用点不改一行**就自动路由
+# ============================================================
+
+class _FakeChatModel:
+    """假的 LangChain 模型：只实现 ainvoke / astream，不出网。"""
+
+    def __init__(self, text: str = '{"intent":"news"}'):
+        self.text = text
+        self.calls = 0
+
+    async def ainvoke(self, messages, **kw):
+        self.calls += 1
+        return _FakeResp(self.text)
+
+    async def astream(self, messages, **kw):
+        self.calls += 1
+        for piece in ("端侧", "回答"):
+            yield _FakeResp(piece)
+
+
+class TestMainPathRouting:
+    """目标：证明「挂载即生效」——agents/graph 里那十余处 `ainvoke_with_stats(role, msgs)`
+    调用**无需任何改动**就会经过端云路由（这正是 M1 的核心价值）。"""
+
+    def _factory(self, monkeypatch, text: str = '{"intent":"news"}'):
+        from app.core.llm_factory import LLMFactory
+
+        f = LLMFactory(make_config())
+        created: dict[str, _FakeChatModel] = {}
+
+        def fake_create(role_config, plane=None, model_override=None):
+            m = _FakeChatModel(text)
+            created[f"{role_config.model}@{plane}"] = m
+            return m
+
+        monkeypatch.setattr(f, "_create_llm", fake_create)
+        return f, created
+
+    @pytest.mark.asyncio
+    async def test_unmounted_factory_keeps_legacy_behaviour(self, monkeypatch):
+        """没挂路由 → 走主配置单平面，不产生路由事件（改造前后完全一致）。"""
+        f, _ = self._factory(monkeypatch)
+        assert f.routing_enabled is False
+        await f.ainvoke_with_stats("supervisor", ["分类"])
+        assert f.last_route_event == {}
+
+    @pytest.mark.asyncio
+    async def test_mounted_factory_routes_short_task_to_edge(self, monkeypatch, tmp_path):
+        """挂载后：同一个 `ainvoke_with_stats(role, msgs)` 调用 → 自动落端侧并记事件。"""
+        f, created = self._factory(monkeypatch)
+        assert f.attach_router(store=EdgeRouteStore(tmp_path / "r.jsonl")) is True
+        assert f.routing_enabled is True
+
+        await f.ainvoke_with_stats("supervisor", ["把这句话分类"])
+
+        ev = f.last_route_event["supervisor"]
+        assert ev.plane == PLANE_EDGE and ev.reason == "edge_preferred"
+        assert ev.model == "qwen3.5-2b"                     # 端侧档位模型已解析
+        assert "edge" in " ".join(created)                  # 确实在端侧平面建的实例
+
+    @pytest.mark.asyncio
+    async def test_mounted_factory_routes_long_output_to_cloud(self, monkeypatch, tmp_path):
+        f, created = self._factory(monkeypatch)
+        f.attach_router(store=EdgeRouteStore(tmp_path / "r.jsonl"))
+        await f.ainvoke_with_stats("news_report", ["写日报"])
+        ev = f.last_route_event["news_report"]
+        assert ev.plane == PLANE_CLOUD and ev.reason.startswith("output_over_edge_budget")
+
+    @pytest.mark.asyncio
+    async def test_main_path_escalates_and_records(self, monkeypatch, tmp_path):
+        """主链路里的端侧失败 → 自动升级到云，并在路由日志里留下升级原因。"""
+        store = EdgeRouteStore(tmp_path / "r.jsonl")
+        f, _ = self._factory(monkeypatch, text="我猜是 news 吧")   # 非法 JSON
+        f.attach_router(store=store)
+        await f.ainvoke_with_stats("supervisor", ["分类"])
+        ev = f.last_route_event["supervisor"]
+        assert ev.escalated is True and "json_invalid" in ev.escalate_reason
+        assert store.stats()["escalation_rate"] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_attach_router_is_noop_without_planes(self, monkeypatch):
+        """未配置 planes → attach 返回 False，主链路保持单平面（生产环境即如此）。"""
+        from app.core.llm_factory import LLMFactory
+
+        cfg = make_config()
+        cfg.llm.planes = None
+        f = LLMFactory(cfg)
+        assert f.attach_router() is False
+        assert await f.warmup_edge() == []                  # 未挂路由时预热是空操作
+
+    @pytest.mark.asyncio
+    async def test_stream_path_decides_but_does_not_escalate(self, monkeypatch, tmp_path):
+        """流式只做决策不做升级（token 已吐给用户，收不回），并在原因里标注。"""
+        store = EdgeRouteStore(tmp_path / "r.jsonl")
+        f, _ = self._factory(monkeypatch)
+        f.attach_router(store=store)
+        got = [c async for c in f.astream_with_stats("supervisor", ["流式问题"])]
+        assert got == ["端侧", "回答"]
+        ev = f.last_route_event["supervisor"]
+        assert ev.plane == PLANE_EDGE
+        assert "stream_no_escalate" in ev.reason
 
 
 def test_stats_json_serializable(tmp_path):

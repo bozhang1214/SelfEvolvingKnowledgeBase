@@ -71,6 +71,11 @@ class PlaneEndpointConfig(BaseModel):
     max_input_tokens: int = 2048
     #: 首 token 预算（毫秒）：超过视为"端侧过慢"，触发升级
     max_ttft_ms: int = 800
+    #: 端侧是否关闭「思考模式」。**默认关**——实测同一意图分类任务：
+    #: 开思考 2283ms / 236 token，关思考 89ms / 7 token（**25 倍差**，答案等价）。
+    #: 实现走 OpenAI 兼容的 `reasoning_effort="none"`（Ollama 会把 think 映射过来；
+    #: 直接用 `think: false` 会被 LangChain 拒掉，见 RFC §2.4）。
+    disable_thinking: bool = True
 
 
 class RoutingConfig(BaseModel):

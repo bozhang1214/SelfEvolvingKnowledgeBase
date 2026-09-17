@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.core.config import load_config
 from app.core.llm_factory import LLMFactory
-from app.core.plane_router import RoutedLLM
+from app.core.plane_router import PLANE_EDGE, RoutedLLM
 from app.storage.edge_route_storage import EdgeRouteStore
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -84,7 +84,33 @@ async def main() -> int:
                                "已确认用户关注端侧推理；已完成意图分类；未完成：调研拆解")
     print("   " + note.replace("\n", "\n   "))
 
-    ok = (s["edge_decided"] >= 1 and s["total"] == 2)
+    # ---- 主链路：挂载路由后，**既有调用点不改一行**就自动路由 ----
+    print("── 主链路（factory.attach_router 后，用普通 ainvoke_with_stats 调用）")
+    factory = LLMFactory(cfg)
+    store2 = EdgeRouteStore(Path(tempfile.mkdtemp()) / "routes2.jsonl")
+    attached = factory.attach_router(store=store2)
+    print(f"   路由已挂载: {attached}")
+
+    # 预热：消除端侧 ~6.5s 冷启动（RFC §2.4）
+    import time as _t
+
+    t0 = _t.perf_counter()
+    warmed = await factory.warmup_edge(("short",))
+    print(f"   预热 {warmed}: {(_t.perf_counter() - t0) * 1000:.0f}ms")
+
+    t1 = _t.perf_counter()
+    await factory.ainvoke_with_stats(
+        "supervisor",
+        [SystemMessage(content="你是意图分类器，只输出 JSON。"),
+         HumanMessage(content='把「端侧推理很省」分类为 [job_analysis, news, knowledge, chitchat]，'
+                              '只输出 {"intent":"..."}')])
+    ms = (_t.perf_counter() - t1) * 1000
+    ev_main = factory.last_route_event["supervisor"]
+    print(f"   主链路调用: 平面={ev_main.plane} 模型={ev_main.model} 延迟={ms:.0f}ms"
+          f"（对比未预热的冷启动 6547ms）")
+
+    ok = (s["edge_decided"] >= 1 and s["total"] == 2
+          and ev_main.plane == PLANE_EDGE and ms < 3000)
     print("\n✅ M1 冒烟通过：短任务落端侧、长输出落云端、事件与指标齐全" if ok
           else "\n❌ M1 冒烟未达预期，请检查上面的路由原因")
     return 0 if ok else 1
