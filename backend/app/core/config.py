@@ -48,6 +48,53 @@ class LLMFallbackConfig(BaseModel):
     chat_to_error: bool = True
 
 
+class PlaneEndpointConfig(BaseModel):
+    """一个「推理平面」的端点配置（端侧 / 云端）。
+
+    背景（M1，见 `docs/RFC-端云协同与端侧Agent.md` §4）：
+    端云协同需要"同一角色可以落在不同平面上"，而 `LLMConfig.base_url` 是**全局单点**。
+    所以平面端点单独建模，由 `app.core.plane_router` 在**每次请求**上选择用哪个平面。
+
+    阈值默认值取自 2026-09-17 在 M5 Pro 上的实测（`scripts/edge_bench.py`）：
+    端侧 qwen3.5-2b decode ≈ 86–116 tok/s、TTFT 76–427ms；云端 deepseek-flash
+    decode ≈ 158–218 tok/s、TTFT 845–1306ms。据此：端侧适合"短进短出"。
+    """
+
+    provider: str = "ollama"
+    api_key: str = "ollama"          # 本机端点不校验，但配置校验要求非空
+    base_url: str = ""
+    #: 档位 → 模型名（short/default/quality），与 scripts/make_local_profile.py 的档位一致
+    models: dict[str, str] = {}
+    #: 输出预算：超过就不该由端侧硬扛（实测 2B 生成 500 token 约 4.3s）
+    max_output_tokens: int = 300
+    #: 输入预算：端侧 prefill 虽快，但长输入仍抬高 TTFT（实测 923 token → 427ms）
+    max_input_tokens: int = 2048
+    #: 首 token 预算（毫秒）：超过视为"端侧过慢"，触发升级
+    max_ttft_ms: int = 800
+
+
+class RoutingConfig(BaseModel):
+    """端云路由策略（`plane_router` 读取）"""
+
+    enabled: bool = False
+    prefer: str = "edge"             # edge | cloud
+    #: 触发升级到云端的信号（对应 §4.2 的 6 类；此处只列可自动判定的）
+    escalate_on: list[str] = ["json_invalid", "empty", "degenerate", "timeout"]
+    #: 哪些角色**永不出端**（数据分级 DEVICE_ONLY；见 §5.2）
+    device_only_roles: list[str] = []
+    #: 按角色覆盖"预期输出规模"（token）。留空则用 plane_router 的内置默认表。
+    #: ⚠️ 不要用 `LLMRoleConfig.max_tokens` 代替它：那是**允许上限**（supervisor 允许 500，
+    #: 实际常输出 6–60），拿上限当预估会把几乎所有请求都判去云端。
+    expected_output: dict[str, int] = {}
+
+
+class PlanesConfig(BaseModel):
+    """端云双平面 + 路由策略（缺省则不启用，行为与改造前一致）"""
+
+    edge: PlaneEndpointConfig | None = None
+    routing: RoutingConfig = RoutingConfig()
+
+
 class LLMConfig(BaseModel):
     """LLM 模型路由总配置"""
     provider: str = "deepseek"
@@ -58,6 +105,8 @@ class LLMConfig(BaseModel):
     retry_backoff_seconds: list[int] = [1, 2]
     roles: dict[str, LLMRoleConfig]
     fallback: LLMFallbackConfig = LLMFallbackConfig()
+    #: 可选：端云双平面（不配 = 单平面，等价于改造前）
+    planes: PlanesConfig | None = None
 
     @field_validator("api_key")
     @classmethod

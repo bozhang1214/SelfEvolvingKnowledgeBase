@@ -138,6 +138,7 @@ KV 每 token 字节 ≈ 2(K+V) × 层数 × KV头数 × head_dim × 精度字节
 | 工具调用 | **grammar/JSON schema 约束** + 严格 function-calling 模板 | 小模型自由生成必翻车；这是端侧工具调用能否稳的关键 |
 | NPU | **不在 M0–M2 范围内**，M3 后作为优化项 | NPU 需要 QNN/Genie 等专用产物，投入产出比低、风险高 |
 | **思考模式（think）** | **短任务必须关**（Ollama `think: false`） | 实测同一意图分类任务：开思考 **190 token / 1926ms**，关思考 **6 token / 96ms**，答案完全相同——**20 倍延迟差**。端侧白烧 10–30 倍算力 |
+| **冷启动预热** | 首次调用某模型要**加载权重**（2B 实测 **~6.5s**），之后同模型 0.1–0.7s | 实测：同一 supervisor 任务，冷启动 6547ms vs 预热后 222ms。端侧宿主应在启动/空闲时预热当前档位模型，否则「端侧赢延迟」在第一次调用上完全不成立 |
 
 **模型档位（可下载）**：
 
@@ -670,8 +671,65 @@ qwen3.5 尚在下载，先用已就绪的 `qwen2.5:7b` 验证**通路**（`SEKB_
 - [x] SEKB → 本地 Ollama 通路验证（**用真实本地档、不改模型名**）：`supervisor` 角色
       返回合法 JSON、记账正常、cost=$0
 - [x] 实测数字回填 §4.1 路由阈值
-- [ ] SEKB 全链路（HTTP/SSE 端到端）延迟 —— 属 M1 范围
+- [x] SEKB 端侧通路（真实本地档、真实 LLMFactory）—— M0 完成
+- [ ] SEKB 全链路（HTTP/SSE 端到端）延迟 —— 属 M1（见 §15.5）
 - [ ] `news_report`（9B 档）实际生成质量抽查 —— 需要长输出，属 M1
+
+---
+
+## 15. M1 实施记录（2026-09-17，进行中）
+
+目标：把 §4.5 的一致性机制落成**可运行、可观测**的代码。
+
+### 15.1 落点选择：为什么做在 SEKB 内，而独立 repo 推迟到 M2
+
+M1 的机制（路由决策 / 升级 / 交接 / 版本戳 / 路由日志）**两端都要理解**：升级载荷由服务端接收、
+交接摘要要进服务端 prompt、版本戳必须两边一致。所以 M1 的代码落在 SEKB 内最自然；
+**独立 repo（D2）在 M2 开始写 Android 宿主时创建**——那时才有真正的客户端代码。
+（D2 结论不变，只是起点从 M1 挪到 M2。）
+
+### 15.2 已交付
+
+| 组件 | 位置 | 说明 |
+|---|---|---|
+| 平面路由 + 升级 + 交接 | `backend/app/core/plane_router.py` | `PlaneRouter.decide/evaluate/should_escalate/versions` + `RoutedLLM` 门面 |
+| 平面端点配置 | `backend/app/core/config.py` 的 `PlaneEndpointConfig`/`RoutingConfig`/`PlanesConfig` | `llm.planes.edge` + `llm.planes.routing`；不配 = 单平面（行为与改造前完全一致） |
+| 按平面取实例 | `backend/app/core/llm_factory.py` | 支持 `get(role, plane)` 与 `ainvoke_with_stats(..., plane=...)`；记账按平面分开，避免两平面互相覆盖 |
+| 路由事件流水 | `backend/app/storage/edge_route_storage.py` | append-only JSONL + 幂等键 + 行数裁剪（原子替换）；产出**两个北极星指标** |
+| 可观测接口 | `backend/app/api/routes/edge.py` | `GET /api/v1/edge/routes/stats`、`GET /routes`、`POST /route-events`（供 M2 的 Android 上报） |
+| 端云协同配置档 | `scripts/make_local_profile.py` → `backend/config.edge-cloud.yaml` | 与「全本地档」并列，都是**生成物**（`--check` 进 CI，防漂移） |
+| 端到端冒烟 | `scripts/edge_m1_smoke.py` | 真跑 Ollama + DeepSeek，验证「短任务落端侧、长输出落云端、指标齐全」 |
+| 测试 | `backend/tests/unit/test_plane_router.py` | 39 条：决策矩阵 / 4 类升级信号 / 指标口径 / API / 门面升级路径 / 接线回归 |
+
+### 15.3 首轮跑出来的两个真问题（都被测试/冒烟当场抓住）
+
+1. **用「允许上限」当「预期输出」判预算 → 把最该端侧的任务赶去云端。**
+   `supervisor.max_tokens = 500 > 端侧预算 300`，于是意图分类被判云端。
+   修正：引入 `DEFAULT_EXPECTED_OUTPUT`（supervisor 32 / planner 600 / news_report 6000…）
+   + 支持 `routing.expected_output` 按角色覆盖 + 调用方显式传 `max_output_tokens`。
+2. **端侧平面没接「档位→本地模型」映射**，把 `deepseek-flash` 发给了 Ollama → `model not found`。
+   单元测试用假工厂盖不到，**端到端冒烟一跑就现形**。修正：`_edge_model_for()`
+   （角色 → 档位 → `planes.edge.models`），并补了两条接线回归测试。
+
+> 这两条正好说明为什么「单元测试 + 真实端点冒烟」两层都要有：前者验逻辑，后者验接线。
+
+### 15.4 M1 冒烟结果（真实双平面）
+
+```
+role=supervisor  平面=edge   原因=edge_preferred                     模型=qwen3.5-2b  返回 {"intent":"news"}
+role=planner     平面=cloud  原因=output_over_edge_budget(600>300)   模型=deepseek-flash
+路由统计：端侧决策=1 端侧完成=1 升级=0 → 端侧完成率 100% / 升级率 0%
+版本戳：embedding_space=bge-small-zh-v1.5@512 / edge_model / cloud_model / tier / tool_schema
+交接摘要：<handoff from="edge" reason="...">…（以上是已建立背景，请直接续接，不要重复已完成的工作）
+```
+
+### 15.5 M1 待补
+
+- [ ] 把 `RoutedLLM` 接进 chat 主链路（当前是独立门面，聊天仍走单平面）
+- [ ] 流式路径的路由与升级（`astream_with_stats` + SSE 的「已输出多少字符」续写）
+- [ ] 交接摘要的**自动生成**（当前 `handoff_note()` 只负责包装，摘要内容需由回合上下文生成）
+- [ ] 端侧**预热**（消除 ~6.5s 冷启动，见 §2.4）
+- [ ] 路由日志纳入数据卷与备份
 
 ---
 

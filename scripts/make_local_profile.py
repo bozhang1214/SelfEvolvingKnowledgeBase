@@ -41,6 +41,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC = ROOT / "backend" / "config.yaml"
 DST = ROOT / "backend" / "config.local.yaml"
+#: 双平面（端云协同）档：主端点=云端，llm.planes.edge=本机 Ollama，路由开启
+DST_DUAL = ROOT / "backend" / "config.edge-cloud.yaml"
 
 LOCAL_BASE_URL = "http://127.0.0.1:11434/v1"
 LOCAL_API_KEY = "ollama"
@@ -67,6 +69,38 @@ MODELS = {
     "default": "qwen3.5-4b",
     "quality": "qwen3.5-9b",
 }
+
+DUAL_BLOCK = """
+  # ---- 端云双平面（M1）：主端点=云端，edge=本机 Ollama；由 plane_router 逐请求决策 ----
+  # 阈值默认值取自 2026-09-17 M5 Pro 实测（scripts/edge_bench.py）：
+  #   qwen3.5-2b decode 86–116 tok/s、923 tok 输入 TTFT 427ms；
+  #   deepseek-flash decode 158–218 tok/s、TTFT 845–1306ms  → 端侧吃"短进短出"。
+  planes:
+    edge:
+      provider: ollama
+      api_key: ollama
+      base_url: http://127.0.0.1:11434/v1
+      models:
+        short: qwen3.5-2b
+        default: qwen3.5-4b
+        quality: qwen3.5-9b
+      max_output_tokens: 300      # 超过就不该端侧硬扛（2B 生成 500 token ≈ 4.3s）
+      max_input_tokens: 2048      # 长输入虽不崩，但 TTFT 会抬高
+      max_ttft_ms: 800
+    routing:
+      enabled: true
+      prefer: edge
+      escalate_on: [json_invalid, empty, degenerate, timeout]
+      device_only_roles: []       # 数据分级 DEVICE_ONLY 的角色（永不出端），按需填
+"""
+
+HEADER_DUAL = """# ⚠️ 本文件由 scripts/make_local_profile.py 从 config.yaml 生成，请勿手工编辑。
+# 「端云协同」档：主端点=云端 DeepSeek，端侧平面=本机 Ollama，逐请求路由。
+# 需要：本机 ollama 已 pull/导入 qwen3.5-2b/4b/9b（见 scripts/edge_m0_setup.sh）
+#      且 .env 里有 DEEPSEEK_API_KEY（本档在线使用；纯离线请用 config.local.yaml）。
+# 启动：SEKB_CONFIG_PATH=config.edge-cloud.yaml <启动命令>
+#
+"""
 
 HEADER = """# ⚠️ 本文件由 scripts/make_local_profile.py 从 config.yaml 生成，请勿手工编辑。
 # 「全本地」档：LLM 全部走本机 Ollama（离线可用），需要先 pull 好对应模型。
@@ -118,6 +152,17 @@ def derive(text: str) -> str:
     return HEADER + text[:start] + head + roles + text[end:]
 
 
+def derive_dual(text: str) -> str:
+    """在**主配置**（云端）基础上插入 `llm.planes`，得到端云协同档。
+
+    与 `derive()` 的区别：那个是"全本地"（把所有角色换成本地模型），
+    这个是"双平面"（云端仍旧是云端，另加一个端侧平面 + 路由）。
+    """
+    start, end = _llm_block_span(text)
+    block = text[start:end].rstrip("\n")
+    return HEADER_DUAL + text[:start] + block + "\n" + DUAL_BLOCK + text[end:]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="只校验，不写入")
@@ -127,19 +172,25 @@ def main() -> int:
     want = derive(src)
 
     if args.check:
-        if not DST.exists():
-            print("❌ backend/config.local.yaml 不存在；运行 python3 scripts/make_local_profile.py")
+        bad = 0
+        for path, expected in ((DST, want), (DST_DUAL, derive_dual(src))):
+            if not path.exists():
+                print(f"❌ {path.name} 不存在；运行 python3 scripts/make_local_profile.py")
+                bad = 1
+            elif path.read_text(encoding="utf-8") != expected:
+                print(f"❌ {path.name} 与 config.yaml 不同步；"
+                      "运行 python3 scripts/make_local_profile.py 重新生成")
+                bad = 1
+        if bad:
             return 1
-        if DST.read_text(encoding="utf-8") != want:
-            print("❌ backend/config.local.yaml 与 config.yaml 不同步；"
-                  "运行 python3 scripts/make_local_profile.py 重新生成")
-            return 1
-        print("✅ 本地档与主配置同步")
+        print("✅ 两个派生档（全本地 / 端云双平面）与主配置同步")
         return 0
 
     DST.write_text(want, encoding="utf-8")
+    DST_DUAL.write_text(derive_dual(src), encoding="utf-8")
     missing = sorted(set(TIERS) - set(re.findall(r"^    ([a-z_]+):", src, flags=re.MULTILINE)))
-    print(f"✅ 已生成 {DST.relative_to(ROOT)}")
+    print(f"✅ 已生成 {DST.relative_to(ROOT)}（全本地：所有角色走本机 Ollama）")
+    print(f"✅ 已生成 {DST_DUAL.relative_to(ROOT)}（端云双平面：云端 + 端侧路由）")
     print(f"   档位：short={MODELS['short']} / default={MODELS['default']} / quality={MODELS['quality']}")
     if missing:
         print(f"   ⚠️ TIERS 里登记但 config.yaml 中不存在的角色：{missing}")

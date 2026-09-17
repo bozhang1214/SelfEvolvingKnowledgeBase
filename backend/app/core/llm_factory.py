@@ -151,7 +151,7 @@ class LLMFactory:
         self.stats = LLMCallStats()
         self._lock = asyncio.Lock()
 
-    def get(self, role: str) -> BaseChatModel:
+    def get(self, role: str, plane: str | None = None) -> BaseChatModel:
         """
         获取指定角色的 LLM 实例。
 
@@ -160,6 +160,9 @@ class LLMFactory:
 
         Args:
             role: Agent 角色名（如 "supervisor", "planner", "critic"）
+            plane: 推理平面（``"edge"`` / ``"cloud"``）。``None`` 表示用主配置的
+                单平面端点 —— **行为与引入端云协同之前完全一致**（端云双平面由
+                :mod:`app.core.plane_router` 在每次请求上选择，见 RFC §4）。
 
         Returns:
             配置好的 BaseChatModel 实例
@@ -167,9 +170,10 @@ class LLMFactory:
         Raises:
             LLMError: 角色配置不存在或创建失败
         """
+        cache_key = role if plane is None else f"{role}@{plane}"
         # 检查缓存
-        if role in self._cache:
-            return self._cache[role]
+        if cache_key in self._cache:
+            return self._cache[cache_key]
 
         # 获取角色配置
         role_config = self._get_role_config(role)
@@ -178,9 +182,17 @@ class LLMFactory:
 
         # 创建 LLM 实例
         try:
-            llm = self._create_llm(role_config)
-            self._cache[role] = llm
-            self._role_model_map[role] = role_config.model
+            # 不传平面时保持**原调用形态**（`_create_llm(role_config)`）：
+            # 外部/测试对 _create_llm 的打桩不必因为引入端云协同而改签名。
+            if plane is None:
+                llm = self._create_llm(role_config)
+            else:
+                override = self._edge_model_for(role, role_config) if plane == "edge" else None
+                llm = self._create_llm(role_config, plane=plane, model_override=override)
+            self._cache[cache_key] = llm
+            self._role_model_map[cache_key] = (
+                self._edge_model_for(role, role_config) or role_config.model
+                if plane == "edge" else role_config.model)
             logger.info(
                 "LLM 实例创建",
                 role=role,
@@ -200,11 +212,12 @@ class LLMFactory:
                         fallback_model=fallback_config.model,
                         error=str(e),
                     )
-                    llm = self._create_llm(fallback_config)
-                    self._cache[role] = llm
+                    llm = (self._create_llm(fallback_config) if plane is None
+                           else self._create_llm(fallback_config, plane=plane))
+                    self._cache[cache_key] = llm
                     # 记录降级信息：实际模型 + 降级标记
-                    self._role_model_map[role] = fallback_config.model
-                    self._degraded_roles.add(role)
+                    self._role_model_map[cache_key] = fallback_config.model
+                    self._degraded_roles.add(cache_key)
                     return llm
 
             raise LLMError(
@@ -212,7 +225,7 @@ class LLMFactory:
                 model=role_config.model,
             ) from e
 
-    def get_actual_model(self, role: str) -> str:
+    def get_actual_model(self, role: str, plane: str | None = None) -> str:
         """
         获取角色实际使用的模型名（降级后可能不同于配置）。
 
@@ -222,19 +235,21 @@ class LLMFactory:
         Returns:
             实际模型名；若角色未初始化则返回配置中的模型名
         """
-        if role in self._role_model_map:
-            return self._role_model_map[role]
+        key = role if plane is None else f"{role}@{plane}"
+        if key in self._role_model_map:
+            return self._role_model_map[key]
         role_config = self._get_role_config(role)
         return role_config.model if role_config else "unknown"
 
-    def is_degraded(self, role: str) -> bool:
+    def is_degraded(self, role: str, plane: str | None = None) -> bool:
         """判断角色是否发生了模型降级"""
-        return role in self._degraded_roles
+        return (role if plane is None else f"{role}@{plane}") in self._degraded_roles
 
     async def ainvoke_with_stats(
         self,
         role: str,
         messages: list[Any],
+        plane: str | None = None,
         **kwargs: Any,
     ) -> Any:
         """
@@ -254,12 +269,12 @@ class LLMFactory:
         Raises:
             LLMError: 调用失败（含重试后仍失败）
         """
-        llm = self.get(role)
+        llm = self.get(role, plane)
         role_config = self._get_role_config(role)
         configured_model = role_config.model if role_config else "unknown"
-        # 使用实际模型名（降级后可能不同）
-        actual_model = self.get_actual_model(role)
-        is_degraded = self.is_degraded(role)
+        # 使用实际模型名（降级后可能不同；按平面分别记账，避免两个平面互相覆盖）
+        actual_model = self.get_actual_model(role, plane)
+        is_degraded = self.is_degraded(role, plane)
 
         start_time = time.time()
         success = False
@@ -485,8 +500,48 @@ class LLMFactory:
         """获取角色的 LLM 配置"""
         return self.config.llm.roles.get(role)
 
-    def _create_llm(self, role_config: LLMRoleConfig) -> BaseChatModel:
-        """根据配置创建 LLM 实例"""
+    def _edge_model_for(self, role: str, role_config: LLMRoleConfig) -> str | None:
+        """端侧平面下该角色该用哪个本地模型（角色 → 档位 → ``planes.edge.models``）。
+
+        没有这层映射，端侧调用会把**云端的模型名**（如 ``deepseek-flash``）发给 Ollama，
+        换来一句 ``model ... not found``。这是 M1 首次端到端冒烟抓到的接线缺口。
+        """
+        planes = getattr(self.config.llm, "planes", None)
+        edge = getattr(planes, "edge", None) if planes else None
+        if edge is None:
+            return None
+        models = dict(getattr(edge, "models", None) or {})
+        if not models:
+            return None
+        if role in models:
+            return models[role]
+        from app.core.plane_router import derive_tier  # 延迟导入避免环
+
+        return models.get(derive_tier(role, role_config.max_tokens, models))
+
+    def _plane_endpoint(self, plane: str | None) -> tuple[str, str, str | None]:
+        """解析平面端点：返回 ``(api_key, base_url)``。
+
+        ``plane=None`` / ``"cloud"`` → 主配置端点；``"edge"`` → ``llm.planes.edge``。
+        平面未配置时抛 ``LLMError``，避免"以为走了端侧、其实走了云"这种静默错误。
+        """
+        if plane is None or plane == "cloud":
+            return self.config.llm.api_key, self.config.llm.base_url
+        if plane == "edge":
+            planes = getattr(self.config.llm, "planes", None)
+            edge = getattr(planes, "edge", None) if planes else None
+            if edge is None or not edge.base_url:
+                raise LLMError("未配置端侧平面（llm.planes.edge）", model=None)
+            return edge.api_key or "ollama", edge.base_url
+        raise LLMError(f"未知平面: {plane}", model=None)
+
+    def _create_llm(
+        self,
+        role_config: LLMRoleConfig,
+        plane: str | None = None,
+        model_override: str | None = None,
+    ) -> BaseChatModel:
+        """根据配置创建 LLM 实例（可按平面覆盖端点与模型）。"""
         # 优先使用 langchain-deepseek
         try:
             from langchain_deepseek import ChatDeepseek
@@ -494,10 +549,11 @@ class LLMFactory:
             # 降级到 langchain-openai（DeepSeek 兼容 OpenAI 接口）
             from langchain_openai import ChatOpenAI as ChatDeepseek
 
+        api_key, base_url = self._plane_endpoint(plane)
         kwargs: dict[str, Any] = {
-            "model": role_config.model,
-            "api_key": self.config.llm.api_key,
-            "base_url": self.config.llm.base_url,
+            "model": model_override or role_config.model,
+            "api_key": api_key,
+            "base_url": base_url,
             "temperature": role_config.temperature,
             "max_tokens": role_config.max_tokens,
             "timeout": self.config.llm.timeout_seconds,
