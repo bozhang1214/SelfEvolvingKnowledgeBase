@@ -31,6 +31,7 @@ related: [docs/tech/00-README, docs/ops/00-README, docs/codeReview/未修复问�
 | `docs/tech/.validation/` | 文档工程校验脚本（链接/孤儿/编号/新鲜度）+ 格式模板 | 维护者 |
 | `docs/tech/.facts/` | 事实表 T1–T8（单一事实源 SSOT 工作产物） | 维护者 |
 | `docs/RFC-自迭代闭环设计.md` | 自迭代研发-运维闭环平台**设计 RFC**（draft）：变更发布策略（`ops/14`）、Gitea 版本管理（`ops/12`）的决策依据 | 架构师 |
+| `docs/RFC-端云协同与端侧Agent.md` | **端云协同与端侧 Agent 实现方案**（draft，待 owner 确认）：端侧 Android 宿主本地推理 + 云端保留重推理、路由矩阵与升级信号 | 架构师 |
 | `docs/tmp/` | **本地讨论区**（gitignore，不进版本库）：个人资料、已完成方案的过程稿、一次性脚本。⚠️ **被跟踪文档不要链接到这里的文件**——干净克隆里没有它（`doc_guard` 会拦） | 本人 |
 | 仓库根 [`README.md`](../README.md) / [`AGENTS.md`](../AGENTS.md) | 门面（能力速览）+ 协作硬约定；两者都不复制 docs 内容，只做导览 | 所有人 |
 

@@ -109,7 +109,17 @@ def tracked_with_submodules() -> set:
 
 
 def is_living(rel: str) -> bool:
-    return rel.startswith(LIVING_PREFIXES)
+    """活文档 = 需要与当前代码保持一致的那部分。
+
+    `docs/` 下除「存档」外的所有 Markdown 都算活文档（含 `docs/` 根目录的 RFC/BACKLOG 等），
+    仓库根目录的 Markdown 也算。此前只列了固定前缀，导致新加到 `docs/` 根的设计文档
+    （如 RFC）落在覆盖之外——守卫的「绿」就不包含它们了。
+    """
+    if rel.startswith(ARCHIVE_PREFIXES):
+        return False
+    if "/" not in rel:               # 仓库根的 README.md / AGENTS.md 等
+        return True
+    return rel.startswith(LIVING_PREFIXES) or rel.startswith("docs/")
 
 
 def top_level_entries() -> set:
