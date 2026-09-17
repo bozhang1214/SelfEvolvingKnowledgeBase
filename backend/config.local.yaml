@@ -1,0 +1,457 @@
+# ⚠️ 本文件由 scripts/make_local_profile.py 从 config.yaml 生成，请勿手工编辑。
+# 「全本地」档：LLM 全部走本机 Ollama（离线可用），需要先 pull 好对应模型。
+# 启动：SEKB_CONFIG_PATH=config.local.yaml <启动命令>
+# 校验同步：python3 scripts/make_local_profile.py --check
+#
+# ============================================================
+# 自迭代个人知识库 Agent 配置文件
+# ============================================================
+# 使用说明：
+#   1. 修改配置后需重启服务生效（Phase 1 不支持热加载）
+#   2. 敏感信息（API Key 等）请通过 ${ENV_VAR} 引用环境变量
+#   3. 详细字段说明见 docs/tech/06-CONFIG-REFERENCE.md
+# ============================================================
+
+# ============ 应用元信息 ============
+app:
+  name: self-evolving-kb
+  version: 0.1.0
+  # 从环境变量取（compose 里 backend 设了 ENVIRONMENT=production）。
+  # 这里原来是写死的 `development`，于是线上 /health 与启动日志一直自称 development ——
+  # 排查时无法用它区分环境（也容易让监控误判）。纯展示用途，不改变任何行为分支。
+  environment: ${ENVIRONMENT:-development}
+
+# ============ LLM 模型路由 ============
+llm:
+  provider: ollama
+  api_key: ollama
+  base_url: http://127.0.0.1:11434/v1
+  timeout_seconds: 60
+  max_retries: 2
+  retry_backoff_seconds: [1, 2]
+
+  roles:
+    supervisor:                        # 监督者：意图识别 + 路由决策（快思考，强制 JSON 输出）
+      model: qwen3.5:2b-mlx
+      temperature: 0.1                 # 低温度保证分类稳定性
+      max_tokens: 500                  # 意图分类输出简短
+      response_format: json
+    planner:                           # 规划者：任务拆解（慢思考，复杂 CoT 推理）
+      model: qwen3.5:4b-mlx
+      temperature: 0.2                 # 较低温度保证规划可控
+      max_tokens: 2000                 # Task List 可能较长
+      response_format: json
+    executor:                          # 执行器：工具调用 + 草稿生成（快思考）
+      model: qwen3.5:4b-mlx
+      temperature: 0.3                 # 适度发散，生成自然答案
+      max_tokens: 2000                 # 草稿答案需要足够长度
+    critic:                            # 审查者（默认）：简单反思评估（快思考，省钱）
+      model: qwen3.5:2b-mlx
+      temperature: 0.0                 # 零温度保证评分一致性
+      max_tokens: 1000                 # 评分输出简短
+      response_format: json
+    critic_complex:                    # 审查者（复杂任务）：深度反思（慢思考，高幻觉检出）
+      model: qwen3.5:4b-mlx
+      temperature: 0.0
+      max_tokens: 2000
+      response_format: json
+    scribe:                            # 记录员：摘要 + 重要性评分（快思考）
+      model: qwen3.5:4b-mlx
+      temperature: 0.2
+      max_tokens: 800                  # 摘要控制在 200 字以内
+      response_format: json
+    chat_simple:                       # 闲聊直通：跳过 Plan/Do 节点
+      model: qwen3.5:2b-mlx
+      temperature: 0.7                 # 高温度保证闲聊自然度
+      max_tokens: 1000
+    news_report:                       # 科技资讯生成：结构化长报告（每条含要点/来源）
+      model: qwen3.5:9b-mlx
+      temperature: 0.3
+      max_tokens: 8000                 # 日报条目多（每类 10+），需要较大输出上限
+      response_format: json
+    job_analysis:                      # 招聘分析：JD 深度分析/差距/简历/策略（结构化 JSON）
+      model: qwen3.5:4b-mlx
+      temperature: 0.3
+      max_tokens: 4000                 # 单步输出为结构化 JSON，4000 token 足够
+      response_format: json
+    rerank:                            # 检索重排 / 查询改写（低温度 JSON/短文本）
+      model: qwen3.5:2b-mlx
+      temperature: 0.0
+      max_tokens: 1000
+      response_format: json
+    ragas:                             # RAG 检索质量裁判（低温度 JSON 打分）
+      model: qwen3.5:2b-mlx
+      temperature: 0.0
+      max_tokens: 1000
+      response_format: json
+
+  # 降级链：reasoner 不可用 → 降级 chat；chat 不可用 → 返回错误提示
+  fallback:
+    reasoner_to_chat: true             # 开启 reasoner → chat 自动降级
+    chat_to_error: true                # 开启 chat → 错误提示（触发限流/熔断）
+
+# ============ 意图路由 ============
+intent_routing:
+  default_intent: web_default
+  clarify_threshold: 0.7
+  kb_strict_keywords:
+    - "我的笔记"
+    - "知识库"
+    - "我之前说过"
+    - "基于我的"
+    - "根据我的文档"
+  kb_prefer_hit_threshold: 0.85
+  realtime_keywords:
+    - "最新"
+    - "今天"
+    - "昨天"
+    - "今年"
+    - "2026"
+    - "当前"
+  enable_pre_retrieval: true
+  pre_retrieval_top_k: 3
+
+# ============ 三层记忆 ============
+memory:
+  # L1 短期记忆：工作记忆，滑动窗口 + 触发压缩
+  l1_working:
+    enabled: true
+    max_turns: 8                        # 最多保留 8 轮对话
+    max_tokens: 3000                    # 软阈值：超过则触发压缩
+    hard_token_limit: 4000              # 硬上限：永不超过
+    compress_strategy: hierarchical     # 压缩策略：分层压缩
+    max_compressed_summaries: 3         # 最多保留 3 条历史摘要
+  # L2 中期记忆：跨会话偏好/历史话题（Redis 落地）
+  l2_session:
+    enabled: true                       # 已启用 Redis（2026-09-10）
+    max_items: 50                       # 每用户最多保存 50 条近期话题
+    eviction: lru                       # 过期策略：最近最少使用
+    redis_url: redis://redis:6379/0     # 容器内用服务名 redis；宿主机调试改 localhost
+    ttl_days: 30                        # 偏好/话题过期天数
+  # L3 长期知识库：向量库 + 结构化索引
+  l3_knowledge:
+    enabled: true                       # 已启用 ChromaDB
+    retrieval_top_k: 5                  # 检索返回 Top-5 结果
+    importance_threshold: 0.3           # 入库最低重要性阈值，低于此值跳过
+    allow_hash_fallback: false          # 生产禁用哈希降级；开发无模型时可设 true
+    # RAG 检索增强：混合检索（向量+BM25）+ 可选重排/查询改写
+    retrieval:
+      hybrid_enabled: true              # 启用「向量 + BM25」多路召回 + RRF 融合
+      bm25_enabled: true                # BM25 关键词通道
+      bm25_cache_ttl: 300               # BM25 索引缓存 5 分钟
+      bm25_page_size: 1000              # 分页拉取语料每页条数
+      rerank_enabled: false             # LLM 列表式重排（默认关，控制延迟）
+      rerank_top_n: 0                   # 0 = 用 top_k
+      rerank_role: rerank
+      query_rewrite_enabled: false      # 查询改写（默认关）
+      query_rewrite_role: rerank
+    eviction:
+      max_items: 10000                  # 单用户最大知识条目数
+      stale_days: 7                     # 超过 7 天未访问视为陈旧
+      similarity_merge_threshold: 0.95  # 语义相似度 > 0.95 时自动合并
+
+# ============ 反思策略 ============
+reflection:
+  policy: always                        # Phase 1 仅实现 always（adaptive/sampling 占位已按 D3 删除）
+  max_replan: 2                         # 最大重规划次数，超限则标记低置信度直通
+  max_rewrite: 1                        # needs_rewrite 时最多重写答案次数
+  model_switch_threshold: 0.7           # 任务复杂度超过此阈值时切换 reasoner 做 Critic
+
+# ============ 评估指标阈值 ============
+evaluation:
+  enabled: true                         # 是否启用评估日志
+  log_to_file: true                     # 指标是否写入日志文件
+  log_path: data/eval_logs              # 指标日志存放目录
+  # 各项指标的 good/warn 阈值：用于自动化质量判定
+  metrics:
+    intent_confidence:                   # 意图识别置信度
+      good: 0.9                         # ≥ 0.9 高可信
+      warn: 0.7                         # 0.7~0.9 需关注
+    plan_step_count:                    # 规划步数
+      good: 5                           # ≤ 5 合理
+      warn: 8                           # > 8 过度规划
+    replan_count:                       # 重规划次数
+      good: 0                           # 0 次最佳
+      warn: 2                           # ≥ 2 质量预警
+    tool_success_rate:                  # 工具调用成功率
+      good: 0.9                         # ≥ 90% 正常
+      warn: 0.7                         # 70%~90% 需关注
+    answer_groundedness:               # 答案锚定度（防幻觉核心）
+      good: 0.8                         # ≥ 0.8 良好
+      warn: 0.6                         # 0.6~0.8 一般
+    critic_coherence_score:             # 逻辑链自洽性（0~10）
+      good: 8.0                         # ≥ 8.0 良好
+      warn: 6.0                         # 6.0~8.0 可接受
+    answer_relevance:                   # 回答相关性
+      good: 0.8                         # ≥ 0.8 良好
+      warn: 0.6                         # 0.6~0.8 一般
+    e2e_latency_ms:                     # 端到端延迟（毫秒）
+      good: 5000                        # < 5s 良好
+      warn: 10000                       # 5~10s 可接受
+  # 回归判定：与 baseline 对比
+  regression:
+    pass_rate_drop_threshold: 0.05      # 通过率下降 > 5% 视为高危回归
+    metric_drop_threshold: 0.05         # 任一指标均值下降 > 5% 视为指标回归
+  # RAGAS 式检索质量评测（LLM-as-Judge）
+  ragas:
+    role: ragas                         # 裁判 LLM 角色
+    top_k: 5                            # 每次评测检索返回条数
+
+# ============ 成本控制 ============
+cost_control:
+  # DeepSeek 定价（美元/1K tokens）：用于成本归因
+  # V4.1 Flash 定价官方已下调并采用峰谷计价，此处用近似值（沿用 chat 档）做成本估算
+  pricing:
+    deepseek-flash:                     # V4.1 Flash 定价（近似，峰谷计价待精确值）
+      input: 0.00014                    # 输入 $0.14/1K tokens
+      output: 0.00028                   # 输出 $0.28/1K tokens
+  usd_to_cny: 7.2                       # 固定汇率（费用展示：美元 → 人民币）
+  # 对话 token / 费用统计存储（Redis）
+  usage:
+    enabled: true
+    redis_url: redis://redis:6379/0
+
+# ============ Tracing ============
+tracing:
+  provider: langsmith                    # Phase 3 仅 LangSmith（本地 JSON 降级已按 D6 删除）
+  # LangSmith 配置（在线可视化）
+  langsmith:
+    api_key: ${LANGSMITH_API_KEY}        # API Key，从环境变量读取
+    project: self-evolving-kb           # LangSmith 项目名
+    endpoint: https://api.smith.langchain.com
+
+# ============ 工具层（MCP 协议） ============
+tools:
+  # 联网搜索：博查搜索 MCP Server（国内直连）
+  web_search:
+    provider: bocha                      # 搜索服务提供商
+    api_key: ${BOCHA_API_KEY}            # API Key，从环境变量读取
+    endpoint: https://api.bochaai.com/v1/web-search
+    max_results: 5                       # 每次搜索返回 Top-5 结果
+    timeout_seconds: 10                  # 搜索超时
+    max_retries: 2                       # 失败重试次数
+  # 文件系统访问（预留，当前未启用）
+  filesystem:
+    enabled: false
+    allowed_paths: []
+  # 向量存储：ChromaDB 本地持久化
+  vector_store:
+    persist_path: data/chroma_db         # 持久化目录
+  # 文档解析器：PDF/Word/TXT 解析
+  document_parser:
+    enabled: true
+  # 图片处理：OCR 文字提取 + 多模态 LLM 打标签
+  image_analysis:
+    enabled: true                        # 是否启用图片分析
+    # 视觉模型配置（OpenAI 兼容接口，支持通义千问 VL/GPT-4o 等）
+    # 未配置 api_key 时降级为基于 OCR 文本的简单标签
+    vision_llm:
+      base_url: ${VISION_LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api_key: ${VISION_LLM_API_KEY:}
+      model: ${VISION_LLM_MODEL:qwen-vl-plus}
+    # PaddleOCR 配置
+    ocr:
+      enabled: true
+      lang: ch                           # 识别语言：ch(中英文)/en(英文)
+    # 图片原图保存目录
+    storage:
+      save_original: true
+      path: data/uploads/images
+
+# ============ 存储后端 ============
+storage:
+  backend: local_json                   # 当前使用本地 JSON；Phase 2 可切换 postgres
+  conversations_dir: data/conversations  # 会话 JSON 文件存放目录
+  index_file: data/index.json           # 会话索引文件（用于侧边栏快速加载）
+  # PostgreSQL 配置（Phase 2 迁移后启用）
+  postgres:
+    url: ${DATABASE_URL}                # 数据库连接字符串，从环境变量读取
+    pool_size: 10                       # 连接池大小
+
+# ============ 安全 ============
+security:
+  pii_masking: true                     # 敏感信息脱敏（日志中自动遮盖 API Key 等）
+  prompt_injection_guard: true          # Prompt 注入防护（检测并拦截恶意指令）
+  prompt_injection_use_llm: false       # 是否启用 LLM 层注入检测（额外延迟，默认关）
+  prompt_injection_llm_role: ragas      # LLM 层检测使用的角色
+  max_input_length: 8000                 # 单次输入最大字符数
+  # Prompt 注入防护拦截模式（正则匹配）
+  blocked_patterns:
+    - "ignore.*previous.*instruction"    # 忽略之前的指令
+    - "disregard.*above"                # 不管上文
+
+# ============ API 服务 ============
+api:
+  host: 0.0.0.0                         # 监听地址（0.0.0.0 表示所有网卡）
+  port: 8000                            # 服务端口
+  # CORS 允许的前端源
+  cors_origins:
+    - "http://localhost:3000"           # Next.js 开发服务器
+    - "http://localhost:5173"            # Vite 开发服务器
+    - "http://localhost:3004"            # Phase 3 Vite (PROJECT_ID=4)
+  # API 限流（按 IP+路由分组，可带方法，纯 ASGI 中间件，不缓冲 SSE）
+  rate_limit:
+    enabled: true                       # 已启用（2026-09-10）
+    requests_per_minute: 60             # 默认：chat/knowledge/conversations 等
+    share_per_minute: 20                # 分享问答（公开链接，防滥用）
+    upload_per_minute: 30               # 文件上传
+    job_per_minute: 30                  # 职位采集/批量分析
+    # 资讯读与写分开限额：原来整组 10/分钟，前端轮询 /status + 读报告几下就用完，
+    # 表现为「加载周期报告列表失败 / 点第二次 429」（2026-09-15 定位）。
+    news_per_minute: 120                # 资讯读取（GET 列表/正文/状态）
+    news_generate_per_minute: 6         # 资讯生成（POST 调 LLM；已有文件锁互斥，无需更严）
+  # 鉴权配置（Phase 3）
+  auth:
+    # 登录有效期。2026-09-16 从 2160h(90 天) 收紧到 168h(7 天)：
+    # 90 天 + 前端滑动续租 ≈ 永不失效，token 一旦泄露窗口极大。
+    token_expire_hours: 168            # 7 天
+    # ⚠️ 本字段已废弃：代码实际只读环境变量 JWT_SECRET（auth.get_jwt_secret），
+    #    且启动时做强校验（缺失/含占位词即拒绝启动）。保留此行仅为兼容旧配置读取，
+    #    留空即可——**不要在这里填密钥**，请配 .env 的 JWT_SECRET。
+    jwt_secret: ""
+    password_min_length: 8
+    rate_limit_login_per_minute: 5
+
+# ============ 日志 ============
+logging:
+  level: INFO                           # 日志级别：DEBUG / INFO / WARNING / ERROR
+  format: json                          # 输出格式：JSON Lines（便于结构化分析）
+  log_dir: data/logs                    # 日志文件存放目录
+  max_file_size_mb: 50                  # 单个日志文件最大 50MB
+  backup_count: 7                       # 保留 7 天历史日志
+  # 日志中需要脱敏的字段名（防止敏感信息泄露）
+  redact_fields:
+    - api_key                           # API 密钥
+    - authorization                     # 鉴权头
+    - token                             # Token
+
+# ============ 科技资讯 Agent ============
+news:
+  enabled: true                         # 是否启用（Phase 5 已部署，开启）
+  llm_role: news_report                 # 生成日报用的 LLM 角色（大 token 上限）
+  time_window_hours: 24                 # 日报信息时效窗口：过去 24 小时
+  max_items: 100                        # 单次采集最大条目数
+  report_dir: data/news                 # 日报存储目录
+  retention_days: 70                    # 保留 70 天
+  daily_cron: "0 8 * * *"               # 日报：每天 08:00（北京时间）
+  weekly_cron: "0 8 * * 1"              # 周报：每周一 08:00（北京时间）
+  monthly_cron: "0 8 1 * *"             # 月报：每月 1 日 08:00（北京时间）
+  timezone: "Asia/Shanghai"             # 定时任务时区（容器默认 UTC，必须显式指定北京时间）
+  # RSS 源（38 条中英文源；早期 15 条已逐一 curl 验证 HTTP 200 + XML，后续批次未逐个复验）
+  rss_sources:
+    # ---- 中文（5）----
+    - https://www.qbitai.com/feed                    # 量子位（AI 媒体）
+    - https://www.infoq.cn/feed                      # InfoQ 中文（技术媒体）
+    - https://www.leiphone.com/feed                  # 雷锋网（科技媒体）
+    - https://www.zhidx.com/rss                      # 智东西（AI/智能产业）
+    - https://sspai.com/feed                         # 少数派（效率/工具）
+    # ---- 移动端 / 前端 / 跨端（3）----
+    - https://www.ifanr.com/feed                     # 爱范儿（消费电子/移动端）
+    - https://www.ithome.com/rss/                    # IT之家（科技/数码/移动）
+    - https://www.oschina.net/news/rss               # 开源中国（开源/前端/后端）
+    # ---- 掘金（自建 RSSHub，服务器已验证 200）----
+    - http://rsshub:1200/juejin/tag/HarmonyOS        # 掘金 HarmonyOS 标签（鸿蒙/OpenHarmony 开发）
+    - http://rsshub:1200/juejin/category/frontend    # 掘金前端分类
+    - http://rsshub:1200/juejin/category/backend     # 掘金后端分类
+    - http://rsshub:1200/juejin/category/android     # 掘金 Android 分类
+    - http://rsshub:1200/juejin/category/ios         # 掘金 iOS 分类
+    - http://rsshub:1200/juejin/tag/LLM              # 掘金 LLM 标签（大模型）
+    - http://rsshub:1200/juejin/tag/Agent            # 掘金 Agent 标签（智能体）
+    - http://rsshub:1200/juejin/tag/Flutter          # 掘金 Flutter 标签（跨端）
+    # ---- iOS / Android / 前端 / 开源 / 融资（8，服务器已验证 200+XML）----
+    - https://9to5mac.com/feed/                      # 9to5Mac（iOS/苹果）
+    - https://www.swift.org/atom.xml                 # Swift.org 官方博客（iOS/Swift）
+    - https://www.theverge.com/rss/apple/index.xml   # The Verge Apple（iOS/苹果）
+    - https://9to5google.com/feed/                   # 9to5Google（Android/谷歌）
+    - https://www.smashingmagazine.com/feed/         # Smashing Magazine（前端/设计）
+    - https://www.cncf.io/feed/                      # CNCF（云原生/开源）
+    - https://changelog.com/posts/feed               # Changelog（开发者工具链/开源）
+    - https://techcrunch.com/feed/                   # TechCrunch（融资/商业/政策）
+    - https://www.androidcentral.com/rss.xml         # Android Central（Android/谷歌）
+    - https://blog.logrocket.com/feed/               # LogRocket（前端/React Native/Flutter）
+    - https://dev.to/feed/tag/flutter                # dev.to Flutter 标签（大前端跨端）
+    - https://dev.to/feed/tag/reactnative            # dev.to React Native 标签（大前端跨端）
+    # ---- 英文（10）----
+    - https://simonwillison.net/atom/everything/     # Simon Willison（LLM 工程，顶级）
+    - https://openai.com/news/rss.xml                # OpenAI News
+    - https://blog.google/technology/ai/rss/         # Google AI Blog
+    - https://deepmind.google/blog/rss.xml           # Google DeepMind
+    - https://arxiv.org/rss/cs.AI                    # arXiv AI 论文
+    - https://www.theverge.com/rss/index.xml         # The Verge（科技）
+    - https://venturebeat.com/category/ai/feed/      # VentureBeat AI
+    - https://www.technologyreview.com/feed/         # MIT Technology Review
+    - https://github.blog/feed/                      # GitHub Blog（含 AI 工程）
+    - https://raw.githubusercontent.com/0xSMW/rss-feeds/main/feeds/feed_anthropic_news.xml  # Anthropic News（GitHub 代理，无原生 RSS）
+  # 命中关键词（标题/摘要包含即保留；空列表=不过滤）
+  keywords:
+    - AI
+    - Agent
+    - 大模型
+    - LLM
+    - RAG
+    - 多模态
+    - 智能体
+    - OpenAI
+    - DeepSeek
+    # ---- 移动端 / 前端 / 跨端 ----
+    - Android
+    - iOS
+    - 鸿蒙
+    - HarmonyOS
+    - 前端
+    - 跨端
+    - Flutter
+    - React Native
+    - 小程序
+    - 移动端
+    - Web
+  # 排除关键词（命中即丢弃）
+  # 「早报」：排除 IT早报 这类「每日要闻汇总」栏目（汇总条目不适合归入具体大类，且内容与其他单条新闻重复）
+  exclude_keywords: [早报]
+  # 每个大类最少收录条目数
+  min_items_per_category: 10
+  # 大类定义（名称 + 分类关键词，用于归类；命中即归入该大类）
+  # 顺序即单归属优先级：越靠前越先抢条目。热门/具体的技术类放前面，宽泛类（大模型/RAG/融资/安全）放后面，
+  # 避免「大模型」等宽泛类把 Agent/鸿蒙/跨端 等热门类的条目抢光，保证每类都有足够条目。
+  categories:
+    - name: "Agent / 多智能体框架"
+      # 注意：不要用裸「框架」——它会误匹配 React/前端/测试框架等非 Agent 内容
+      keywords: [Agent, 智能体, 多智能体, LangGraph, LangChain, Multi-Agent]
+    - name: "RAG / 知识库 / 向量检索"
+      keywords: [RAG, 检索增强, 向量数据库, 知识库, Embedding, 向量]
+    - name: "鸿蒙"
+      keywords: [鸿蒙, HarmonyOS, OpenHarmony, 华为]
+    - name: "大前端跨端"
+      keywords: [跨端, Flutter, React Native, Taro, uni-app]
+    - name: "大模型发布 / 更新"
+      # 注意：不要用裸「模型」——它会误匹配「数据模型/电池模型/车型/商业模式」等非大模型内容
+      keywords: [大模型, GPT, Claude, DeepSeek, Qwen, LLM, 基础模型, 语言模型, 视觉模型, 多模态模型, 推理模型, 开源模型]
+    - name: "Android"
+      keywords: [Android, 安卓, Kotlin, Jetpack]
+    - name: "iOS"
+      keywords: [iOS, iPhone, iPad, Swift, 苹果, Apple, Mac]
+    - name: "前端"
+      keywords: [前端, React, Vue, JavaScript, TypeScript, Web, 小程序]
+    - name: "开源与工具链"
+      keywords: [开源, 工具链, 开发者工具, GitHub]
+    - name: "融资 / 商业 / 政策"
+      keywords: [融资, 商业, 政策, 监管, 上市, 收购, 投资]
+    - name: "安全 / 评测 / 治理"
+      keywords: [安全, 评测, 治理, 伦理, 对齐, 红队, 隐私]
+
+# ============ 招聘分析 Agent ============
+job:
+  enabled: true                         # 是否启用（Phase 2）
+  llm_role: job_analysis                # 分析用的 LLM 角色（JSON 输出）
+  # 职位采集默认筛选条件（Agent 相关职位、北京、月薪≥50K）
+  default_keyword: Agent                # 默认搜索关键词
+  default_city: 北京                     # 默认城市
+  default_city_code: "010"              # 猎聘城市码（北京 010，全国 410）
+  default_min_salary_k: 50              # 最低月薪（K），即 50K×14
+  # 猎聘/BOSS 排除的大厂（已有独立渠道，聚焦大厂之外的创业公司）
+  exclude_companies: [字节, 阿里, 淘宝, 天猫, 蚂蚁, 腾讯, 百度, 小米, 京东, 大疆, 小红书, 深度求索, DeepSeek, ByteDance, Alibaba, Tencent, Baidu, Xiaomi]
+  # 分析链路传输方式（P4）：mcp=走 jobcopilot-mcp 子进程（推荐）；direct=进程内直接调用（回滚开关）
+  transport: mcp
+  mcp_command: jobcopilot-mcp
+  mcp_timeout_s: 180.0
+  mcp_connect_timeout_s: 30.0

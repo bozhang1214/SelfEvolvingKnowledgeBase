@@ -62,6 +62,9 @@ jobs:
       - name: Mypy regression gate
         working-directory: backend
         run: bash scripts/mypy_gate.sh
+      # 派生配置档必须与主配置同步（本地档是 config.yaml 的派生产物，防漂移）
+      - name: Local profile in sync (config.yaml → config.local.yaml)
+        run: python3 scripts/make_local_profile.py --check
 
   # ============ 文档守卫（2026-09-16 技术文档复核后新增）============
   # 为什么单列一个 job：复核时发现三个文档校验脚本**一个都没接在必经之路上**

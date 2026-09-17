@@ -550,6 +550,112 @@ MVP **不做**"同一会话在手机和 Mac 上同时编辑"。改为：
 
 ---
 
+## 13. 待跟踪项（按 owner 决定：Android 先虚拟机验功能，其余挂账）
+
+| # | 待跟踪项 | 何时做 / 触发条件 |
+|---|---|---|
+| T1 | **Android 真机性能验证**（tok/s / TTFT / 内存峰值 / 温升 / 耗电） | 拿到真机时（借、二手千元档、或云真机）。模拟器给不了这些数字（§9.1） |
+| T2 | NPU 路径（QNN / Genie / 专用量化产物） | CPU/GPU 基线跑通之后，作为**优化项**，不进 M0–M2 |
+| T3 | 鸿蒙端（ArkTS/ArkUI + MindSpore Lite/HiAI） | 作品落定后作为生态扩展（额外 2–4 周，D1 已确认本期不做） |
+| T4 | 车机/座舱第二端（Android Automotive） | stretch，复用纯 Kotlin 模块（`mcp-client`/`agent-loop`/`router`） |
+| T5 | SEKB 云端内部模型分级（per-role provider，即 §8 的 S5） | 出现"云端内部也要按角色分流"的真实需求时（D7 本期不做） |
+| T6 | 多端并发写同一会话（+ CRDT） | 真有多端同时编辑需求时；当前用 `(user, device)` 分片规避（§4.5-I） |
+| T7 | 端侧模型微调（自有 JD/简历数据） | 端侧 baseline 数字出来后，若质量不达标再做 |
+| T8 | macOS 独立宿主 App（Tauri/原生壳） | 当前「SEKB + Ollama 全本地档」已能演示；**需要分发给他人**时再做 |
+| T9 | 端侧 embedding 落地（bge-small-zh ONNX INT8） | M3 端侧 RAG 时做（必须与云端同 512 维空间，见 §2.5） |
+| T10 | 模型分发与版本管理（分档下载/校验和/断点续传） | Android 要分发给他人时 |
+
+---
+
+## 14. M0 实施记录（2026-09-17）
+
+### 14.1 关键发现：本地档**不需要改代码**
+
+`backend/app/api/server.py:129` 已经在读 `SEKB_CONFIG_PATH` 环境变量（`backend/.env.example:65` 也有登记），
+所以"全本地 profile"只是**换一个配置文件**：
+
+```bash
+SEKB_CONFIG_PATH=config.local.yaml <启动命令>
+```
+
+### 14.2 避免"配置档漂移"：本地档用**生成**而非手抄
+
+SEKB 是单文件配置（无 overlay），本地档必然是主配置的副本 → 手抄必然漂移。
+所以新增 `scripts/make_local_profile.py`：**主配置是唯一权威，本地档是派生产物**，
+并提供 `--check` 供 CI 校验两者同步（与文档防漂移同一原则：单一事实源 + 机器校验）。
+
+派生的改动只有 llm 段 3 处 + 逐角色 model（按三档映射）：
+
+| 档 | 模型 | 承担角色 |
+|---|---|---|
+| short | `qwen3.5:2b-mlx` | supervisor / critic / chat_simple / rerank / ragas |
+| default | `qwen3.5:4b-mlx` | planner / executor / critic_complex / scribe / job_analysis |
+| quality | `qwen3.5:9b-mlx` | news_report |
+
+> 顺带确认一个架构事实：`LLMConfig.base_url` 是**全局单点**，但 `LLMRoleConfig.model` 是**逐角色**的
+> —— 所以"端侧按角色分档"在同一端点内**现在就能用**，不需要等 S5。
+
+### 14.3 测量脚本：`scripts/edge_bench.py`
+
+按 **prefill（算力受限）/ decode（带宽受限）分别计时**，端云同题对照。
+两种端点取数方式不同：Ollama 走原生 `/api/chat`（回报 `prompt_eval_duration` / `eval_duration`，
+是**精确值**）；云端走 OpenAI 兼容流式（取首 token 时间，decode 用"首片→末片"窗口折算）。
+
+**量得准比量得多重要——本轮实测踩到并修掉两个陷阱**（都写进了脚本注释）：
+
+| 陷阱 | 现象 | 修法 |
+|---|---|---|
+| **Ollama 前缀缓存** | 同一 prompt 复跑时 `prompt_eval_duration` 只统计未命中部分 → 1025 token 算出 **42844 tok/s** 的荒谬值 | 每次给 system 加一次性 nonce 破坏前缀复用（`--no-nonce` 可关） |
+| **thinking 模型的 `reasoning_content`** | 云端「输出 64 token 但 TTFT=0」自相矛盾 | 计时同时覆盖 `delta.content` 与 `delta.reasoning_content` |
+
+### 14.4 集成冒烟：SEKB → 本地 Ollama（用已装的 7B 代跑）
+
+qwen3.5 尚在下载，先用已就绪的 `qwen2.5:7b` 验证**通路**（`SEKB_CONFIG_PATH=config.local.yaml` +
+真实 `LLMFactory`，把角色模型临时指向该模型）：
+
+| 角色 | 类型 | 结果 | 延迟 | 返回 |
+|---|---|---|---|---|
+| `executor` | 普通 | ✅ | 901ms | `{"intent":"news"}` |
+| `supervisor` | **`response_format: json`** | ✅ | **160ms** | `{"intent":"news"}` |
+
+用量统计正常：`calls=2 in=116 out=12 cost=$0.0`。
+→ **结论：端侧通路（base_url / api_key / JSON 约束 / 用量记账）全部验证通过；
+`supervisor` 级意图分类在端侧 160ms 完成，完全支撑"短任务端侧"的定位。**
+
+### 14.5 端云对照实测（qwen2.5:7b @ M5 Pro vs deepseek-flash）
+
+> 取数时刻 ollama 正在后台下载模型，CPU/网络有占用，数字略有偏差；qwen3.5 下载完成后会复测。
+
+| 平面 | 模型 | 任务 | 输入tok | 输出tok | TTFT(ms) | prefill(tok/s) | decode(tok/s) | 总时长(ms) | 生成500tok预计(s) |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| 本地 | `qwen2.5:7b` | intent（短进短出） | 77 | 7 | 134 | 575 | 43.1 | **342** | 11.6 |
+| 本地 | `qwen2.5:7b` | short_qa | 54 | 40 | 99 | 548 | 45.3 | 994 | 11.0 |
+| 本地 | `qwen2.5:7b` | structured（长输出） | 64 | 146 | 95 | 671 | 44.4 | 3399 | 11.3 |
+| 本地 | `qwen2.5:7b` | long_context（长输入） | 1038 | 99 | 893 | 1162 | 43.8 | 3171 | 11.4 |
+| 云端 | `deepseek-flash` | intent | 80 | 64 | **627** | — | 170.4 | 997 | 2.9 |
+| 云端 | `deepseek-flash` | short_qa | 57 | 256 | 561 | — | 160.6 | 2162 | 3.1 |
+| 云端 | `deepseek-flash` | structured | 65 | 512 | 372 | — | 157.4 | 3618 | 3.2 |
+| 云端 | `deepseek-flash` | long_context | 910 | 256 | 718 | — | 238.3 | 1789 | 2.1 |
+
+**读出来的三条结论（也正是路由矩阵的依据）**：
+
+1. **decode 端侧慢 3.5–5 倍**（43–45 vs 157–238 tok/s）→ **长输出任务必须走云**；
+   按等长折算：生成 500 token 端侧约 **11 秒**、云端约 **3 秒**。
+2. **短输出任务端侧赢**：intent 任务端侧总时长 **342ms vs 云端 997ms**（省掉网络往返与排队）；
+   且本地 TTFT 95–134ms，优于云端 372–627ms。
+3. **长输入的 prefill 云端更强**：1038 token 时本地 TTFT 893ms、云端 718ms → 长上下文前置成本云端更低。
+
+> 注：`qwen2.5:7b` 是 2024 年模型、4.7GB；换成 `qwen3.5:2b-mlx`（3.1GB）后 decode 预期提升到 **60–70 tok/s**
+> 量级，端侧的适用面会进一步变大 —— 这正是 M0 复测要确认的事。
+
+### 14.6 待补（下载完成后）
+
+- [ ] `qwen3.5:2b-mlx` / `4b-mlx` / `9b-mlx` 三档复测（替换上表的 7B 行）
+- [ ] SEKB 真实链路（不是 LLMFactory 冒烟）时的端到端延迟
+- [ ] 把实测数字回填 §4.1 路由矩阵的阈值（当前阈值是按理论给的）
+
+---
+
 ## 相关文档
 
 - [MCP 端点运维手册（7 个工具、鉴权、自测）](ops/15-MCP-ENDPOINT.md)
