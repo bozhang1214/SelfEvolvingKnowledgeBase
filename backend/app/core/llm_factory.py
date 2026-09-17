@@ -23,7 +23,7 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 from langchain_core.language_models import BaseChatModel
@@ -342,7 +342,7 @@ class LLMFactory:
             resp, event = await self._routed.ainvoke(
                 role, messages, device_data=device_data,
                 max_output_tokens=expected_output_tokens, **kwargs)
-            self.last_route_event[role] = event
+            self._publish_route_event(role, event)
             return resp
 
         llm = self.get(role, plane)
@@ -456,6 +456,38 @@ class LLMFactory:
             )
             await self._record_call(record)
 
+    @staticmethod
+    def _chunk_text(chunk: Any) -> str:
+        """把流式 chunk 转成纯文本。
+
+        为什么要有这一步：多模态模型的 ``chunk.content`` 可能是
+        ``list[str | dict]``（文本块 + 图片块混排）。旧代码直接把它当字符串 yield，
+        下游 SSE 就会序列化出一个**数组**给前端。这里统一收口成 str。
+        """
+        raw = getattr(chunk, "content", chunk)
+        if isinstance(raw, str):
+            return raw
+        if isinstance(raw, list):
+            return "".join(part if isinstance(part, str) else str(part) for part in raw)
+        return str(raw) if raw else ""
+
+    def _publish_route_event(self, role: str, event: Any) -> None:
+        """记录路由事件：全局视图（排查用）+ 当前请求收集器（供 S3 响应字段）。
+
+        两者都要：``last_route_event`` 是"最近一次各角色落在哪"的快照（运维/排查），
+        而 contextvar 收集器回答的是"**这一次请求**里各个角色分别落在哪"——
+        并发请求下前者会串台，所以响应里用的必须是后者。
+        """
+        if event is None:
+            return
+        self.last_route_event[role] = event
+        try:
+            from app.core.plane_router import record_route_event
+
+            record_route_event(role, event)
+        except Exception as e:  # noqa: BLE001 - 收集失败不影响回答
+            logger.debug("路由事件收集失败", role=role, error=str(e)[:120])
+
     async def astream_with_stats(
         self,
         role: str,
@@ -464,7 +496,7 @@ class LLMFactory:
         device_data: bool = False,
         expected_output_tokens: int | None = None,
         **kwargs: Any,
-    ):
+    ) -> AsyncIterator[str]:
         """
         带统计的流式调用（R2-06 真流式答案）。
 
@@ -487,11 +519,11 @@ class LLMFactory:
                     and self._routed.router.escalation_allowed(decision)):
                 guard_chars = int(getattr(self._routed.router._routing,
                                           "stream_guard_chars", 0) or 0)
-            self.last_route_event[role] = RouterEventLite(
+            self._publish_route_event(role, RouterEventLite(
                 role=role, plane=decision.plane,
                 reason=decision.reason + ("|stream_guard" if guard_chars else "|stream_no_escalate"),
                 tier=decision.tier, input_tokens=decision.input_tokens,
-                versions=self._routed.router.versions(role))
+                versions=self._routed.router.versions(role)))
 
         if guard_chars > 0 and decision is not None:
             async for piece in self._astream_guarded(
@@ -507,7 +539,7 @@ class LLMFactory:
         chunks: list[str] = []
         try:
             async for chunk in llm.astream(messages, config=get_trace_config(), **kwargs):
-                text = chunk.content if hasattr(chunk, "content") else str(chunk)
+                text = self._chunk_text(chunk)
                 if text:
                     chunks.append(text)
                     yield text
@@ -545,11 +577,11 @@ class LLMFactory:
         ))
 
     async def _stream_raw(self, role: str, messages: list[Any], plane: str | None,
-                         **kwargs: Any):
+                          **kwargs: Any) -> AsyncIterator[str]:
         """按指定平面裸流式产出文本块（不含统计、不含路由）。"""
         llm = self.get(role, plane)
         async for chunk in llm.astream(messages, config=get_trace_config(), **kwargs):
-            text = chunk.content if hasattr(chunk, "content") else str(chunk)
+            text = self._chunk_text(chunk)
             if text:
                 yield text
 
@@ -562,7 +594,7 @@ class LLMFactory:
         expected_output_tokens: int | None,
         device_data: bool,
         **kwargs: Any,
-    ):
+    ) -> AsyncIterator[str]:
         """端侧流式的**前缀守卫**：先攒 ``guard_chars`` 再决定是否改道云端。
 
         只对"在半截输出上也有意义"的信号判断（``json_invalid`` 除外，见
@@ -597,7 +629,7 @@ class LLMFactory:
                 reason=f"stream_prefix_guard({','.join(signals)})",
                 tier=decision.tier, input_tokens=decision.input_tokens,
                 versions=routed.router.versions(role))
-            self.last_route_event[role] = fallback
+            self._publish_route_event(role, fallback)
             logger.warning("端侧流式前缀不达标，已改道云端（用户未见到任何 token）",
                            role=role, signals=signals, prefix_chars=prefix_len)
             event_for_handoff = RouteEvent(

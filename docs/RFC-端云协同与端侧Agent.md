@@ -787,6 +787,57 @@ role=planner     平面=cloud  原因=output_over_edge_budget(600>300)   模型=
 
 ---
 
+## 16. M2 实施记录（2026-09-17，进行中）
+
+目标：把端侧宿主真正接起来——S1 设备身份、S3 执行位置、协议规范、Android 模拟器功能验证。
+
+**M2 的三个已定选择（本轮开工前确认）**：
+
+| # | 问题 | 结论 |
+|---|---|---|
+| 1 | 独立 repo `sekb-ondevice-agent` 放哪 | **Gitea 主 + GitHub 辅**，复用已有 push-mirror 机制（`scripts/gitea_mirror.py`，`REPO_MAP` 需加一行） |
+| 2 | 端侧 LLM 怎么落 | 本期**不打 llama.cpp NDK**：做成**可插拔适配层**，模拟器默认连宿主机 Ollama（`10.0.2.2:11434`）；真·端侧推理与真机性能一起推到 M3 |
+| 3 | 验证到什么程度 | 模拟器只验**功能与协议**（路由/升级/交接/工具调用/权限审计/事件上报），**不产出性能数字** |
+
+第 2 条是对 §9 表格里 M2 描述的一处**收窄**，理由：模拟器跑在 Mac 的 CPU 上，
+性能数字（decode tok/s、TTFT）无意义（§9.1 已列明），而"能不能装下 1.3GB GGUF + NDK 编译"
+属于真机问题；先把协议与功能做对，性能等真机一次做准。§9 未改，作为历史承诺保留。
+
+### 16.1 已交付（本轮）
+
+| 组件 | 位置 | 说明 |
+|---|---|---|
+| **S1 设备身份** | `backend/app/storage/device_storage.py` + `backend/app/api/routes/device.py` | enroll / refresh / heartbeat / list / revoke 五件套：长效设备 token（默认 30 天）+ **可轮换**（旧 jti 立即失效）+ **可单独吊销**（手机丢了唯一止损手段） |
+| 设备 token 域 | `backend/app/core/auth.py` | payload 加 `typ=device` / `device_id` / `scope=edge`；`sub` 仍是 user_id → 设备**继承用户的访问级别**，但多一层身份 |
+| **生命周期咽喉点** | `auth._claims_checked()` | 所有鉴权依赖（`get_current_user` / `get_current_claims`）唯一入口，所以"设备已吊销/已轮换"在**任何**受保护路由上自动成立——不靠各路由自觉 |
+| **最小权限边界** | `require_user_account`（挂在 `upload` / `knowledge` / `share`） | 设备 token **不能读写知识资产**：长效凭证一旦泄漏，能做的应当尽可能少；设备的读路径是 chat 里的 RAG |
+| **S3 执行位置** | `plane_router.summarize_route_events` + `chat.ExecutionInfo` | 聊天响应（非流式与 SSE `done.meta`）带 `execution`：`primary_plane/model/reason/escalated/by_plane/versions/roles` —— 用户有权知道自己的数据出没出端 |
+| 请求级事件收集 | `plane_router.collect_route_events`（contextvar） | 用 contextvar 而不是工厂上的 `last_route_event` 字典：后者是全局的，**并发请求会串台**（A 请求的"执行位置"里混进 B 的角色） |
+| 协议规范 | `docs/ops/16-端云协同协议.md` | 端侧宿主↔SEKB 的完整契约（含权限边界表、SSE 事件、错误码、与代码的对应关系） |
+| 测试 | `test_device_auth.py`（28 条）+ `test_plane_router.py` 新增 10 条 | 生命周期 / 最小权限 / 咽喉点回归 / 汇总口径 / **并发不串台** / 多模态 chunk 归一 |
+
+### 16.2 本轮抓到的真问题
+
+1. **吊销了也照样能聊天**（自己第一版就踩了）：校验最初只挂在 `get_current_claims` 上，
+   而聊天路由走的是 `require_full_access → get_current_user` 这条**不经过 claims** 的路
+   → 被吊销的设备 token 依然能聊天，"吊销"变成摆设。
+   修法：把校验下沉到 `_claims_checked()`（两条依赖的共同入口），并补一条**咽喉点回归测试**。
+   *教训*：安全校验要放在"所有路径都会经过的地方"，放在某一条依赖上等于没放。
+2. **`require_user_account` 让 5 个既有 API 测试 401**：测试替身只覆盖了 `get_current_user`，
+   新依赖读 `get_current_claims` 时拿不到 Authorization。这不是测试的错——它精确暴露了
+   "新依赖改变了既有契约"。修法是补测试替身（一行）并在注释里写清原因。
+3. **多模态 chunk 的 `content` 可能是 `list`**：旧代码直接当字符串 yield，SSE 会序列化出
+   **数组**给前端（此前没暴露是因为一路都是纯文本模型）。已收口为 `_chunk_text()`。
+
+### 16.3 M2 待办
+
+- [ ] 独立 repo `sekb-ondevice-agent`：建仓 + push mirror + REPO_MAP 增行（**等服务器 SSH**）
+- [ ] Android 宿主：设备凭证存储 / 聊天 SSE / 执行位置展示 / 路由事件上报 / 3 个设备工具 + 权限审计
+- [ ] 评测：工具调用 JSON 合法率（grammar 开/关）、越权拦截率、断网可用性（§9 的验收数字）
+- [ ] M3：llama.cpp NDK 真·端侧推理 + 真机性能数字
+
+---
+
 ## 相关文档
 
 - [MCP 端点运维手册（7 个工具、鉴权、自测）](ops/15-MCP-ENDPOINT.md)

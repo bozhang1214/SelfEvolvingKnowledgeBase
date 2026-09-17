@@ -377,6 +377,10 @@ class AuthConfig(BaseModel):
     # 2026-09-16：默认值由 2160h(90 天) 收紧为 168h(7 天)，与 config.yaml 保持一致。
     # 此处是「yaml 漏配/写错键名」时的兜底——默认值若停在 90 天，安全收紧会被静默绕过。
     token_expire_hours: int = 168  # 7 天
+    #: 设备 token 有效期（默认 30 天）。为什么比用户 token 长：设备不该天天要求用户
+    #: 重新登录，否则"端侧常驻"就无从谈起；风险由**可单独吊销 + 可轮换**兜住
+    #: （见 `device_storage.DeviceStore` 与 RFC §4.5-H）。
+    device_token_expire_hours: int = 720
     jwt_secret: str = ""
     password_min_length: int = 8
     rate_limit_login_per_minute: int = 5

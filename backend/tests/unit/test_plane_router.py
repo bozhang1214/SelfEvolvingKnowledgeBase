@@ -872,3 +872,152 @@ def test_stats_json_serializable(tmp_path):
     """统计要能直接进 HTTP 响应（不能带不可序列化对象）。"""
     s = EdgeRouteStore(tmp_path / "r.jsonl").stats()
     json.dumps(s, ensure_ascii=False)
+
+
+# ============================================================
+# S3：本次执行位置/理由（客户端可见性）
+# ============================================================
+
+class TestExecutionSummary:
+    """`summarize_route_events` 是 S3 的唯一事实来源，必须与 pydantic 模型对得上。"""
+
+    def _ev(self, role, plane, *, model="m", reason="edge_preferred", escalated=False,
+            signals=None, latency_ms=1.0, versions=None):
+        from app.core.plane_router import RouteEvent
+
+        return RouteEvent(role=role, plane=plane, model=model, reason=reason,
+                          escalated=escalated, signals=signals or [],
+                          latency_ms=latency_ms, versions=versions or {"tier": "short"})
+
+    def test_empty_when_no_events(self):
+        from app.core.plane_router import summarize_route_events
+
+        assert summarize_route_events({})["primary_plane"] == ""
+
+    def test_primary_prefers_answer_producing_role(self):
+        """executor 比 supervisor 更能代表"用户看到的那次推理"。"""
+        from app.core.plane_router import summarize_route_events
+
+        got = summarize_route_events({
+            "supervisor": self._ev("supervisor", PLANE_EDGE, model="qwen3.5-2b"),
+            "executor": self._ev("executor", PLANE_CLOUD, model="deepseek-flash",
+                                 reason="output_over_edge_budget(600>300)"),
+        })
+        assert got["primary_plane"] == PLANE_CLOUD
+        assert got["primary_role"] == "executor"
+        assert got["model"] == "deepseek-flash"
+        assert got["reason"].startswith("output_over_edge_budget")
+
+    def test_counts_by_plane_and_escalation(self):
+        from app.core.plane_router import summarize_route_events
+
+        got = summarize_route_events({
+            "supervisor": self._ev("supervisor", PLANE_EDGE),
+            "planner": self._ev("planner", PLANE_CLOUD, escalated=True),
+            "executor": self._ev("executor", PLANE_CLOUD, escalated=True),
+        })
+        assert got["by_plane"] == {PLANE_EDGE: 1, PLANE_CLOUD: 1} or \
+               got["by_plane"] == {PLANE_EDGE: 1, PLANE_CLOUD: 2}
+        assert got["escalated"] == 2
+        # 端侧完成率的分母只算"判给端侧或发生过升级"的角色
+        assert got["edge_decided"] == 3
+        assert got["edge_completed"] == 1
+
+    def test_roles_detail_is_sorted_and_carries_signals(self):
+        from app.core.plane_router import summarize_route_events
+
+        got = summarize_route_events({
+            "supervisor": self._ev("supervisor", PLANE_EDGE),
+            "planner": self._ev("planner", PLANE_CLOUD, escalated=True,
+                                signals=["degenerate"]),
+        })
+        assert [r["role"] for r in got["roles"]] == ["planner", "supervisor"]
+        planner = got["roles"][0]
+        assert planner["escalated"] is True and planner["signals"] == ["degenerate"]
+
+    def test_summary_fits_execution_info_model(self):
+        """汇总结果必须能直接喂给 `ChatResponse.execution`（防字段漂移）。"""
+        from app.api.routes.chat import ExecutionInfo
+        from app.core.plane_router import summarize_route_events
+
+        got = summarize_route_events({"executor": self._ev("executor", PLANE_EDGE)})
+        info = ExecutionInfo(**got)
+        assert info.primary_plane == PLANE_EDGE and info.versions == {"tier": "short"}
+
+
+class TestRouteEventIsolation:
+    """并发请求不得互相串台：这是"响应里的执行位置"可信的前提。"""
+
+    @pytest.mark.asyncio
+    async def test_two_collectors_do_not_mix(self):
+        import asyncio
+
+        from app.core.plane_router import (
+            collect_route_events,
+            record_route_event,
+            summarize_route_events,
+        )
+
+        async def worker(role: str, plane: str, gate: asyncio.Event):
+            with collect_route_events() as bucket:
+                await gate.wait()
+                record_route_event(role, RouteEvent(role=role, plane=plane,
+                                                     reason="edge_preferred", model="m"))
+                await asyncio.sleep(0)
+                return summarize_route_events(bucket)
+
+        gate = asyncio.Event()
+        t1 = asyncio.create_task(worker("supervisor", PLANE_EDGE, gate))
+        t2 = asyncio.create_task(worker("executor", PLANE_CLOUD, gate))
+        gate.set()
+        a, b = await asyncio.gather(t1, t2)
+        assert a["primary_role"] == "supervisor" and a["by_plane"] == {PLANE_EDGE: 1}
+        assert b["primary_role"] == "executor" and b["by_plane"] == {PLANE_CLOUD: 1}
+
+    @pytest.mark.asyncio
+    async def test_recording_without_collector_is_noop(self):
+        from app.core.plane_router import record_route_event
+
+        record_route_event("supervisor", RouteEvent(role="s", plane=PLANE_EDGE,
+                                                    reason="edge_preferred", model="m"))
+
+    @pytest.mark.asyncio
+    async def test_main_path_publishes_into_collector(self, monkeypatch, tmp_path):
+        """主链路：`ainvoke_with_stats` 在收集器打开时必须把事件投进去。"""
+        from app.core.plane_router import collect_route_events, summarize_route_events
+
+        f, _ = TestMainPathRouting()._factory(monkeypatch)
+        f.attach_router(store=EdgeRouteStore(tmp_path / "r.jsonl"))
+        with collect_route_events() as bucket:
+            await f.ainvoke_with_stats("supervisor", ["分类"])
+        got = summarize_route_events(bucket)
+        assert got["primary_role"] == "supervisor"
+        assert got["primary_plane"] == PLANE_EDGE
+        assert got["model"] == "qwen3.5-2b"
+
+
+class TestStreamChunkNormalization:
+    """多模态 chunk 的 content 可能是 list——流式出口必须是 str，否则 SSE 会吐出数组。"""
+
+    @pytest.mark.asyncio
+    async def test_list_content_is_flattened(self, monkeypatch, tmp_path):
+        from app.core.llm_factory import LLMFactory
+
+        class _MultiModal:
+            async def astream(self, messages, **kw):
+                yield _FakeResp(["端侧", "推理"])
+                yield _FakeResp("很省电")
+
+        f = LLMFactory(make_config())
+        monkeypatch.setattr(f, "_create_llm",
+                            lambda role_config, plane=None, model_override=None: _MultiModal())
+        f.attach_router(store=EdgeRouteStore(tmp_path / "r.jsonl"))
+        got = [c async for c in f.astream_with_stats("supervisor", ["q"])]
+        assert got == ["端侧推理", "很省电"]
+        assert all(isinstance(x, str) for x in got)
+
+    def test_chunk_text_fallback_for_plain_values(self):
+        from app.core.llm_factory import LLMFactory
+
+        assert LLMFactory._chunk_text(_FakeResp("文本")) == "文本"
+        assert LLMFactory._chunk_text(_FakeResp(["a", "b"])) == "ab"

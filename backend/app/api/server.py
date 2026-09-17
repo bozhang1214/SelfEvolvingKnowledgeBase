@@ -299,6 +299,7 @@ def create_app() -> FastAPI:
     from app.api.routes.chat import router as chat_router
     from app.api.routes.chat_share import router as chat_share_router
     from app.api.routes.conversations import router as conv_router
+    from app.api.routes.device import router as device_router
     from app.api.routes.edge import router as edge_router
     from app.api.routes.health import router as health_router
     from app.api.routes.job import router as job_router
@@ -314,6 +315,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router)
     app.include_router(chat_share_router)
     app.include_router(conv_router)
+    app.include_router(device_router)
     app.include_router(edge_router)
     app.include_router(health_router)
     app.include_router(job_router)
@@ -328,8 +330,9 @@ def create_app() -> FastAPI:
     logger.info(
         "FastAPI 路由注册完成",
         routers=[
-            "auth", "chat", "chat-share", "conversations", "edge", "health", "job",
-            "knowledge", "metrics", "monitoring", "news", "profile", "share", "upload",
+            "auth", "chat", "chat-share", "conversations", "device", "edge", "health",
+            "job", "knowledge", "metrics", "monitoring", "news", "profile", "share",
+            "upload",
         ],
         cors_origins=config.api.cors_origins or ["*"],
     )

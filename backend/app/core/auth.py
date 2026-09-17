@@ -90,6 +90,40 @@ def create_jwt(user_id: str) -> str:
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
+#: JWT 里的类型标记：区分"用户 token"与"设备 token"（RFC §4.5-H）
+DEVICE_TOKEN_TYPE = "device"
+#: 设备 token 的权限域（当前只有 edge：聊天/上报/设备能力，不含知识库写入）
+DEVICE_SCOPE = "edge"
+
+
+def create_device_jwt(user_id: str, device_id: str, *, expire_hours: int | None = None) -> str:
+    """创建设备 token（长有效期 + 独立域，可单独吊销/轮换）。
+
+    与用户 token 的关系：``sub`` 仍是 ``user_id``，所以设备**继承该用户的访问级别**；
+    区别在多了 ``typ=device`` / ``device_id`` / ``scope`` 三个字段，
+    服务端据此判断"这是设备在替用户做事"（不能改知识库、不能建公开分享），
+    并按 ``(user, device)`` 分片统计（§4.5-I）。
+    """
+    config = get_config()
+    hours = expire_hours or config.api.auth.device_token_expire_hours
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_id,
+        "typ": DEVICE_TOKEN_TYPE,
+        "device_id": device_id,
+        "scope": DEVICE_SCOPE,
+        "jti": uuid.uuid4().hex,
+        "iat": now,
+        "exp": now + timedelta(hours=hours),
+    }
+    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
+
+
+def is_device_token(payload: dict[str, Any]) -> bool:
+    """payload 是否来自设备 token。"""
+    return payload.get("typ") == DEVICE_TOKEN_TYPE and bool(payload.get("device_id"))
+
+
 def revoke_jwt(jti: str) -> None:
     """把 jti 加入黑名单（登出后 token 立即失效）。
 
@@ -139,15 +173,99 @@ def verify_jwt(token: str) -> dict[str, Any]:
     return payload
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-) -> str:
-    """FastAPI 依赖项：从请求头提取当前用户 ID。"""
+def _claims_or_401(
+    credentials: HTTPAuthorizationCredentials | None,
+) -> dict[str, Any]:
+    """从请求头解析并校验 JWT；缺失/无效统一 401。"""
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="未登录",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    payload = verify_jwt(credentials.credentials)
-    return payload["sub"]
+    return verify_jwt(credentials.credentials)
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> str:
+    """FastAPI 依赖项：从请求头提取当前用户 ID。
+
+    设备 token 的 ``sub`` 同样是 ``user_id``，所以设备**继承用户的访问级别**；
+    要区分"这是设备"的地方用 :func:`get_current_claims`（见 ``require_user_account``）。
+
+    设备 token 的吊销/轮换校验在这里一并完成（``_claims_checked``）——挂在
+    ``get_current_user`` 上是刻意的：绝大多数路由只依赖它，校验放在这里才没有漏网。
+    """
+    return str(_claims_checked(credentials)["sub"])
+
+
+def _claims_checked(
+    credentials: HTTPAuthorizationCredentials | None,
+) -> dict[str, Any]:
+    """解析 + 校验 JWT，并对**设备 token** 追加生命周期校验。
+
+    这是所有鉴权依赖（``get_current_user`` / ``get_current_claims``）唯一的入口，
+    所以"设备已被吊销/轮换"这一条在**任何**受保护路由上都成立，不依赖各路由自觉。
+    """
+    claims = _claims_or_401(credentials)
+    if is_device_token(claims):
+        _ensure_device_token_valid(claims)
+    return claims
+
+
+def _device_store() -> Any:
+    """取设备注册表（惰性导入避免 auth ↔ bootstrap 循环依赖；测试可覆盖此函数）。"""
+    from app.core.bootstrap import get_app_context
+
+    try:
+        return getattr(get_app_context(), "device_storage", None)
+    except Exception as e:  # noqa: BLE001 - 校验不可用时**失败关闭**，不放行
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="设备凭证校验暂不可用") from e
+
+
+def _ensure_device_token_valid(claims: dict[str, Any]) -> None:
+    """设备 token 的**额外**校验：设备是否已吊销、jti 是否已被轮换掉。
+
+    为什么必须在**每次请求**都查：轮换/吊销的意义就是"旧凭证立刻作废"。
+    只靠 JWT 的 ``exp``（默认 30 天）等于给泄漏的 token 留了一个月的窗口。
+    用户 token 不受影响（只对 ``typ=device`` 生效），所以老路径零开销。
+    """
+    store = _device_store()
+    if store is None:
+        return                      # 未装配设备存储（如纯单机模式）→ 不存在设备凭证可言
+    device_id = str(claims.get("device_id", ""))
+    if store.is_jti_revoked(device_id, str(claims.get("jti", ""))):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="设备凭证已失效，请重新接入",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+async def get_current_claims(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> dict[str, Any]:
+    """FastAPI 依赖项：返回完整 JWT payload（含 ``typ`` / ``device_id`` / ``scope``）。
+
+    设备 token 会在这里顺带做一次"是否已吊销/已被轮换"的校验——所有接受设备
+    凭证的端点（chat / conversations / edge 上报）因此**自动**获得该保护。
+    """
+    claims = _claims_or_401(credentials)
+    if is_device_token(claims):
+        _ensure_device_token_valid(claims)
+    return claims
+
+
+async def get_current_device(
+    claims: dict[str, Any] = Depends(get_current_claims),
+) -> str:
+    """FastAPI 依赖项：要求**设备 token**，返回 ``device_id``；用户 token 一律 403。
+
+    用于"只有设备会调"的端点（如设备上报），避免用户 token 伪造设备身份。
+    """
+    if not is_device_token(claims):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="该接口仅接受设备 token")
+    return str(claims["device_id"])

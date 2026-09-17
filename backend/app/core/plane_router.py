@@ -28,8 +28,10 @@ from __future__ import annotations
 import json
 import re
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterator
 
 from langchain_core.messages import BaseMessage
 
@@ -458,6 +460,85 @@ def _tool_schema_version() -> str:
 # ============================================================
 # 交接摘要（handoff）：端↔云切换时把"已建立的事实"带过去
 # ============================================================
+
+#: 本次请求内各角色的路由事件（contextvar 隔离）。
+#: 为什么不用工厂上的 ``last_route_event`` 字典：那是**全局**的，两个并发请求会互相
+#: 串台（A 请求读到的"执行位置"里混进了 B 请求的角色），而 contextvar 天然按任务隔离。
+_route_events: ContextVar[dict[str, "RouteEvent"] | None] = ContextVar(
+    "sekb_route_events", default=None)
+
+
+@contextmanager
+def collect_route_events() -> Iterator[dict[str, "RouteEvent"]]:
+    """收集**本次请求**内所有角色的路由事件。
+
+    用法::
+
+        with collect_route_events() as events:
+            result = await graph.ainvoke(...)
+        payload = summarize_route_events(events)
+    """
+    bucket: dict[str, RouteEvent] = {}
+    token = _route_events.set(bucket)
+    try:
+        yield bucket
+    finally:
+        _route_events.reset(token)
+
+
+def record_route_event(role: str, event: "RouteEvent") -> None:
+    """把事件放进当前请求的收集器；没有收集器（如后台任务）时静默忽略。"""
+    bucket = _route_events.get()
+    if bucket is not None:
+        bucket[role] = event
+
+
+#: "产生最终答案"的角色优先级——越靠前越能代表用户实际看到的那次推理
+PRIMARY_ROLE_ORDER = ("executor", "scribe", "chitchat", "critic",
+                      "critic_complex", "planner", "supervisor")
+
+
+def summarize_route_events(events: dict[str, "RouteEvent"]) -> dict[str, Any]:
+    """把角色级事件汇总成"本次执行位置/理由"（RFC §8 的 S3）。
+
+    客户端据此能显示"这次回答是在设备上完成的"，服务端也能在一条响应里看到
+    端云混合执行的全貌（agents/graph 一次问答会经过多个角色）。
+    """
+    if not events:
+        return {"primary_plane": "", "roles": [], "by_plane": {}, "escalated": 0}
+
+    def rank(item: tuple[str, "RouteEvent"]) -> tuple[int, float]:
+        role, ev = item
+        order = PRIMARY_ROLE_ORDER.index(role) if role in PRIMARY_ROLE_ORDER else len(
+            PRIMARY_ROLE_ORDER)
+        return (order, -float(getattr(ev, "latency_ms", 0.0) or 0.0))
+
+    primary_role, primary = sorted(events.items(), key=rank)[0]
+    by_plane: dict[str, int] = {}
+    for ev in events.values():
+        by_plane[ev.plane] = by_plane.get(ev.plane, 0) + 1
+    edge_decided = [e for e in events.values() if e.plane == PLANE_EDGE or e.escalated]
+    edge_done = [e for e in edge_decided if not e.escalated]
+    return {
+        "primary_plane": primary.plane,
+        "primary_role": primary_role,
+        "model": primary.model,
+        "reason": primary.reason,
+        "tier": primary.tier,
+        "escalated": sum(1 for e in events.values() if e.escalated),
+        "by_plane": by_plane,
+        "edge_decided": len(edge_decided),
+        "edge_completed": len(edge_done),
+        "latency_ms": round(float(getattr(primary, "latency_ms", 0.0) or 0.0), 1),
+        "versions": dict(primary.versions or {}),
+        "roles": [
+            {"role": role, "plane": ev.plane, "model": ev.model, "reason": ev.reason,
+             "escalated": ev.escalated, "signals": list(ev.signals or []),
+             "latency_ms": round(float(getattr(ev, "latency_ms", 0.0) or 0.0), 1)}
+            for role, ev in sorted(events.items(), key=lambda kv: kv[0])
+        ],
+    }
+
 
 @dataclass
 class HandoffFacts:

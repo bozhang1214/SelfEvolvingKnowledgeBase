@@ -38,6 +38,9 @@ class AuditAction(str, Enum):
     LOGIN_FAILED = "login_failed"
     LOGOUT = "logout"
     TOKEN_REFRESH = "token_refresh"
+    #: 设备接入/吊销（端云协同 S1）：设备凭证的生命周期必须留审计痕迹
+    DEVICE_ENROLL = "device_enroll"
+    DEVICE_REVOKE = "device_revoke"
 
     # 资源访问
     KNOWLEDGE_UPLOAD = "knowledge_upload"

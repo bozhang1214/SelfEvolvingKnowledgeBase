@@ -36,7 +36,7 @@ from fastapi import (
 from pydantic import BaseModel, Field
 
 from app.api.server import get_app_context
-from app.core.access import require_full_access
+from app.core.access import require_user_account
 from app.core.auth import get_current_user
 from app.core.bootstrap import AppContext
 from app.core.exceptions import SEKBError
@@ -46,7 +46,10 @@ from app.services import upload_service
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/upload", tags=["upload"],
-    dependencies=[Depends(require_full_access)],
+    # 设备 token 不得触碰这里（端云协同 S1 的最小权限边界）：
+    # 设备凭证长效（30 天）且存在客户端本地，一旦泄漏只能"替用户用"（聊天/上报/同步），
+    # 不能读写知识资产。设备的读取路径是 chat 里的 RAG，不经过本路由。
+    dependencies=[Depends(require_user_account)],
 )
 
 

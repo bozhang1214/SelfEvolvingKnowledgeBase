@@ -7,6 +7,7 @@
 
 | 工作流 | 负责人 | 涉及文件（重点） | 开始时间 |
 |---|---|---|---|
+| M2 端侧宿主（SEKB 侧 S1/S3 + 独立 repo + Android） | DSH Agent | `backend/app/{core,api,storage}`、`docs/RFC-端云协同与端侧Agent.md`、`docs/ops/16-端云协同协议.md`、`scripts/gitea_mirror.py` | 2026-09-17 16:40 |
 
 > 注：2026-09-15 的 JobCopilot P1–P7、招聘分析、科技资讯告警接线与限流读写分离
 > 等轮次均已收工（详情见 `docs/CHANGELOG.md`）。

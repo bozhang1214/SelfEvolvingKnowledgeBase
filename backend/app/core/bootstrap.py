@@ -84,6 +84,8 @@ class AppContext:
     vector_store: DirectVectorStore | None = None
     # 用户存储（Phase 3，可选）
     user_storage: UserStorage | None = None
+    # 设备身份注册表（端云协同 S1，可选）：端侧设备凭证的生命周期管理
+    device_storage: Any = None
     # 知识库分享存储（Phase 3）
     share_storage: Any = None
     # 聊天会话分享存储（Phase 3）
@@ -302,6 +304,10 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
     # 11. 初始化用户存储（Phase 3 鉴权系统）
     storage_dir = config.storage.data_dir or str(Path(config_path).parent / "data")
     user_storage = UserStorage(storage_dir)
+    # 设备身份注册表（端云协同 S1）：与路由日志同在 data_dir 下，随数据卷备份
+    from app.storage.device_storage import DeviceStore
+
+    device_storage = DeviceStore(Path(storage_dir) / "devices.json")
 
     # 11.1 初始化知识库分享存储（Phase 3）
     from app.storage.share_storage import ShareStorage
@@ -358,6 +364,7 @@ async def initialize_app(config_path: str = "config.yaml") -> AppContext:
         knowledge_base=knowledge_base,
         vector_store=vector_store,
         user_storage=user_storage,
+        device_storage=device_storage,
         share_storage=share_storage,
         chat_share_storage=chat_share_storage,
         knowledge_ingester=knowledge_ingester,

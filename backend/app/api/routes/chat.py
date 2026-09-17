@@ -35,6 +35,7 @@ from app.core.bootstrap import AppContext
 from app.core.exceptions import SecurityError, SEKBError
 from app.core.logging import bind_context, clear_context, get_logger
 from app.core.metrics import record_chat_error, record_chat_metrics
+from app.core.plane_router import collect_route_events, summarize_route_events
 from app.core.token_sink import reset_token_sink, set_token_sink
 from app.core.utils import to_state_dict
 from app.graph.state import create_initial_state
@@ -86,6 +87,27 @@ class ChatRequest(BaseModel):
     user_id: str = Field(_DEFAULT_USER_ID, description="用户 ID")
 
 
+class ExecutionInfo(BaseModel):
+    """本次回答的**执行位置与理由**（RFC §8 的 S3，端云协同的可见性）。
+
+    为什么要回给客户端：端侧宿主必须能显示"这次是在设备上算的还是上云了"，
+    否则用户无法判断自己的数据有没有出端；这也是"可证明的隐私"（§4.5-G）的用户可见面。
+    """
+
+    primary_plane: str = Field("", description="产生最终答案的平面：edge | cloud")
+    primary_role: str = Field("", description="产生最终答案的角色")
+    model: str = Field("", description="实际使用的模型名")
+    reason: str = Field("", description="路由决策理由（如 edge_preferred）")
+    tier: str = Field("", description="端侧档位 short|default|quality")
+    escalated: int = Field(0, description="本次请求中发生升级的角色数")
+    by_plane: dict = Field(default_factory=dict, description="各平面参与的角色数")
+    edge_decided: int = Field(0, description="判给端侧的角色数（含升级的）")
+    edge_completed: int = Field(0, description="在端侧真正完成的角色数")
+    latency_ms: float = Field(0.0, description="主角色耗时")
+    versions: dict = Field(default_factory=dict, description="版本戳（§4.5-F）")
+    roles: list = Field(default_factory=list, description="逐角色的落点明细")
+
+
 class ChatResponse(BaseModel):
     """聊天响应（非流式）。"""
 
@@ -97,6 +119,8 @@ class ChatResponse(BaseModel):
     trace_id: str = Field(..., description="本次调用的 trace ID")
     meta: dict = Field(default_factory=dict, description="扩展元信息（知识入库状态等）")
     degraded: bool = Field(False, description="本次是否发生 LLM 降级（reasoner→chat）")
+    execution: ExecutionInfo = Field(default_factory=ExecutionInfo,
+                                     description="本次执行位置/理由（端云协同 S3）")
 
 
 # ============================================================
@@ -200,7 +224,12 @@ async def _run_chat(
     state["llm_stats_snapshot"] = ctx.llm_factory.snapshot_stats()
 
     # 4. 运行 LangGraph（P0-2 修复：全局异常兜底，避免工作流中断导致 500）
+    #    用 contextvar 收集**本次请求**内各角色的路由事件 → 汇总成 execution（S3）
     start_time = time.time()
+    # 手工 __enter__/__exit__ 而不是 with：下面这段已有 try/finally 降级兜底，
+    # 用 with 会把整段再缩进一层——那种 diff 无法 review。
+    _ev_cm = collect_route_events()
+    route_events: dict[str, Any] = _ev_cm.__enter__()
     try:
         try:
             # 用 astream_events 流式执行：节点「开始」即推送思考进度（task 4 修复：
@@ -245,6 +274,7 @@ async def _run_chat(
                 "tool_calls": [],
             }
     finally:
+        _ev_cm.__exit__(None, None, None)
         clear_context()
 
     latency_ms = int((time.time() - start_time) * 1000)
@@ -374,6 +404,7 @@ async def _run_chat(
         "latency_ms": latency_ms,
         "ingest_status": ingest_status,
         "ingest_reason": ingest_reason,
+        "execution": summarize_route_events(route_events),
     }
 
 
@@ -458,6 +489,7 @@ async def chat(
         metrics=result["metrics"],
         trace_id=result["trace_id"],
         degraded=bool(result.get("metrics", {}).get("llm_degraded", False)),
+        execution=ExecutionInfo(**(result.get("execution") or {})),
         meta={
             "title": result.get("title", ""),
             "ingest_status": result.get("ingest_status", "disabled"),
@@ -604,6 +636,8 @@ async def chat_stream(
                     "ingest_status": result.get("ingest_status", "disabled"),
                     "ingest_reason": result.get("ingest_reason", ""),
                     "degraded": bool(result.get("metrics", {}).get("llm_degraded", False)),
+                    # 端云协同 S3：客户端据此显示"本次在设备上/云端完成"
+                    "execution": result.get("execution", {}),
                 }
                 done_payload = json.dumps(
                     {"type": "done", "meta": meta}, ensure_ascii=False

@@ -10,7 +10,7 @@ API 路由 TestClient 测试（Batch 2 测试工具集成）
 
 技术要点：
 - 挂载真实 knowledge.router 到迷你 FastAPI app，避免启动完整应用
-- 通过 dependency_overrides 替换 get_current_user / require_full_access
+- 通过 dependency_overrides 替换 get_current_user / require_full_access / get_current_claims
 - 通过 monkeypatch 替换路由模块内的 get_app_context 引用
 """
 
@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import knowledge as knowledge_route
 from app.core.access import require_full_access
-from app.core.auth import get_current_user
+from app.core.auth import get_current_claims, get_current_user
 from app.memory.knowledge_entry import KnowledgeEntry
 
 
@@ -47,6 +47,9 @@ def client():
     app.include_router(knowledge_route.router)
     app.dependency_overrides[get_current_user] = lambda: "user-test-1"
     app.dependency_overrides[require_full_access] = lambda: None
+    # 设备 token 闸门（require_user_account）会读 claims 判断 typ，
+    # 所以"已登录用户"的测试替身必须同时给出 claims。
+    app.dependency_overrides[get_current_claims] = lambda: {"sub": "user-test-1"}
     return TestClient(app)
 
 

@@ -39,6 +39,7 @@ related: [docs/tech/00-README]
 | 13 | [13-DISK-MEMORY.md](./13-DISK-MEMORY.md) | 磁盘与内存巡检/清理手册（构建缓存、journal、PSI 判读） | 部署报磁盘不足、内存告警时 |
 | 14 | [14-CHANGE-RELEASE-POLICY.md](./14-CHANGE-RELEASE-POLICY.md) | 变更与发布操作规约（HIL 闸门/回滚/审计） | 任何生产变更前 |
 | 15 | [15-MCP-ENDPOINT.md](./15-MCP-ENDPOINT.md) | JobCopilot MCP 公网端点（云端平台接入、令牌轮换、安全边界） | 接云端平台、换令牌、排查 401/421 时 |
+| 16 | [16-端云协同协议.md](./16-端云协同协议.md) | 端侧宿主 ↔ SEKB 协议契约（设备凭证、SSE 事件、执行位置、权限边界） | 写端侧客户端、排查「为什么走了云端」时 |
 
 ## 关联
 
