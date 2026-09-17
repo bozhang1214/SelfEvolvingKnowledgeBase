@@ -472,18 +472,33 @@ class LLMFactory:
         不做 tenacity 重试（流式重试需重放整个流，成本高且易错），
         调用方（Executor）在失败时自行兜底。
         """
-        # 流式路径只做**决策**不做升级：token 一旦吐给用户就收不回，
-        # 升级需要"已输出多少字符"的续写协议（RFC §4.5-C，属 M1 后续项）。
+        # 流式路径的升级用**前缀守卫**实现：token 一旦吐给用户就收不回，所以在端侧
+        # 先攒够 guard_chars 再判断，命中信号就丢弃这段改用云端——用户此时什么都没看到，
+        # 等于"免费改道"（RFC §4.5-C）。攒不满就说明输出本来就短，走完整评估。
         stream_plane: str | None = plane
+        guard_chars = 0
+        decision = None
         if plane is None and self._routed is not None:
             decision = self._routed.router.decide(
                 role, messages, max_output_tokens=expected_output_tokens,
                 device_data=device_data)
             stream_plane = decision.plane
+            if (decision.is_edge
+                    and self._routed.router.escalation_allowed(decision)):
+                guard_chars = int(getattr(self._routed.router._routing,
+                                          "stream_guard_chars", 0) or 0)
             self.last_route_event[role] = RouterEventLite(
-                role=role, plane=decision.plane, reason=decision.reason + "|stream_no_escalate",
+                role=role, plane=decision.plane,
+                reason=decision.reason + ("|stream_guard" if guard_chars else "|stream_no_escalate"),
                 tier=decision.tier, input_tokens=decision.input_tokens,
                 versions=self._routed.router.versions(role))
+
+        if guard_chars > 0 and decision is not None:
+            async for piece in self._astream_guarded(
+                    role, messages, decision, guard_chars, expected_output_tokens,
+                    device_data, **kwargs):
+                yield piece
+            return
 
         llm = self.get(role, stream_plane)
         actual_model = self.get_actual_model(role, stream_plane)
@@ -528,6 +543,105 @@ class LLMFactory:
             degraded=is_degraded,
             error=None,
         ))
+
+    async def _stream_raw(self, role: str, messages: list[Any], plane: str | None,
+                         **kwargs: Any):
+        """按指定平面裸流式产出文本块（不含统计、不含路由）。"""
+        llm = self.get(role, plane)
+        async for chunk in llm.astream(messages, config=get_trace_config(), **kwargs):
+            text = chunk.content if hasattr(chunk, "content") else str(chunk)
+            if text:
+                yield text
+
+    async def _astream_guarded(
+        self,
+        role: str,
+        messages: list[Any],
+        decision: Any,
+        guard_chars: int,
+        expected_output_tokens: int | None,
+        device_data: bool,
+        **kwargs: Any,
+    ):
+        """端侧流式的**前缀守卫**：先攒 ``guard_chars`` 再决定是否改道云端。
+
+        只对"在半截输出上也有意义"的信号判断（``json_invalid`` 除外，见
+        :meth:`PlaneRouter.stream_guard`）。被丢弃的端侧那次**不计入调用失败统计**——
+        它是一次策略性放弃而非错误，决策本身记在路由事件里（可观测性走路由日志）。
+        """
+        # 局部导入避免与 plane_router 形成循环依赖（同 attach_router 的处理）
+        from app.core.plane_router import PLANE_CLOUD, RouteEvent, inject_handoff
+
+        assert self._routed is not None
+        routed = self._routed
+        start_time = time.time()
+        prefix: list[str] = []
+        prefix_len = 0
+        stream = self._stream_raw(role, messages, decision.plane, **kwargs)
+        async for piece in stream:
+            prefix.append(piece)
+            prefix_len += len(piece)
+            if prefix_len >= guard_chars:
+                break
+
+        role_cfg = self.config.llm.roles.get(role)
+        fmt = getattr(role_cfg, "response_format", None)
+        signals = routed.stream_guard(
+            "".join(prefix), response_format=fmt,
+            available_tools=set(routed.router._available_tools()))
+
+        if routed.router.should_escalate(signals):
+            # 用户还没看到任何字符 → 丢弃前缀，交云端重做并注入交接摘要
+            fallback = RouterEventLite(
+                role=role, plane=PLANE_CLOUD,
+                reason=f"stream_prefix_guard({','.join(signals)})",
+                tier=decision.tier, input_tokens=decision.input_tokens,
+                versions=routed.router.versions(role))
+            self.last_route_event[role] = fallback
+            logger.warning("端侧流式前缀不达标，已改道云端（用户未见到任何 token）",
+                           role=role, signals=signals, prefix_chars=prefix_len)
+            event_for_handoff = RouteEvent(
+                role=role, plane=decision.plane, reason=decision.reason,
+                model=self.get_actual_model(role, decision.plane), tier=decision.tier,
+                input_tokens=decision.input_tokens, signals=signals,
+                escalate_reason=",".join(signals),
+                versions=routed.router.versions(role))
+            note = routed.handoff.from_event(event_for_handoff, "".join(prefix))
+            event_for_handoff.handoff = note
+            cloud_messages = inject_handoff(messages, note)
+            async for piece in self._stream_raw(role, cloud_messages, PLANE_CLOUD, **kwargs):
+                yield piece
+            await self._record_call(LLMCallRecord(
+                role=role, model=self.get_actual_model(role, PLANE_CLOUD),
+                configured_model=self.get_actual_model(role, PLANE_CLOUD),
+                input_tokens=0, output_tokens=0,
+                latency_ms=int((time.time() - start_time) * 1000), cost_usd=0.0,
+                success=True, retried=False, retry_count=0,
+                degraded=self.is_degraded(role, PLANE_CLOUD), error=None))
+            return
+
+        # 前缀通过 → 放行已缓冲内容 + 续完剩余流（此后不再有改道机会）
+        for piece in prefix:
+            yield piece
+        try:
+            async for piece in stream:
+                yield piece
+        except Exception as e:
+            await self._record_call(LLMCallRecord(
+                role=role, model=self.get_actual_model(role, decision.plane),
+                configured_model=self.get_actual_model(role, decision.plane),
+                input_tokens=0, output_tokens=0,
+                latency_ms=int((time.time() - start_time) * 1000), cost_usd=0.0,
+                success=False, retried=False, retry_count=0,
+                degraded=self.is_degraded(role, decision.plane), error=str(e)))
+            raise
+        await self._record_call(LLMCallRecord(
+            role=role, model=self.get_actual_model(role, decision.plane),
+            configured_model=self.get_actual_model(role, decision.plane),
+            input_tokens=0, output_tokens=0,
+            latency_ms=int((time.time() - start_time) * 1000), cost_usd=0.0,
+            success=True, retried=False, retry_count=0,
+            degraded=self.is_degraded(role, decision.plane), error=None))
 
     # ============================================================
     # Per-request 统计快照（P0-1 修复：避免全局统计污染）

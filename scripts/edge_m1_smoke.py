@@ -109,8 +109,30 @@ async def main() -> int:
     print(f"   主链路调用: 平面={ev_main.plane} 模型={ev_main.model} 延迟={ms:.0f}ms"
           f"（对比未预热的冷启动 6547ms）")
 
+    # ---- 流式路径 + 前缀守卫：真实 SSE 流经端侧守卫（M1 第三批） ----
+    # 守卫会让首字延迟增加"攒够 stream_guard_chars"的时间，这里把它单独量出来：
+    # 这是"能改道"换来的代价，必须诚实记录（RFC §2.4）。
+    print("── 流式路径（前缀守卫：先攒 stream_guard_chars 再决定是否改道云端）")
+    guard_chars = factory.config.llm.planes.routing.stream_guard_chars
+    t2 = _t.perf_counter()
+    first_ms: float | None = None
+    pieces: list[str] = []
+    async for piece in factory.astream_with_stats(
+            "supervisor",
+            [HumanMessage(content="端侧推理为什么省电？用一句话回答。")]):
+        if first_ms is None:
+            first_ms = (_t.perf_counter() - t2) * 1000
+        pieces.append(piece)
+    stream_ms = (_t.perf_counter() - t2) * 1000
+    ev_stream = factory.last_route_event["supervisor"]
+    text_stream = "".join(pieces)
+    print(f"   守卫={guard_chars}字符  平面={ev_stream.plane}  原因={ev_stream.reason}")
+    print(f"   首字={first_ms or 0:.0f}ms（含守卫缓冲）  总={stream_ms:.0f}ms  字符数={len(text_stream)}")
+    print(f"   输出={text_stream[:120]!r}")
+
     ok = (s["edge_decided"] >= 1 and s["total"] == 2
-          and ev_main.plane == PLANE_EDGE and ms < 3000)
+          and ev_main.plane == PLANE_EDGE and ms < 3000
+          and len(text_stream) > 5)
     print("\n✅ M1 冒烟通过：短任务落端侧、长输出落云端、事件与指标齐全" if ok
           else "\n❌ M1 冒烟未达预期，请检查上面的路由原因")
     return 0 if ok else 1

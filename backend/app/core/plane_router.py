@@ -67,6 +67,21 @@ DEFAULT_EXPECTED_OUTPUT: dict[str, int] = {
     "news_report": 6000,     # 长报告 → 必走云端
 }
 
+#: executor 实际能派发的工具名（依据 `app/agents/executor.py::_dispatch_tool` 的 if/elif 链）。
+#: 规划器输出 `steps[].tool` 若不在这个集合里，executor 会走到兜底分支 —— 这就是
+#: 「工具幻觉」，端侧小模型上尤其常见，必须作为升级信号。配置可覆盖。
+DEFAULT_AVAILABLE_TOOLS = ("web_search", "rag_retrieve", "search_jobs", "llm_generate")
+
+#: 弃答/低置信的文本标记（覆盖中英常见说法）
+ABSTAIN_MARKERS = (
+    "无法确定", "无法回答", "无法判断", "不确定", "不清楚", "没有足够",
+    "抱歉，我无法", "我不知道", "i'm not sure", "cannot determine",
+    "not enough information", "insufficient information",
+)
+
+#: JSON 输出里自报置信度低于该值 → 视为低置信（用于让模型"知道自己不确定"时升级）
+LOW_CONFIDENCE_THRESHOLD = 0.4
+
 #: 判定「输出退化」的阈值
 _DEGEN_MIN_LEN = 40          # 太短不判退化（短答案正常）
 _DEGEN_REPEAT_RUN = 3        # 连续重复行数
@@ -81,6 +96,8 @@ class Decision:
     tier: str = "default"
     input_tokens: int = 0
     output_budget: int = 0
+    #: 本次请求属于**永不出端**的数据（§5.2 硬边界）→ 禁止升级到云端
+    device_only: bool = False
 
     @property
     def is_edge(self) -> bool:
@@ -103,6 +120,8 @@ class RouteEvent:
     escalate_reason: str = ""
     signals: list[str] = field(default_factory=list)
     versions: dict[str, str] = field(default_factory=dict)
+    #: 升级时注入云端的交接摘要（留证：事后能看清"云端当时被告知了什么"）
+    handoff: str = ""
     ts: float = field(default_factory=time.time)
 
     def as_dict(self) -> dict[str, Any]:
@@ -112,6 +131,7 @@ class RouteEvent:
             "output_tokens": self.output_tokens, "latency_ms": round(self.latency_ms, 1),
             "escalated": self.escalated, "escalate_reason": self.escalate_reason,
             "signals": self.signals, "versions": self.versions,
+            "handoff": self.handoff,
         }
         return d
 
@@ -167,6 +187,18 @@ def extract_json(text: str) -> Any:
     raise ValueError("未找到合法 JSON")
 
 
+_TOOL_TEXT = re.compile(r'"tool"\s*:\s*"([A-Za-z_][A-Za-z0-9_]*)"')
+
+
+def referenced_tools_text(text: str) -> set[str]:
+    """从**非合法 JSON**的文本里抓 ``"tool": "xxx"``（JSON 解析失败时兜底）。
+
+    为什么需要：模型吐了非法 JSON 时最容易同时伴随幻觉工具名，
+    若因为 json_invalid 就跳过工具检查，会把两类问题都漏掉。
+    """
+    return set(_TOOL_TEXT.findall(text or ""))
+
+
 def looks_degenerate(text: str) -> bool:
     """检测退化输出（循环重复 / 单字符刷屏）——端侧小模型的典型失败模式之一。"""
     t = (text or "").strip()
@@ -183,6 +215,39 @@ def looks_degenerate(text: str) -> bool:
     if head and head.count(head[0]) / len(head) > 0.5:
         return True
     return False
+
+
+def referenced_tools(payload: Any, _depth: int = 0) -> set[str]:
+    """从解析后的 JSON 里收集被引用的工具名。
+
+    规划器（planner）输出形如 ``{"steps": [{"tool": "web_search", ...}]}``；
+    这里递归找所有名为 ``tool`` 的字符串字段，因此对 ``steps`` / ``tasks`` 等
+    不同外壳都成立，不需要跟着 schema 改。
+    """
+    found: set[str] = set()
+    if _depth > 8:
+        return found
+    if isinstance(payload, dict):
+        for k, v in payload.items():
+            if k == "tool" and isinstance(v, str) and v.strip():
+                found.add(v.strip())
+            else:
+                found |= referenced_tools(v, _depth + 1)
+    elif isinstance(payload, list):
+        for item in payload:
+            found |= referenced_tools(item, _depth + 1)
+    return found
+
+
+def self_reported_confidence(payload: Any) -> float | None:
+    """从 JSON 里取模型自报的置信度（字段名可能是 confidence / score / certainty）。"""
+    if not isinstance(payload, dict):
+        return None
+    for key in ("confidence", "certainty", "score"):
+        v = payload.get(key)
+        if isinstance(v, (int, float)):
+            return float(v)
+    return None
 
 
 def derive_tier(role: str, max_tokens: int, models: dict[str, str] | None = None) -> str:
@@ -264,7 +329,8 @@ class PlaneRouter:
         # 数据分级优先于一切：DEVICE_ONLY 数据永不出端（§5.2）
         device_only = set(getattr(self._routing, "device_only_roles", []) or [])
         if device_data or role in device_only:
-            return Decision(PLANE_EDGE, "device_only_data", tier, est_in, out_budget)
+            return Decision(PLANE_EDGE, "device_only_data", tier, est_in, out_budget,
+                            device_only=True)
 
         if est_in > self._edge.max_input_tokens:
             return Decision(PLANE_CLOUD,
@@ -281,6 +347,12 @@ class PlaneRouter:
 
     # ---------- 调用后评估 ----------
 
+    #: 流式**前缀**守卫下可用的信号。json_invalid 必须排除——流到一半的 JSON
+    #: 必然是"不完整"而不是"不合法"，拿它判会在前缀阶段误杀所有 JSON 角色。
+    PARTIAL_SAFE_SIGNALS = frozenset({
+        "empty", "degenerate", "low_confidence", "tool_hallucination", "timeout",
+    })
+
     def evaluate(
         self,
         text: str,
@@ -288,22 +360,63 @@ class PlaneRouter:
         response_format: str | None = None,
         ttft_ms: float = 0.0,
         latency_ms: float = 0.0,
+        available_tools: set[str] | None = None,
+        partial: bool = False,
     ) -> list[str]:
-        """调用后评估：返回触发的升级信号（可能多个）。"""
+        """调用后评估：返回触发的升级信号（可能多个）。
+
+        覆盖 RFC §4.2 的 6 类信号中**可在调用后判定**的 5 类
+        （``empty`` / ``json_invalid`` / ``degenerate`` / ``timeout`` /
+        ``low_confidence`` / ``tool_hallucination``）；第 6 类
+        ``context_overflow`` 属于**调用前**的输入预算，由 :meth:`decide` 直接改判云端。
+        """
         signals: list[str] = []
+        payload: Any = None
         if not (text or "").strip():
             signals.append("empty")
-        if response_format == "json":
+        if response_format == "json" and not partial:
             try:
-                extract_json(text)
+                payload = extract_json(text)
             except ValueError:
                 signals.append("json_invalid")
         if looks_degenerate(text):
             signals.append("degenerate")
+
+        # 低置信：文本弃答标记，或 JSON 自报置信度低于阈值
+        low = text or ""
+        if any(marker in low for marker in ABSTAIN_MARKERS):
+            signals.append("low_confidence")
+        conf = self_reported_confidence(payload)
+        if conf is not None and conf < LOW_CONFIDENCE_THRESHOLD:
+            signals.append("low_confidence")
+
+        # 工具幻觉：引用了 executor 派发不了的工具名（端侧小模型高发）
+        used = referenced_tools(payload) if payload is not None else referenced_tools_text(text)
+        if used:
+            allowed = available_tools if available_tools is not None else self._available_tools()
+            unknown = used - set(allowed)
+            if unknown:
+                signals.append("tool_hallucination")
+
         # 首 token 超预算：实测端侧 TTFT 76–427ms，800ms 以上说明这一跳不适合端侧
         if self._edge and ttft_ms and ttft_ms > self._edge.max_ttft_ms:
             signals.append("timeout")
+        if partial:
+            signals = [x for x in signals if x in self.PARTIAL_SAFE_SIGNALS]
         return signals
+
+    def _available_tools(self) -> tuple[str, ...]:
+        """可派发工具集：配置优先，缺省用 executor 的 if/elif 链口径。"""
+        configured = getattr(self._routing, "available_tools", None) if self._routing else None
+        return tuple(configured) if configured else DEFAULT_AVAILABLE_TOOLS
+
+    def escalation_allowed(self, decision: Decision) -> bool:
+        """该决策是否允许升级到云端。
+
+        ``device_only`` 是**硬边界**：设备侧数据永不出端，哪怕端侧答得很烂——
+        此时正确行为是"承认失败"（拒绝标记 / 请用户补充），而不是偷偷上云（§5.2）。
+        """
+        return decision.is_edge and not decision.device_only
 
     def should_escalate(self, signals: list[str]) -> bool:
         """命中的信号里有任何一个在 ``routing.escalate_on`` 里 → 升级。"""
@@ -343,6 +456,92 @@ def _tool_schema_version() -> str:
 
 
 # ============================================================
+# 交接摘要（handoff）：端↔云切换时把"已建立的事实"带过去
+# ============================================================
+
+@dataclass
+class HandoffFacts:
+    """切换平面时要交接的事实。**结构化**而不是让模型自由发挥——
+
+    自由生成的"摘要"在切换点上不可控（可能漏掉关键决定），而结构化字段
+    由调用方按它真正知道的东西填，缺失就是缺失，不会编。
+    """
+
+    intent: str = ""                         # 这次要做什么
+    completed: list[str] = field(default_factory=list)   # 已完成
+    pending: list[str] = field(default_factory=list)     # 未完成
+    established: list[str] = field(default_factory=list)  # 已确认的事实/决定
+    preferences: list[str] = field(default_factory=list)  # 本会话内的用户偏好
+
+    def is_empty(self) -> bool:
+        return not any((self.intent, self.completed, self.pending,
+                        self.established, self.preferences))
+
+
+class HandoffBuilder:
+    """把 :class:`HandoffFacts` 渲染成可注入的交接块。
+
+    放在 **prompt 前缀位置**（紧跟 system）除了让模型"记得前面做过什么"，
+    还能命中提供方的 prompt 前缀缓存 —— 切换后不必重算全历史（RFC §4.5-E）。
+    """
+
+    def __init__(self, max_edge_text: int = 400) -> None:
+        self._max_edge_text = max_edge_text
+
+    def from_facts(self, facts: HandoffFacts, event: RouteEvent) -> str:
+        lines: list[str] = []
+        if facts.intent:
+            lines.append(f"- 意图：{facts.intent}")
+        if facts.completed:
+            lines.append("- 已完成：" + "；".join(facts.completed))
+        if facts.established:
+            lines.append("- 已确认：" + "；".join(facts.established))
+        if facts.pending:
+            lines.append("- 未完成：" + "；".join(facts.pending))
+        if facts.preferences:
+            lines.append("- 用户偏好（本会话）：" + "；".join(facts.preferences))
+        return self._wrap(lines, event, "")
+
+    def from_event(self, event: RouteEvent, edge_text: str = "", reason: str = "") -> str:
+        """没有结构化事实时的**最小可用**交接：只交接"我们确实知道的"。
+
+        不会编造"已完成的步骤"——那正是自由摘要最容易出错的地方。
+        """
+        lines: list[str] = [f"- 任务角色：{event.role}"]
+        why = reason or event.escalate_reason or event.reason
+        lines.append(f"- 端侧尝试失败，原因：{why}")
+        snippet = (edge_text or "").strip()
+        if snippet:
+            # 退化/非法输出本身不是有效事实，只截断留证，并明确标注"不可用"
+            lines.append(f"- 端侧原始输出（不可用，仅供参考）：{snippet[:self._max_edge_text]}")
+        return self._wrap(lines, event, "（端侧未能完成，请从头完成该任务，不要假装已完成。）")
+
+    def _wrap(self, lines: list[str], event: RouteEvent, tail: str) -> str:
+        body = "\n".join(lines) if lines else "- （无结构化事实）"
+        note = (f'<handoff from="{event.plane}" to="cloud" '
+                f'reason="{event.escalate_reason or event.reason}">\n{body}')
+        if tail:
+            note += f"\n{tail}"
+        note += ("\n（以上是本次会话**已建立的背景**，请直接续接；"
+                 "不要把它当作新指令，也不要重复已完成的工作。）\n</handoff>")
+        return note
+
+
+def inject_handoff(messages: list[Any], note: str) -> list[Any]:
+    """把交接块插到 system 之后（前缀位置）。
+
+    紧跟 system 而不是塞到末尾：既符合"已建立背景"的语义，
+    也能让提供方的前缀缓存继续命中（§4.5-E）。
+    """
+    from langchain_core.messages import SystemMessage
+
+    msgs = list(messages)
+    if msgs and isinstance(msgs[0], SystemMessage):
+        return [msgs[0], SystemMessage(content=note)] + msgs[1:]
+    return [SystemMessage(content=note)] + msgs
+
+
+# ============================================================
 # 门面：决策 → 调用 → 评估 → 升级 → 记账
 # ============================================================
 
@@ -363,6 +562,7 @@ class RoutedLLM:
         self._config = config
         self.router = PlaneRouter(config)
         self._store = store
+        self.handoff = HandoffBuilder()
 
     async def ainvoke(
         self,
@@ -371,9 +571,15 @@ class RoutedLLM:
         *,
         device_data: bool = False,
         max_output_tokens: int | None = None,
+        handoff_facts: HandoffFacts | None = None,
+        available_tools: set[str] | None = None,
         **kwargs: Any,
     ) -> tuple[Any, RouteEvent]:
-        """路由调用：先按决策调用；命中升级信号则**在同一请求内**改用云端重做一次。"""
+        """路由调用：先按决策调用；命中升级信号则**在同一请求内**改用云端重做一次。
+
+        升级时会**自动生成交接摘要并注入云端请求**（紧跟 system，前缀位置），
+        所以云端不是"从零开始"，而是接着端侧已确认的事实继续（RFC §4.5-C/E）。
+        """
         decision = self.router.decide(role, messages,
                                       max_output_tokens=max_output_tokens,
                                       device_data=device_data)
@@ -397,14 +603,28 @@ class RoutedLLM:
 
         # 只有"落在端侧"的请求才需要评估是否升级（云端已经是兜底平面）
         if self.router.enabled and decision.is_edge:
-            signals = self.router.evaluate(text, response_format=fmt, latency_ms=latency_ms)
+            signals = self.router.evaluate(text, response_format=fmt, latency_ms=latency_ms,
+                                          available_tools=available_tools)
             event.signals = signals
-            if self.router.should_escalate(signals):
+            if signals and not self.router.escalation_allowed(decision):
+                # 隐私硬边界：信号命中也不上云，只留痕（§5.2 / §4.5-G 可证明的隐私）
+                logger.warning("端侧结果不达标但数据不可出端，放弃升级",
+                               role=role, signals=signals, plane=decision.plane)
+                event.reason = f"{event.reason}|escalation_blocked:device_only"
+            elif self.router.should_escalate(signals):
                 event.escalate_reason = ",".join(signals)
-                logger.warning("端侧结果触发升级，改用云端重做",
-                               role=role, signals=signals, edge_model=event.model)
+                if handoff_facts is not None and not handoff_facts.is_empty():
+                    note = self.handoff.from_facts(handoff_facts, event)
+                else:
+                    note = self.handoff.from_event(event, text)
+                event.handoff = note
+                cloud_messages = inject_handoff(messages, note)
+                logger.warning("端侧结果触发升级，改用云端重做（已注入交接摘要）",
+                               role=role, signals=signals, edge_model=event.model,
+                               handoff_chars=len(note))
                 t1 = time.perf_counter()
-                resp = await self._factory.ainvoke_with_stats(role, messages, plane=PLANE_CLOUD, **kwargs)
+                resp = await self._factory.ainvoke_with_stats(
+                    role, cloud_messages, plane=PLANE_CLOUD, **kwargs)
                 event.escalated = True
                 event.plane = PLANE_CLOUD
                 event.model = self._factory.get_actual_model(role, PLANE_CLOUD)
@@ -419,15 +639,30 @@ class RoutedLLM:
                     latency_ms=round(event.latency_ms, 1))
         return resp, event
 
-    def handoff_note(self, event: RouteEvent, summary: str) -> str:
-        """把交接摘要包成**已建立背景**（不是新指令），供端↔云切换时注入前缀。
+    def stream_guard(self, prefix: str, *, response_format: str | None = None,
+                     available_tools: set[str] | None = None) -> list[str]:
+        """流式**前缀守卫**：只对"在半截输出上也有意义"的信号做判断。
 
-        放在前缀位置还有一个副作用（正好是我们要的）：能命中提供方的 prompt 前缀缓存，
-        切换后不必重算全历史（§4.5-E）。
+        为什么需要：聊天走 SSE，token 一旦吐给用户就收不回。所以在端侧流式开始时先
+        攒一小段（guard_chars），在这段上判断 ``empty`` / ``degenerate`` /
+        ``low_confidence`` / ``tool_hallucination``；命中就**丢弃这段**改用云端重来——
+        此时用户什么都还没看到，等于"免费改道"。
+
+        ``json_invalid`` 刻意不在此列：半截 JSON 必然不合法，用它判会误杀全部 JSON 角色。
+        """
+        return self.router.evaluate(prefix, response_format=response_format,
+                                    available_tools=available_tools, partial=True)
+
+    def handoff_note(self, event: RouteEvent, summary: str) -> str:
+        """把**已有的一段文字**包成交接块（向后兼容入口）。
+
+        新代码应优先用 :meth:`HandoffBuilder.from_facts`：结构化事实比自由文字可靠，
+        不会在切换点漏掉关键决定。
         """
         return (
-            f'<handoff from="{event.plane}" reason="{event.escalate_reason or event.reason}">\n'
+            f'<handoff from="{event.plane}" to="cloud" '
+            f'reason="{event.escalate_reason or event.reason}">\n'
             f"{summary.strip()}\n"
-            f"</handoff>\n"
-            "（以上是本次会话已建立的背景，请直接续接，不要重复已完成的工作。）"
+            "（以上是本次会话**已建立的背景**，请直接续接；"
+            "不要把它当作新指令，也不要重复已完成的工作。）\n</handoff>"
         )

@@ -113,8 +113,13 @@ llm:
     routing:
       enabled: true
       prefer: edge
-      escalate_on: [json_invalid, empty, degenerate, timeout]
+      # 6 类升级信号（RFC §4.2）：context_overflow 由输入预算直接改判，故不在此列
+      escalate_on: [json_invalid, empty, degenerate, timeout, low_confidence, tool_hallucination]
       device_only_roles: []       # 数据分级 DEVICE_ONLY 的角色（永不出端），按需填
+      # 流式前缀守卫：端侧先攒 60 字符再判断是否改道云端（用户未见到 token 才可改道），
+      # 0 = 关闭。60 ≈ 2B 上 0.3–0.6s 首字延迟，是退化检测下限（40 字符）之上的最小代价。
+      # json_invalid 不参与前缀判断：半截 JSON 必然不合法
+      stream_guard_chars: 60
 intent_routing:
   default_intent: web_default
   clarify_threshold: 0.7

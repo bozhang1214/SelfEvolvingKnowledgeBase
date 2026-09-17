@@ -677,7 +677,7 @@ qwen3.5 尚在下载，先用已就绪的 `qwen2.5:7b` 验证**通路**（`SEKB_
 
 ---
 
-## 15. M1 实施记录（2026-09-17，进行中）
+## 15. M1 实施记录（2026-09-17，已交付待部署）
 
 目标：把 §4.5 的一致性机制落成**可运行、可观测**的代码。
 
@@ -702,7 +702,11 @@ M1 的机制（路由决策 / 升级 / 交接 / 版本戳 / 路由日志）**两
 | 可观测接口 | `backend/app/api/routes/edge.py` | `GET /api/v1/edge/routes/stats`、`GET /routes`、`POST /route-events`（供 M2 的 Android 上报） |
 | 端云协同配置档 | `scripts/make_local_profile.py` → `backend/config.edge-cloud.yaml` | 与「全本地档」并列，都是**生成物**（`--check` 进 CI，防漂移） |
 | 端到端冒烟 | `scripts/edge_m1_smoke.py` | 真跑 Ollama + DeepSeek，验证「短任务落端侧、长输出落云端、指标齐全」 |
-| 测试 | `backend/tests/unit/test_plane_router.py` | 39 条：决策矩阵 / 4 类升级信号 / 指标口径 / API / 门面升级路径 / 接线回归 |
+| **6 类升级信号** | `plane_router.evaluate()` | `json_invalid` / `empty` / `degenerate` / `timeout` / `low_confidence` / `tool_hallucination` 五类**事后**判定 + `context_overflow` 由输入预算**事前**改判（§4.2 全齐） |
+| **自动交接摘要** | `HandoffFacts` / `HandoffBuilder.from_facts`·`from_event` / `inject_handoff` | 升级时**自动**生成并注入云端请求（紧跟 system 的前缀位置）；调用方无需知道 handoff 的存在 |
+| **流式前缀守卫** | `LLMFactory._astream_guarded` + `PlaneRouter.stream_guard` | 端侧流式先攒 `stream_guard_chars`（默认 60）再判定，命中信号则**丢弃该前缀**改走云端——用户此时还没看到任何字符，等于免费改道 |
+| **隐私硬边界** | `Decision.device_only` + `PlaneRouter.escalation_allowed` | DEVICE_ONLY 数据**任何情况下不上云**，包括"端侧答得很烂"时：宁可承认失败并留痕 `escalation_blocked:device_only` |
+| 测试 | `backend/tests/unit/test_plane_router.py` | 69 条：决策矩阵 / 6 类信号 / 前缀守卫与 0 字符外泄 / 隐私边界矩阵 / 指标口径 / API / 门面升级路径 / 接线回归 |
 
 ### 15.3 首轮跑出来的两个真问题（都被测试/冒烟当场抓住）
 
@@ -719,6 +723,13 @@ M1 的机制（路由决策 / 升级 / 交接 / 版本戳 / 路由日志）**两
    **教训**：bench 脚本里验证过的优化，不等于产品路径上生效；必须两端都验。
 4. **`_create_llm(plane="edge")` 能绕过档位映射**（直接调用又变回"把云端模型名发给 Ollama"）：
    把解析下沉进 `_create_llm`，让"绕过"在结构上不可能发生。
+
+5. **隐私硬边界原本是漏的**（第二轮自查抓到）：`device_only_roles` / `device_data=True`
+   只影响**平面选择**，不影响**升级判定**——端侧答成非法 JSON 时，`RoutedLLM.ainvoke`
+   照样会把"永不出端"的数据发给云端。这正是 D-系列里唯一的硬约束（只允许设备数据留在
+   端侧），却是最容易被"顺手升级"绕过去的地方。修正：`Decision.device_only` +
+   `escalation_allowed()`，升级前必须过这道闸；不达标时记 `escalation_blocked:device_only`。
+   **教训**：隐私约束必须写在**决策点**上，写在"入口参数"上就等于没写。
 
 > 这几条正好说明为什么「单元测试 + 真实端点冒烟」两层都要有：前者验逻辑，后者验接线；
 > 而"bench 里验证过"与"产品路径生效"是**两件事**，必须分别验。
@@ -740,19 +751,39 @@ role=planner     平面=cloud  原因=output_over_edge_budget(600>300)   模型=
 交接摘要：<handoff from="edge" reason="...">…（以上是已建立背景，请直接续接，不要重复已完成的工作）
 
 主链路（factory.attach_router 后，用**普通** ainvoke_with_stats 调用，不带 plane 参数）：
-   路由已挂载: True      预热 qwen3.5-2b: 13ms
-   调用结果: 平面=edge  模型=qwen3.5-2b  延迟=128ms（未关思考时 1898ms；冷启动 6547ms）
+   路由已挂载: True      预热 qwen3.5-2b: 7–13ms
+   调用结果: 平面=edge  模型=qwen3.5-2b  延迟=119ms（未关思考时 1898ms；冷启动 6547ms）
+
+流式路径（第三轮新增，走**真实 SSE** 流经前缀守卫）：
+   守卫=60字符  平面=edge  原因=edge_preferred|stream_guard
+   首字=224ms（含守卫缓冲）  字符数=37
+   输出='端侧推理通过降低计算复杂度、减少数据吞吐量和优化硬件架构，显著降低了能耗。'
 ```
+
+**守卫的延迟代价（诚实记录）**：本次答案只有 37 字符 < 60 的守卫阈值，属**最坏情况**——
+攒不满就得等流结束，首字延迟 = 整段生成时间（224ms）。长回答下首字延迟 ≈ 生成 60 字符的
+时间（2B 上约 0.3–0.6s），总时长不变。之所以取 60 而不是更大：退化检测的下限是 40 字符
+（`_DEGEN_MIN_LEN`），再往上攒只是把用户看得到的延迟换成更长的白等。
+
+**哪里验的**：可自动改道的路径（退化前缀 → 改走云端 → 端侧 0 字符外泄）用**受控假模型**
+在单测里验（真模型无法稳定复现退化输出）；真机冒烟验的是"接线没坏 + 延迟代价可测"。
+两者分工而不是互相替代。
 
 ### 15.5 M1 待补
 
 - [x] ~~把 `RoutedLLM` 接进 chat 主链路~~ → 已通过 `attach_router()` 在工厂层挂载（零调用点改动）
 - [x] ~~端侧预热~~ → `warmup_edge()` 已实现并在 bootstrap 调用（实测 13ms 完成预热）
 - [x] ~~路由日志纳入数据卷~~ → bootstrap 用 `config.storage.data_dir/edge/routes.jsonl`
-- [ ] 流式路径的**升级**（当前只做决策不做升级：token 已吐给用户收不回，
-      需要 SSE 的「已输出多少字符」续写协议，见 §4.5-C）
-- [ ] 交接摘要的**自动生成**（当前 `handoff_note()` 只负责包装，摘要内容需由回合上下文生成）
-- [ ] 路由日志的**备份**纳入 `scripts/backup_kb.sh`
+- [x] ~~流式路径的**升级**~~ → 用**前缀守卫**实现（`_astream_guarded`）：
+      改道发生在用户看到任何字符之前，因此**不需要**"已输出多少字符"的续写协议。
+      代价是首字延迟 += 攒 60 字符的时间（实测最坏 224ms）。
+      SSE 续写协议只有在"端侧已吐了一部分才失败"时才需要 → 属 M2 客户端侧议题。
+- [x] ~~交接摘要的**自动生成**~~ → `HandoffFacts` / `HandoffBuilder.from_facts|from_event`，
+      升级时自动注入云端请求（单测 `test_reroute_injects_handoff_into_cloud_stream` 验到）
+- [x] ~~路由日志的**备份**~~ → 日志在 `data_dir/edge/routes.jsonl`，本就在 `sekb_data`
+      数据卷内，`backup_kb.sh` 按卷打包即覆盖；已在脚本头注释里写明**为什么**必须备份
+- [ ] 交接摘要的事实来源可以更丰富（当前从路由事件 + 端侧输出抽取；接入 chat 回合上下文后更准）
+- [ ] M2：客户端侧 SSE 续写协议（`already_streamed_chars`）、Android 宿主、独立 repo
 
 ---
 

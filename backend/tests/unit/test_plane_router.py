@@ -268,6 +268,53 @@ class TestEscalation:
         assert self.r.should_escalate([]) is False
         assert self.r.should_escalate(["some_unknown_signal"]) is False
 
+    def test_low_confidence_from_abstention_marker(self):
+        """模型自述"无法确定" → 低置信 → 该升级让云端试。"""
+        assert "low_confidence" in self.r.evaluate("抱歉，我无法确定这份 JD 的薪资范围。")
+
+    def test_low_confidence_from_json_self_report(self):
+        """JSON 里自报 confidence=0.2 → 低置信（模型"知道自己不确定"时最有价值）。"""
+        sig = self.r.evaluate('{"answer":"可能是支付方向","confidence":0.2}',
+                              response_format="json")
+        assert "low_confidence" in sig
+
+    def test_high_confidence_json_does_not_trigger(self):
+        sig = self.r.evaluate('{"answer":"支付方向","confidence":0.9}', response_format="json")
+        assert "low_confidence" not in sig
+
+    def test_tool_hallucination_in_valid_json(self):
+        """规划器引用了 executor 派发不了的工具名 → 工具幻觉（端侧小模型高发）。"""
+        sig = self.r.evaluate('{"steps":[{"tool":"web_search_plus","tool_input":{}}]}',
+                              response_format="json")
+        assert "tool_hallucination" in sig
+
+    def test_known_tools_pass(self):
+        sig = self.r.evaluate('{"steps":[{"tool":"web_search"},{"tool":"rag_retrieve"}]}',
+                              response_format="json")
+        assert "tool_hallucination" not in sig
+
+    def test_tool_hallucination_also_caught_when_json_is_broken(self):
+        """非法 JSON 也最容易同时伴随幻觉工具名——不能因为 json_invalid 就跳过工具检查。"""
+        sig = self.r.evaluate('{"steps":[{"tool":"magic_tool",', response_format="json")
+        assert "json_invalid" in sig and "tool_hallucination" in sig
+
+    def test_no_tool_mention_no_signal(self):
+        assert self.r.evaluate('{"intent":"news"}', response_format="json") == []
+
+    def test_six_signal_coverage_is_declared(self):
+        """目标要求"6 类升级信号"：这里显式锁住 5 类调用后信号 + 1 类调用前（输入预算）。
+
+        前 5 类由 evaluate 判定；context_overflow 在 decide 阶段直接改判云端
+        （长输入不该由端侧硬扛，见 test_input_over_budget_goes_cloud）。
+        """
+        after_call = {"empty", "json_invalid", "degenerate", "timeout",
+                      "low_confidence", "tool_hallucination"}
+        cfg = make_config()
+        assert set(cfg.llm.planes.routing.escalate_on) == after_call
+        decisions = {PlaneRouter(cfg).decide("supervisor", [txt]).reason.split("(")[0]
+                     for txt in ("短问题", "端侧推理受内存带宽限制。" * 400)}
+        assert "input_over_edge_budget" in decisions      # 第 6 类：调用前改判
+
     def test_extract_json_variants(self):
         assert extract_json('{"a":1}') == {"a": 1}
         assert extract_json('前言{"a":2}后语') == {"a": 2}
@@ -450,6 +497,61 @@ class TestRoutedLLM:
         assert f.calls == ["cloud"] and ev.escalated is False
 
     @pytest.mark.asyncio
+    async def test_escalation_injects_handoff_into_cloud_request(self, tmp_path):
+        """升级时必须把交接摘要**注入云端请求**（紧跟 system），否则云端等于从零开始。
+
+        这是 RFC §4.5-C/E 的核心：不是"包装一段文字"，而是真的带过去。
+        """
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from app.core.plane_router import HandoffFacts
+
+        cfg = make_config()
+
+        class _CapturingFactory(_FakeFactory):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.captured: dict[str, list] = {}
+
+            async def ainvoke_with_stats(self, role, messages, plane=None, **kw):
+                self.captured[plane or "cloud"] = list(messages)
+                return await super().ainvoke_with_stats(role, messages, plane=plane, **kw)
+
+        f = _CapturingFactory(edge_text="我猜是 news 吧")      # 非法 JSON → 触发升级
+        store = EdgeRouteStore(tmp_path / "r.jsonl")
+        routed = RoutedLLM(f, cfg, store=store)
+        facts = HandoffFacts(intent="给这份 JD 分类",
+                             established=["用户在看支付方向"],
+                             pending=["输出合法 JSON"])
+        await routed.ainvoke("supervisor",
+                             [SystemMessage(content="你是意图分类器。"),
+                              HumanMessage(content="分类这句话")],
+                             handoff_facts=facts)
+
+        cloud_msgs = f.captured["cloud"]
+        assert isinstance(cloud_msgs[0], SystemMessage)         # 原 system 仍在最前
+        assert isinstance(cloud_msgs[1], SystemMessage)         # 交接块在 system 之后（前缀位）
+        note = cloud_msgs[1].content
+        assert "<handoff" in note and 'to="cloud"' in note
+        assert "用户在看支付方向" in note and "输出合法 JSON" in note
+        assert "已建立的背景" in note                            # 明确"是背景不是新指令"
+        # 事件里留证：事后能看清"云端当时被告知了什么"
+        ev = store.recent(1)[0]
+        assert ev["handoff"] and "<handoff" in ev["handoff"]
+
+    @pytest.mark.asyncio
+    async def test_minimal_handoff_does_not_fabricate_completed_steps(self, tmp_path):
+        """没有结构化事实时只交接"确实知道的"，并明确叫云端从头做——不编"已完成"。"""
+        cfg = make_config()
+        routed = RoutedLLM(_FakeFactory("x"), cfg)
+        ev = RouteEvent(role="planner", plane=PLANE_EDGE, reason="edge_preferred",
+                        escalate_reason="json_invalid")
+        note = routed.handoff.from_event(ev, edge_text="{'steps':[")
+        assert "任务角色：planner" in note
+        assert "端侧未能完成" in note and "不要假装已完成" in note
+        assert "已完成的步骤" not in note
+
+    @pytest.mark.asyncio
     async def test_handoff_note_marks_background_not_instruction(self, tmp_path):
         cfg = make_config()
         routed = RoutedLLM(_FakeFactory("x"), cfg)
@@ -542,6 +644,43 @@ class TestMainPathRouting:
         assert store.stats()["escalation_rate"] == 1.0
 
     @pytest.mark.asyncio
+    async def test_main_path_auto_generates_handoff_on_escalation(self, monkeypatch, tmp_path):
+        """主链路升级时**自动**带交接摘要——调用方不需要知道 handoff 的存在。
+
+        这是 ③ 的验收点：既有的十余处 `ainvoke_with_stats(role, msgs)` 调用点
+        在端侧失败升级时，云端请求里会自动出现交接块。
+        """
+        from app.core.llm_factory import LLMFactory
+
+        seen: list[tuple[str, list]] = []
+
+        class _RecordingModel:
+            """记录"哪个平面收到了哪批消息"，并固定返回非法 JSON（触发升级）。"""
+
+            def __init__(self, plane: str):
+                self.plane = plane
+
+            async def ainvoke(self, messages, **kw):
+                seen.append((self.plane, list(messages)))
+                return _FakeResp('{"intent":"news"}' if self.plane == "cloud" else "我猜是 news")
+
+        f = LLMFactory(make_config())
+        monkeypatch.setattr(f, "_create_llm",
+                            lambda role_config, plane=None, model_override=None:
+                            _RecordingModel(plane or "cloud"))
+        f.attach_router(store=EdgeRouteStore(tmp_path / "r.jsonl"))
+
+        # 主链路调用：**不带 plane、不提 handoff**，就是普通的一行
+        await f.ainvoke_with_stats("supervisor", ["把这句话分类"])
+
+        planes = [p for p, _ in seen]
+        assert planes == ["edge", "cloud"], f"应先端侧后云端，实际 {planes}"
+        cloud_msgs = seen[1][1]
+        assert any("<handoff" in str(getattr(m, "content", m)) for m in cloud_msgs)
+        # 事件里留证
+        assert f.last_route_event["supervisor"].handoff
+
+    @pytest.mark.asyncio
     async def test_attach_router_is_noop_without_planes(self, monkeypatch):
         """未配置 planes → attach 返回 False，主链路保持单平面（生产环境即如此）。"""
         from app.core.llm_factory import LLMFactory
@@ -554,7 +693,10 @@ class TestMainPathRouting:
 
     @pytest.mark.asyncio
     async def test_stream_path_decides_but_does_not_escalate(self, monkeypatch, tmp_path):
-        """流式只做决策不做升级（token 已吐给用户，收不回），并在原因里标注。"""
+        """端侧流式的**短输出**：攒不满 guard_chars 就流完了 → 等价于全量评估后放行。
+
+        这条覆盖的是"M1 之前的行为"在新实现下依然成立：正常短答案不会被前缀守卫误伤。
+        """
         store = EdgeRouteStore(tmp_path / "r.jsonl")
         f, _ = self._factory(monkeypatch)
         f.attach_router(store=store)
@@ -562,7 +704,168 @@ class TestMainPathRouting:
         assert got == ["端侧", "回答"]
         ev = f.last_route_event["supervisor"]
         assert ev.plane == PLANE_EDGE
-        assert "stream_no_escalate" in ev.reason
+        assert "stream_guard" in ev.reason
+        assert store.stats()["escalation_rate"] == 0.0
+
+
+class TestStreamPrefixGuard:
+    """流式前缀守卫：端侧 token 一旦吐给用户就收不回，所以先攒一小段再决定是否改道。
+
+    验收点：改道发生在**用户看到任何字符之前** —— 端侧那段退化输出必须一个字符都不外泄。
+    """
+
+    def _factory(self, monkeypatch, *, edge_text, cloud_text, device_only=None):
+        from app.core.llm_factory import LLMFactory
+
+        f = LLMFactory(make_config(device_only=device_only))
+        seen: list[tuple[str, list]] = []
+
+        class _PlaneModel:
+            def __init__(self, plane: str):
+                self.plane = plane
+
+            async def astream(self, messages, **kw):
+                seen.append((self.plane, list(messages)))
+                text = edge_text if self.plane == "edge" else cloud_text
+                for i in range(0, len(text), 50):
+                    yield _FakeResp(text[i:i + 50])
+
+            async def ainvoke(self, messages, **kw):
+                seen.append((self.plane, list(messages)))
+                return _FakeResp(edge_text if self.plane == "edge" else cloud_text)
+
+        monkeypatch.setattr(f, "_create_llm",
+                            lambda role_config, plane=None, model_override=None:
+                            _PlaneModel(plane or "cloud"))
+        return f, seen
+
+    @pytest.mark.asyncio
+    async def test_degenerate_prefix_reroutes_before_any_token_is_shown(
+            self, monkeypatch, tmp_path):
+        """前缀退化 → 丢弃该前缀、改走云端，用户只看到云端的答案（端侧 0 字符外泄）。"""
+        f, seen = self._factory(monkeypatch, edge_text="。" * 300,
+                                cloud_text="这是云端的正确答案。")
+        store = EdgeRouteStore(tmp_path / "r.jsonl")
+        f.attach_router(store=store)
+
+        got = [c async for c in f.astream_with_stats("supervisor", ["流式问题"])]
+        joined = "".join(got)
+
+        assert joined == "这是云端的正确答案。", "用户只应看到云端答案，端侧前缀 0 字符外泄"
+        assert "。。。" not in joined, "端侧的退化前缀绝不能吐给用户"
+        assert [p for p, _ in seen] == ["edge", "cloud"]
+        ev = f.last_route_event["supervisor"]
+        assert ev.plane == PLANE_CLOUD
+        assert ev.reason == "stream_prefix_guard(degenerate)"
+
+    @pytest.mark.asyncio
+    async def test_reroute_injects_handoff_into_cloud_stream(self, monkeypatch, tmp_path):
+        """改道时云端不是"从零开始"：交接摘要自动注入云端请求。"""
+        f, seen = self._factory(monkeypatch, edge_text="。" * 300, cloud_text="云端答案")
+        f.attach_router(store=EdgeRouteStore(tmp_path / "r.jsonl"))
+        _ = [c async for c in f.astream_with_stats("supervisor", ["流式问题"])]
+        cloud_msgs = [m for p, m in seen if p == "cloud"][0]
+        blob = " ".join(str(getattr(m, "content", m)) for m in cloud_msgs)
+        assert "<handoff" in blob
+        assert "degenerate" in blob, "升级原因要写进交接块，云端才知道端侧发生了什么"
+
+    @pytest.mark.asyncio
+    async def test_device_only_never_reroutes_even_if_degenerate(
+            self, monkeypatch, tmp_path):
+        """隐私硬边界：DEVICE_ONLY 角色即使输出退化也不许改道云端（宁可承认失败）。"""
+        f, seen = self._factory(monkeypatch, edge_text="。" * 300, cloud_text="云端答案",
+                                device_only=["supervisor"])
+        f.attach_router(store=EdgeRouteStore(tmp_path / "r.jsonl"))
+        got = [c async for c in f.astream_with_stats("supervisor", ["含设备数据的流式问题"])]
+        assert "".join(got).startswith("。")            # 端侧原样吐给用户
+        assert {p for p, _ in seen} == {"edge"}, "任何情况下都不该出现云端调用"
+        assert "stream_no_escalate" in f.last_route_event["supervisor"].reason
+
+    @pytest.mark.asyncio
+    async def test_guard_disabled_by_zero_falls_back_to_decide_only(
+            self, monkeypatch, tmp_path):
+        """`stream_guard_chars: 0` → 退回"只决策不升级"，退化前缀也照原样外泄（显式关闭）。"""
+        f, seen = self._factory(monkeypatch, edge_text="。" * 300, cloud_text="云端答案")
+        f.config.llm.planes.routing.stream_guard_chars = 0
+        f.attach_router(store=EdgeRouteStore(tmp_path / "r.jsonl"))
+        got = [c async for c in f.astream_with_stats("supervisor", ["流式问题"])]
+        assert "".join(got).startswith("。")
+        assert {p for p, _ in seen} == {"edge"}
+
+
+class TestDeviceOnlyHardBoundary:
+    """非流式路径同样必须守边界：device_only 数据永不出端（RFC §5.2）。"""
+
+    @pytest.mark.asyncio
+    async def test_invoke_does_not_escalate_device_only_data(self, monkeypatch, tmp_path):
+        """端侧答成非法 JSON，但数据不可出端 → 放弃升级并留痕，而不是偷偷上云。"""
+        store = EdgeRouteStore(tmp_path / "r.jsonl")
+        f, created = TestMainPathRouting()._factory(monkeypatch, text="我猜是 news 吧")
+        f.attach_router(store=store)
+        f.config.llm.planes.routing.device_only_roles = ["supervisor"]
+
+        await f.ainvoke_with_stats("supervisor", ["分类含设备数据的句子"])
+
+        assert [k for k in created if "@edge" in k], "应仍在端侧执行"
+        assert not [k for k in created if "@cloud" in k], "device_only 不该出现云端实例"
+        ev = f.last_route_event["supervisor"]
+        assert ev.escalated is False
+        assert "escalation_blocked:device_only" in ev.reason
+        assert store.stats()["escalation_rate"] == 0.0
+
+    def test_escalation_allowed_matrix(self):
+        from app.core.plane_router import Decision, PlaneRouter
+
+        router = PlaneRouter(make_config())
+        assert router.escalation_allowed(Decision(PLANE_EDGE, "edge_preferred")) is True
+        assert router.escalation_allowed(
+            Decision(PLANE_EDGE, "device_only_data", device_only=True)) is False
+        assert router.escalation_allowed(Decision(PLANE_CLOUD, "prefer_cloud")) is False
+
+
+class TestPartialEvaluation:
+    """前缀评估必须只看"在半截输出上也有意义"的信号。"""
+
+    def _router(self):
+        from app.core.plane_router import PlaneRouter
+
+        return PlaneRouter(make_config())
+
+    def test_partial_prefix_does_not_flag_incomplete_json(self):
+        """半截 JSON 必然不合法 → 用它判会误杀**所有** JSON 角色，故 partial 下排除。"""
+        r = self._router()
+        prefix = '{"intent": "news", "conf'
+        assert "json_invalid" not in r.evaluate(prefix, response_format="json", partial=True)
+        assert "json_invalid" in r.evaluate(prefix, response_format="json")
+
+    def test_partial_still_catches_empty_low_confidence_and_degenerate(self):
+        r = self._router()
+        assert "empty" in r.evaluate("   ", partial=True)
+        assert "degenerate" in r.evaluate("。" * 200, partial=True)
+        assert "low_confidence" in r.evaluate("我不确定，可能无法回答这个问题。", partial=True)
+
+    def test_partial_ignores_tool_names_not_yet_streamed(self):
+        """半截输出里工具名可能还没出现 → 不能因此判幻觉（假阴性优于误杀）。"""
+        r = self._router()
+        tools = {"web_search", "rag_retrieve"}
+        assert "tool_hallucination" not in r.evaluate(
+            '{"tool": "web', response_format="json", available_tools=tools, partial=True)
+
+
+def test_generated_dual_profile_documents_guard_and_all_signals():
+    """生成的端云档必须与代码默认值一致（否则运维按文档调参会调出差异行为）。"""
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    out = subprocess.run(["python3", str(root / "scripts" / "make_local_profile.py"), "--check"],
+                         capture_output=True, text=True, cwd=root)
+    assert out.returncode == 0, out.stderr or out.stdout
+    text = (root / "backend" / "config.edge-cloud.yaml").read_text(encoding="utf-8")
+    for sig in ("json_invalid", "empty", "degenerate", "timeout",
+                "low_confidence", "tool_hallucination"):
+        assert sig in text, f"端云档缺升级信号 {sig}"
+    assert "stream_guard_chars" in text
 
 
 def test_stats_json_serializable(tmp_path):

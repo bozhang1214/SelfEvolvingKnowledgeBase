@@ -6,7 +6,9 @@
 #       sekb_gitea_data 数据卷 → 重启服务 → 按保留天数清理旧备份。
 #
 # 数据卷 sekb_data 内含：chroma_db（向量库）、uploads/documents（原始文件）、
-# uploaded_md5.json、shares.json、conversations、news 等全部知识资产。
+# uploaded_md5.json、shares.json、conversations、news 等全部知识资产；
+# 以及 edge/routes.jsonl（端云路由日志 —— M1 起「端侧完成率/升级率」两个北极星指标的
+# **唯一事实来源**，只追加、丢了就无法回溯历史决策，故随卷一起备份）。
 #
 # 数据卷 sekb_gitea_data（RFC D-02 起为版本管理权威源）：仓库、SQLite 库、
 # Gitea 配置、附件等，必须纳入备份，否则 Gitea 故障即丢源码。

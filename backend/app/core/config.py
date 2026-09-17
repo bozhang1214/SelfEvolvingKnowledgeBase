@@ -84,13 +84,24 @@ class RoutingConfig(BaseModel):
     enabled: bool = False
     prefer: str = "edge"             # edge | cloud
     #: 触发升级到云端的信号（对应 §4.2 的 6 类；此处只列可自动判定的）
-    escalate_on: list[str] = ["json_invalid", "empty", "degenerate", "timeout"]
+    #: 触发升级的信号（RFC §4.2 的 6 类；`context_overflow` 由输入预算直接改判，不在此列）
+    escalate_on: list[str] = [
+        "json_invalid", "empty", "degenerate", "timeout",
+        "low_confidence", "tool_hallucination",
+    ]
+    #: 可派发工具集（留空则用 executor 的 if/elif 链口径，见 plane_router）
+    available_tools: list[str] = []
     #: 哪些角色**永不出端**（数据分级 DEVICE_ONLY；见 §5.2）
     device_only_roles: list[str] = []
     #: 按角色覆盖"预期输出规模"（token）。留空则用 plane_router 的内置默认表。
     #: ⚠️ 不要用 `LLMRoleConfig.max_tokens` 代替它：那是**允许上限**（supervisor 允许 500，
     #: 实际常输出 6–60），拿上限当预估会把几乎所有请求都判去云端。
     expected_output: dict[str, int] = {}
+    #: 流式**前缀守卫**的缓冲字符数：端侧先攒够这么多字符再判断是否改道云端。
+    #: 0 = 关闭（流式只决策不升级）。取值由**首字延迟**（第一优先级）定：
+    #: 攒够 60 字符在 2B 上 ≈0.3–0.6s，而退化检测的下限是 40 字符
+    #: （`_DEGEN_MIN_LEN`），再大就只是白等 —— 攒的每个字符都是用户看不到的延迟。
+    stream_guard_chars: int = 60
 
 
 class PlanesConfig(BaseModel):
