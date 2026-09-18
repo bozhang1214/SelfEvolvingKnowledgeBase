@@ -134,6 +134,15 @@ curl -u bo:<密码> -X POST http://localhost:3000/api/v1/user/repos \
 
 - 配置位置：Gitea 仓库 → Settings → Mirror Settings → **Push Mirror**（或用 API `POST /repos/{owner}/{repo}/push_mirrors`）。
 - 策略：`interval: 8h` + `sync_on_commit: true`。
+
+> ⚠️ **`last_update` 不能用来判断"提交即同步"是否生效**（2026-09-18 实测）：
+> `sync_on_commit` 触发的自动推送**不会**刷新 `push_mirrors` 的 `last_update`
+> （它停在最后一次手动同步的时间），让人误以为没同步。真正的判据是去 GitHub 侧核对：
+> ```bash
+> git ls-remote https://github.com/bozhang1214/sekb-ondevice-agent.git
+> # 与本地 git rev-parse HEAD 比对——这才是"镜像真的推上去了"的证据
+> ```
+> 同理，`last_error` 为空也只说明"上次同步没报错"，不等于"这次已经同步"。
 - 运维工具：**`scripts/gitea_mirror.py`**（`status` / `sync` / `rebuild`），下面的坑都已处理。
 
 ```bash
