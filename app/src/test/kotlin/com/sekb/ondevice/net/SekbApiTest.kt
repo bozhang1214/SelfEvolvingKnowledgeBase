@@ -106,13 +106,14 @@ class SekbApiTest {
         )
         val tokens = mutableListOf<String>()
         val thinking = mutableListOf<String>()
-        val exec = api(t).chatStream("dtok", "问题", null,
+        val result = api(t).chatStream("dtok", "问题", null,
             onToken = { tokens.add(it) }, onThinking = { thinking.add(it) })
 
         assertEquals(listOf("端", "侧"), tokens)
         assertEquals(listOf("正在检索"), thinking)
-        assertEquals("edge", exec!!.primaryPlane)
-        assertEquals("qwen3.5-4b", exec.model)
+        assertEquals("edge", result.execution!!.primaryPlane)
+        assertEquals("qwen3.5-4b", result.execution.model)
+        assertEquals("c-1", result.conversationId)      // 会话 ID 必须回流
         assertEquals("Bearer dtok", t.lastCall().headers["Authorization"])
         assertTrue(t.lastCall().headers["Accept"].isNullOrEmpty().not() ||
             t.lastCall().url.endsWith("/api/v1/chat/stream"))

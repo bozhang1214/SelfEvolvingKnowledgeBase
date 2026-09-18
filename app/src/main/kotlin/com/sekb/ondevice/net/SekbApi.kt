@@ -8,6 +8,9 @@ import com.sekb.ondevice.model.RouteEventPayload
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** 云端一次聊天的结果：执行位置（S3）+ 会话 ID（下次要带回去，否则每轮都是新会话）。 */
+data class SekbChatResult(val execution: ExecutionInfo?, val conversationId: String?)
+
 /** SEKB 调用失败。**不要把 token 放进 message**（日志/UI 都会显示它）。 */
 class SekbApiException(val code: Int, val detail: String) :
     Exception("SEKB $code: $detail")
@@ -88,10 +91,11 @@ class SekbApi(
         conversationId: String?,
         onToken: (String) -> Unit,
         onThinking: (String) -> Unit = {},
-    ): ExecutionInfo? {
+    ): SekbChatResult {
         val body = JSONObject().put("message", message)
         if (!conversationId.isNullOrBlank()) body.put("conversation_id", conversationId)
         var execution: ExecutionInfo? = null
+        var convId: String? = conversationId
         var error: String? = null
         val code = transport.postJsonStream(
             url = "$baseUrl/api/v1/chat/stream",
@@ -102,7 +106,10 @@ class SekbApi(
             when (val event = sse.feed(line)) {
                 is ChatEvent.Token -> onToken(event.content)
                 is ChatEvent.Thinking -> onThinking(event.content)
-                is ChatEvent.Done -> execution = event.meta.execution
+                is ChatEvent.Done -> {
+                    execution = event.meta.execution
+                    if (event.meta.conversationId.isNotBlank()) convId = event.meta.conversationId
+                }
                 is ChatEvent.Error -> error = event.detail
                 null -> Unit
             }
@@ -110,13 +117,16 @@ class SekbApi(
         // 结束前把最后一段没被空行终止的数据也处理掉
         when (val tail = sse.finish()) {
             is ChatEvent.Token -> onToken(tail.content)
-            is ChatEvent.Done -> execution = tail.meta.execution
+            is ChatEvent.Done -> {
+                execution = tail.meta.execution
+                if (tail.meta.conversationId.isNotBlank()) convId = tail.meta.conversationId
+            }
             is ChatEvent.Error -> error = tail.detail
             else -> Unit
         }
         if (error != null) throw SekbApiException(code, error!!)
         if (code !in 200..299) throw SekbApiException(code, "流式请求失败")
-        return execution
+        return SekbChatResult(execution, convId)
     }
 
     // ---------- 路由事件上报 ----------

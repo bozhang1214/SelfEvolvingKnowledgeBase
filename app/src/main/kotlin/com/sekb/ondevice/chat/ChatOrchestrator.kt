@@ -14,6 +14,9 @@ import com.sekb.ondevice.tools.ToolCallJson
 import com.sekb.ondevice.tools.ToolRegistry
 import java.util.UUID
 
+/** 云端一次聊天的回执：执行位置 + 会话 ID（会话 ID 必须回流，否则每轮都是新会话）。 */
+data class CloudReply(val execution: ExecutionInfo?, val conversationId: String?)
+
 /** 云端聊天（SEKB SSE）。抽成接口是为了让编排器能在 JVM 单测里跑通全流程。 */
 fun interface CloudChat {
     fun stream(
@@ -21,7 +24,7 @@ fun interface CloudChat {
         conversationId: String?,
         onToken: (String) -> Unit,
         onThinking: (String) -> Unit,
-    ): ExecutionInfo?
+    ): CloudReply
 }
 
 /** 一轮对话的结果。 */
@@ -43,6 +46,8 @@ data class ChatOutcome(
     val toolCallLegal: Boolean = false,
     /** 端侧首字耗时（ms）；走云端时为 0 */
     val edgeTtftMillis: Double = 0.0,
+    /** 云端会话 ID（走端侧完成时为 null）：下一轮要带回去才能连续对话 */
+    val conversationId: String? = null,
     val error: String = "",
 )
 
@@ -91,7 +96,7 @@ class ChatOrchestrator(
         } else {
             val started = now()
             val text = StringBuilder()
-            val execution = cloud.stream(userMessage, conversationId,
+            val reply = cloud.stream(userMessage, conversationId,
                 { piece -> text.append(piece); onToken(piece) }, onThinking)
             report(
                 decision = decision, plane = Plane.CLOUD, model = "",
@@ -102,7 +107,8 @@ class ChatOrchestrator(
             ChatOutcome(
                 text = text.toString(), plane = Plane.CLOUD, decision = decision,
                 signals = emptyList(), escalated = false, escalateReason = "",
-                execution = execution ?: cloudExecution(decision, text.toString()),
+                execution = reply.execution ?: cloudExecution(decision),
+                conversationId = reply.conversationId ?: conversationId,
             )
         }
     }
@@ -129,8 +135,16 @@ class ChatOrchestrator(
 
         val messages = buildMessages(history, userMessage)
 
+        val edgeStarted = now()
+        var firstPieceAt = 0L
         val completion = try {
             edgeLlm.streamChat(model, messages, config.maxOutputTokens, jsonMode = false) { piece ->
+                // 首字耗时必须由**编排器自己**量：端侧 TTFT 是 `timeout` 升级信号的判据，
+                // 而信号的判定发生在守卫内部——不喂给它，这条信号就是死代码（踩过）。
+                if (firstPieceAt == 0L) {
+                    firstPieceAt = now()
+                    guard.noteFirstToken((firstPieceAt - edgeStarted).toDouble())
+                }
                 when (val d = guard.offer(piece)) {
                     is StreamGuard.Decision.Buffering -> Unit
                     is StreamGuard.Decision.Release -> {
@@ -208,6 +222,7 @@ class ChatOrchestrator(
                 escalated = false,
                 escalateReason = "escalation_blocked:device_only",
                 execution = localExecution(decision, model, completion?.ttftMillis ?: 0.0, escalated = false, signals = escalatedBy),
+                conversationId = conversationId,
                 error = if (edgeOk) "" else completion?.error.orEmpty(),
             )
         }
@@ -217,7 +232,7 @@ class ChatOrchestrator(
             val handoffMessage = Handoff.wrap(escalatedBy, edgeText, userMessage)
             val started = now()
             val sb = StringBuilder()
-            val execution = cloud.stream(handoffMessage, conversationId,
+            val reply = cloud.stream(handoffMessage, conversationId,
                 { piece -> sb.append(piece); onToken(piece) }, onThinking)
             report(
                 decision = decision, plane = Plane.CLOUD, model = model,
@@ -230,8 +245,9 @@ class ChatOrchestrator(
                 text = sb.toString(), plane = Plane.CLOUD, decision = decision,
                 signals = escalatedBy, escalated = true,
                 escalateReason = escalatedBy.joinToString(","),
-                execution = execution ?: cloudExecution(decision, sb.toString()),
+                execution = reply.execution ?: cloudExecution(decision),
                 edgeTtftMillis = completion?.ttftMillis ?: 0.0,
+                conversationId = reply.conversationId ?: conversationId,
             )
         }
 
@@ -257,6 +273,7 @@ class ChatOrchestrator(
             toolResults = toolRound.results,
             toolCallAttempted = toolRound.attempted,
             toolCallLegal = toolRound.legal,
+            conversationId = conversationId,
             edgeTtftMillis = completion?.ttftMillis ?: 0.0,
             error = if (edgeOk) "" else completion?.error.orEmpty(),
         )
@@ -323,7 +340,7 @@ class ChatOrchestrator(
         latencyMs = ttftMillis,
     )
 
-    private fun cloudExecution(decision: RouteDecision, text: String) = ExecutionInfo(
+    private fun cloudExecution(decision: RouteDecision) = ExecutionInfo(
         primaryPlane = Plane.CLOUD.wire,
         primaryRole = "chat",
         reason = decision.reason,

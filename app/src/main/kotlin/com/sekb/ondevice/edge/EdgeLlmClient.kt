@@ -157,6 +157,32 @@ class OpenAiCompatibleEdgeLlm(
         return body.toString()
     }
 
+    /**
+     * 预热：把模型加载进内存并保持（消除首次调用的权重加载开销）。
+     *
+     * 为什么必须做：SEKB 侧实测首次调用 ~6.5s（加载权重），之后 0.2–0.7s。
+     * 不预热的话，"端侧赢延迟"在第一次调用上完全不成立，而首字超时信号
+     * （`maxTtftMs`）会把这个冷启动误判成"端侧不行"从而改道云端。
+     *
+     * 走 Ollama 原生 `/api/generate`（空调起，不产生 token）+ `keep_alive`。
+     */
+    fun warmup(model: String, keepAlive: String = "30m"): Boolean = try {
+        val nativeBase = baseUrl.removeSuffix("/v1").removeSuffix("/")
+        transport.postJson(
+            url = "$nativeBase/api/generate",
+            headers = jsonHeaders(),
+            body = JSONObject().put("model", model).put("prompt", "").put("keep_alive", keepAlive).toString(),
+            timeoutSeconds = 180,
+        ).isOk
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun jsonHeaders(): Map<String, String> = mapOf(
+        "Content-Type" to "application/json",
+        "Authorization" to "Bearer $apiKey",
+    )
+
     /** 端点是否可达（用于 UI 上显示"端侧就绪/不可用"，不参与决策）。 */
     fun isReachable(): Boolean = try {
         transport.get("$baseUrl/models", headers(), timeoutSeconds = 5).isOk

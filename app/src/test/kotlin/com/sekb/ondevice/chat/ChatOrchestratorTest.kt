@@ -98,7 +98,10 @@ class ChatOrchestratorTest {
             rec.cloudCalls++
             rec.lastCloudMessage = message
             onToken(cloudAnswer)
-            ExecutionInfo(primaryPlane = "cloud", escalated = 1, reason = "escalated")
+            CloudReply(
+                execution = ExecutionInfo(primaryPlane = "cloud", escalated = 1, reason = "escalated"),
+                conversationId = "c-cloud-1",
+            )
         }
         val orch = ChatOrchestrator(
             config = config, router = router, edgeLlm = edge, cloud = cloud, tools = tools,
@@ -244,6 +247,15 @@ class ChatOrchestratorTest {
     }
 
     // ---------- 交接摘要 ----------
+
+    @Test
+    fun `cloud conversation id flows back for continuity`() {
+        // 会话 ID 不回流的后果很具体：每轮都是新会话，云端记不住上一句。
+        val edge = FakeEdge(pieces = listOf("。".repeat(80)))
+        val (orch, _, _) = orchestrator(edge)
+        val out = orch.send("讲讲端侧推理")
+        assertEquals("c-cloud-1", out.conversationId)
+    }
 
     @Test
     fun `handoff carries reason and truncates the discarded prefix`() {
