@@ -48,6 +48,9 @@ from app.core.tracing import get_trace_config
 
 logger = get_logger(__name__)
 
+#: 平面名常量（与 plane_router.PLANE_EDGE 同值；这里不导入它以免循环依赖）
+EDGE_PLANE_NAME = "edge"
+
 #: 流式路径只记决策、不产生完整事件，这里用 RouteEvent 的轻量替身
 try:
     from app.core.plane_router import RouteEvent as RouterEventLite
@@ -306,6 +309,20 @@ class LLMFactory:
         role_config = self._get_role_config(role)
         return role_config.model if role_config else "unknown"
 
+    def _resolved_model(self, role: str, plane: str | None) -> str:
+        """**事先**就知道这次会用哪个模型（不依赖实例缓存）。
+
+        为什么不能直接用 :meth:`get_actual_model`：它读的是"实例创建时"写下的映射，
+        而流式路径**在创建实例之前**就要把 model 写进路由事件——于是首次流式事件会
+        退回配置里的模型名（端侧请求记成 `deepseek-flash`，是错的）。
+        这条差异是 Android 端到端自检抓出来的：响应里的 `execution.model` 是空的。
+        """
+        if plane == EDGE_PLANE_NAME:
+            role_cfg = self._get_role_config(role)
+            if role_cfg is not None:
+                return self._edge_model_for(role, role_cfg) or role_cfg.model
+        return self.get_actual_model(role, plane)
+
     def is_degraded(self, role: str, plane: str | None = None) -> bool:
         """判断角色是否发生了模型降级"""
         return (role if plane is None else f"{role}@{plane}") in self._degraded_roles
@@ -522,6 +539,10 @@ class LLMFactory:
             self._publish_route_event(role, RouterEventLite(
                 role=role, plane=decision.plane,
                 reason=decision.reason + ("|stream_guard" if guard_chars else "|stream_no_escalate"),
+                # model 必须带上：漏了它的后果不是"少个字段"，而是流式角色的执行位置
+                # 在响应（S3 的 execution.model）与路由日志里都是空的——只有真客户端
+                # 端到端跑一遍才会发现（本次就是 Android 自检暴露的）。
+                model=self._resolved_model(role, decision.plane),
                 tier=decision.tier, input_tokens=decision.input_tokens,
                 versions=self._routed.router.versions(role)))
 

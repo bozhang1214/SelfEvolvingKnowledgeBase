@@ -706,6 +706,9 @@ class TestMainPathRouting:
         assert ev.plane == PLANE_EDGE
         assert "stream_guard" in ev.reason
         assert store.stats()["escalation_rate"] == 0.0
+        # 回归：流式事件必须带 model，否则 S3 的 execution.model 与路由日志都是空的
+        # （Android 端到端自检发现：execution.model="")
+        assert ev.model == "qwen3.5-2b", f"流式路由事件缺 model：{ev.model!r}"
 
 
 class TestStreamPrefixGuard:
