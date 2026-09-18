@@ -29,7 +29,13 @@ android {
         //   edgeBaseUrl → 本机/宿主机上的 OpenAI 兼容端点（Ollama）
         //   sekbBaseUrl → SEKB 云端（端云协同的"云"这一侧）
         buildConfigField("String", "DEFAULT_EDGE_BASE_URL", "\"http://10.0.2.2:11434/v1\"")
-        buildConfigField("String", "DEFAULT_SEKB_BASE_URL", "\"https://bos-studio.tech/sekb\"")
+        // 云端地址可在**构建期**覆盖（联调/UI 验收用本地后端）：
+        //   ./gradlew :app:assembleDebug -PsekbBaseUrl=http://10.0.2.2:8010
+        // 这样就不必在模拟器上手打地址（软键盘会遮挡下方控件，脚本点击很容易错位）。
+        buildConfigField(
+            "String", "DEFAULT_SEKB_BASE_URL",
+            "\"${project.findProperty("sekbBaseUrl") ?: "https://bos-studio.tech/sekb"}\"",
+        )
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

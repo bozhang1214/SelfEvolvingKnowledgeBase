@@ -20,7 +20,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** 一条气泡。 */
-data class Bubble(val fromUser: Boolean, val text: String, val execution: ExecutionInfo? = null)
+data class Bubble(
+    val fromUser: Boolean,
+    val text: String,
+    val execution: ExecutionInfo? = null,
+    /** **客户端侧**是否发生过升级（与服务端回传的 execution.escalated 是两件事） */
+    val escalated: Boolean = false,
+)
 
 /** UI 状态（单一数据源，避免散在各处的 mutable 字段）。 */
 data class ChatUiState(
@@ -194,9 +200,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { st ->
                     val last = st.bubbles.lastOrNull()
                     val patched = if (last != null && !last.fromUser) {
-                        st.bubbles.dropLast(1) + last.copy(text = result.text, execution = result.execution)
+                        st.bubbles.dropLast(1) +
+                            last.copy(text = result.text, execution = result.execution,
+                                escalated = result.escalated)
                     } else {
-                        st.bubbles + Bubble(false, result.text, result.execution)
+                        st.bubbles + Bubble(false, result.text, result.execution, result.escalated)
                     }
                     st.copy(
                         busy = false, thinking = "", bubbles = patched, audit = stats,
@@ -227,11 +235,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
-        /** 便于 UI 显示"这次在哪算的"；端侧完成与云端完成的文案不同。 */
-        fun badgeOf(execution: ExecutionInfo?): String = when (execution?.primaryPlane) {
-            Plane.EDGE.wire -> "本机完成"
-            Plane.CLOUD.wire -> if ((execution.escalated) > 0) "已上云（端侧不达标）" else "云端完成"
-            else -> ""
-        }
+        /**
+         * 便于 UI 显示"这次在哪算的"。
+         *
+         * `clientEscalated` 必须一起看：服务端回传的 `execution.escalated` 只统计**服务端内部**
+         * 的升级，而端侧宿主自己失败后改道云端这件事服务端并不知道——
+         * 只看服务端字段会把"客户端刚因为端侧不可用改道"显示成平平无奇的"云端完成"。
+         */
+        fun badgeOf(execution: ExecutionInfo?, clientEscalated: Boolean = false): String =
+            when {
+                execution?.primaryPlane == Plane.EDGE.wire -> "本机完成"
+                execution?.primaryPlane == Plane.CLOUD.wire || clientEscalated ->
+                    if (clientEscalated || (execution?.escalated ?: 0) > 0) "已上云（端侧不达标）" else "云端完成"
+                else -> ""
+            }
     }
 }

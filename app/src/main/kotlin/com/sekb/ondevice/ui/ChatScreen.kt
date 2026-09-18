@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -139,7 +140,7 @@ private fun BubbleRow(bubble: Bubble) {
         Card(shape = RoundedCornerShape(12.dp)) {
             Column(modifier = Modifier.background(bg).padding(10.dp)) {
                 Text(bubble.text, fontSize = 14.sp)
-                val badge = ChatViewModel.badgeOf(bubble.execution)
+                val badge = ChatViewModel.badgeOf(bubble.execution, bubble.escalated)
                 if (badge.isNotEmpty()) {
                     val isEdge = bubble.execution?.primaryPlane == Plane.EDGE.wire
                     Text(
@@ -187,6 +188,9 @@ private fun StatusPanel(viewModel: ChatViewModel, state: ChatUiState) {
                 value = state.password, onValueChange = viewModel::onPasswordChange,
                 label = { Text("密码", fontSize = 11.sp) },
                 modifier = Modifier.weight(1f), singleLine = true,
+                // 必须打码：明文显示密码在**截图/投屏/旁人一瞥**下就直接泄漏了
+                // （UI 验收截图里就白纸黑字出现了密码，才补上这一行）
+                visualTransformation = PasswordVisualTransformation(),
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {

@@ -86,6 +86,41 @@ adb logcat -d -s SEKB_EVAL:I
 - 工具集只有 3 个且互不冲突，未测"多个相似工具里选错"的情况；
 - 全部在**模拟器 + 宿主 Ollama** 上完成（见 §9.1：模拟器不产出性能结论，这里只做功能与协议判定）。
 
+### 1.5 UI 人工路径验收（2026-09-18）
+
+自检（§1.3）走的是"编排器直连"，**绕过了界面**；这一节补的是界面本身：真实点击、"设备接入"、
+发送、渲染。做法：`adb shell input tap` + `uiautomator dump` 定位控件（不靠猜坐标），
+每步 dump 校验状态，最后截图目视确认。
+
+**过程中踩到的两个环境坑**（都会让"点击无效"看起来像 App 的 bug）：
+
+1. **Gboard 窗口盖住下半屏**：点击全打在输入法上 → 按钮没反应。解法：
+   `adb shell ime disable com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME`
+   （`input text` 不依赖输入法，禁掉后点击才落到 App）。
+2. **`input text` 的空格要写 `%s`**：`input text 'What is the answer'` 只会输入 `What`，
+   其余被当成 `input` 的子命令。中文也无法用 `input text` 输入。
+3. 焦点切换用 `KEYCODE_TAB`（点击密码框在部分状态下不生效）。
+
+**结果**（`docs/screenshots/m2-ui-e2e.png`）：
+
+```
+设备：f26c077a59704b52                     ← 界面上完成接入（enroll）
+用户气泡：Hello
+助手气泡：你好！有什么我可以帮你的吗？
+        本机完成 · qwen3.5-4b              ← 执行位置徽标（绿色）
+最近决策：edge · edge_preferred
+权限审计：调用 0 次，拦截 0 次（越权拦截率 0%）
+```
+
+**这一轮 UI 验收抓到两个真缺陷**（都已修）：
+
+1. **密码框明文显示**——截图里密码白纸黑字可见（截图/投屏/旁人一瞥即泄漏）。
+   修法：`visualTransformation = PasswordVisualTransformation()`。
+2. **徽标漏报"客户端侧升级"**——客户端因 `edge_unavailable` 改道云端时，服务端回传的
+   `execution.escalated=0`（它只统计**服务端内部**的升级），于是界面显示成平平无奇的
+   "云端完成"，用户不知道自己的问题在端侧失败过。修法：徽标同时看客户端侧结果，
+   并补 5 条 `BadgeTest` 钉住文案。
+
 ### 1.3 模拟器真机 E2E（14 项全绿，2026-09-18）
 
 环境：macOS Apple Silicon + AVD `Medium_Phone_API_36.1`（arm64-v8a，`-memory 4096`）
@@ -152,7 +187,7 @@ adb logcat -d -s SEKB_SELFTEST:I
 - [x] ~~端云协同：enroll / SSE / 执行位置 / 上报落库~~ → §1.3
 - [ ] **工具调用 JSON 合法率**：约束解码开/关的**同一批提示词对比**（当前只验了"能产出合法 JSON"，
       还没跑成组的合法率对比——需要固定一组提示词 + 各跑 N 次）
-- [ ] **UI 手工走一遍**：自检走的是编排器直连，Compose 界面只做了编译验证，还没人工点过
+- [x] ~~**UI 手工走一遍**~~ → §1.5（并抓到两个真缺陷：密码明文、徽标漏报客户端升级）
 - [ ] 断网可用性（飞行模式下端侧链路是否仍可用）
 - [ ] 真机性能（decode tok/s、TTFT、内存峰值）——**模拟器测不了**，属 M3
 
