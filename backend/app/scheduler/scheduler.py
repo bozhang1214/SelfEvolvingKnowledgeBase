@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -110,22 +111,28 @@ class NewsScheduler:
             logger.info("科技资讯未启用（news.enabled=false），跳过调度")
             return
 
+        # ⚠️ 必须注册**协程函数**（用 partial 绑定参数），不能写成
+        # `lambda: self._run_guarded(...)`：lambda 是同步函数，它只是**创建**了协程
+        # 对象就返回了，APScheduler 拿到后不会 await —— 任务体从来不执行，
+        # 只在日志里留一行 `RuntimeWarning: coroutine ... was never awaited`，
+        # 而 APScheduler 照样报 "executed successfully"（2026-09-15 的修复就是这么
+        # 把日报定时任务整个变成空转的：09-17、09-18 连续两天没日报）。
         self._scheduler.add_job(
-            lambda: self._run_guarded("daily", lambda: self._agent.refresh()),
+            partial(self._run_guarded, "daily", self._agent.refresh),
             CronTrigger.from_crontab(self._config.daily_cron, timezone=self._config.timezone),
             id="news_daily",
             name="科技资讯（每日）",
             **self._job_kwargs(),
         )
         self._scheduler.add_job(
-            lambda: self._run_guarded("weekly", lambda: self._agent.generate_periodic("weekly")),
+            partial(self._run_guarded, "weekly", partial(self._agent.generate_periodic, "weekly")),
             CronTrigger.from_crontab(self._config.weekly_cron, timezone=self._config.timezone),
             id="news_weekly",
             name="科技周报（每周一）",
             **self._job_kwargs(),
         )
         self._scheduler.add_job(
-            lambda: self._run_guarded("monthly", lambda: self._agent.generate_periodic("monthly")),
+            partial(self._run_guarded, "monthly", partial(self._agent.generate_periodic, "monthly")),
             CronTrigger.from_crontab(self._config.monthly_cron, timezone=self._config.timezone),
             id="news_monthly",
             name="科技月报（每月 1 日）",

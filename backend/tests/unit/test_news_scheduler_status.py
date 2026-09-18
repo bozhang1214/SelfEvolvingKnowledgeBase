@@ -21,7 +21,7 @@ def _config(tmp_path) -> SimpleNamespace:
         report_dir=str(tmp_path / "news"),
         daily_cron="0 8 * * *",
         weekly_cron="0 8 * * 1",
-        monthly_cron="0 8 * 1 * *",
+        monthly_cron="0 8 1 * *",
         timezone="Asia/Shanghai",
     )
 
@@ -108,6 +108,47 @@ def test_job_kwargs_relax_misfire_grace(tmp_path) -> None:
     assert kw["misfire_grace_time"] >= 600
     assert kw["coalesce"] is True
     assert kw["max_instances"] == 1
+
+
+# ---------- 注册接线（回归：lambda 包协程 → 任务空转） ----------
+
+
+@pytest.mark.asyncio
+async def test_registered_jobs_are_coroutine_functions(tmp_path) -> None:
+    """回归：`add_job(lambda: self._run_guarded(...))` 只会**创建**协程而不 await。
+
+    症状极隐蔽：APScheduler 照报 "executed successfully"，任务体却从不执行，服务端
+    日志里只有一行 `RuntimeWarning: coroutine ... was never awaited`。2026-09-15 那次
+    「重试 + 状态落盘 + /status」改造正是这么写的 —— 结果 09-17、09-18 连续两天没有
+    日报，而写在 `_run_guarded` 里的状态落盘与飞书告警也一并被绕过（所以「不再静默
+    失败」的机制自己静默失败了）。
+
+    这里断言注册进调度器的可调用对象**本身是协程函数**：复核上面那条改动的修复，
+    一旦有人换回同步 lambda 包装，本用例立刻失败。
+    """
+    import inspect
+
+    class _FakeAgent:
+        """真实 NewsAgent 的两个入口（注册时 partial 会立即取属性，故必须存在）。"""
+
+        async def refresh(self, force: bool = False) -> dict:
+            return {}
+
+        async def generate_periodic(self, kind: str) -> dict:
+            return {}
+
+    s = NewsScheduler(_config(tmp_path), _FakeAgent())
+    s.start()
+    try:
+        jobs = {job.id: job for job in s._scheduler.get_jobs()}
+        assert set(jobs) == {"news_daily", "news_weekly", "news_monthly"}
+        for job in jobs.values():
+            assert inspect.iscoroutinefunction(job.func), (
+                f"{job.id} 注册的不是协程函数（{job.func!r}）："
+                "APScheduler 不会 await 它，任务会空转"
+            )
+    finally:
+        s.shutdown()
 
 
 # ---------- 接口不被 catch-all 吃掉 ----------
