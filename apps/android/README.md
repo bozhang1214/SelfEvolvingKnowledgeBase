@@ -5,13 +5,13 @@
 
 | 项 | 值 |
 |---|---|
-| 本仓库位置 | **`apps/android/`**（2026-09-18 起并入 SEKB 主仓库，原独立仓 `sekb-ondevice-agent` 冻结） |
+| 本仓库位置 | **`apps/android/`**（2026-09-18 起并入 SEKB 主仓库；原独立仓 `sekb-ondevice-agent` 当日**已删除**——Gitea 上删除、GitHub 上归档只读） |
 | 拉全量代码 | `git clone` SEKB 主仓库即可（无需子模块） |
 | 构建 | 在仓库根执行 `bash scripts/android.sh test\|assemble\|install` |
 
 > 为什么要并进来：用户希望**一次 clone 拿到全量代码**，后续还要上鸿蒙、iOS；
 > 而且端云协议是三端共享的契约，文档与实现必须在同一个提交里改。
-> 原独立仓的 6 个提交历史完整保留（在并入的合并提交里）。
+> 原独立仓的 6 个提交历史完整保留（在并入的合并提交里），删除独立仓不会丢任何历史。
 
 设计文档（权威）：SEKB 仓库 [`docs/RFC-端云协同与端侧Agent.md`](https://100.71.24.105:3000/bo/sekb)
 接口契约：SEKB 仓库 `docs/ops/16-端云协同协议.md`

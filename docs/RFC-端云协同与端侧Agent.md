@@ -970,11 +970,14 @@ Kotlin + Compose，Gradle 9.2.1 + AGP 9.0.0 + Kotlin 2.2.10（版本组合按本
 | iOS | **Xcode 26.6** + iOS 26.3/26.4 模拟器运行时 + swift/swiftc | ✅ 可做，但 `xcode-select` 指向 CommandLineTools → 需 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` |
 | 鸿蒙 | DevEco Studio（`Contents/sdk/default`、`tools/hvigor`、`tools/ohpm`、内置 node/jbr） | ✅ 命令行可构建（hvigor + ohpm），不必只用 IDE 界面 |
 
-### 17.5 待确认
+### 17.5 已定（2026-09-18 业主确认）
 
-- 原独立仓 `sekb-ondevice-agent`（Gitea + GitHub）**归档还是删除**？（当前冻结、仍可读）
-- 目录命名 `apps/<平台>` 是否合意（备选 `clients/`）；
-- `shared/` KMP 抽取的时机：建议**开始做 iOS 时**（现在只有一个端，抽了也没有第二消费方）。
+| 事项 | 结论 |
+|---|---|
+| 原独立仓 `sekb-ondevice-agent` | **删除**：Gitea 侧已删（复核 404）；GitHub 侧**已归档只读**（token 缺 `delete_repo` 权限，删除需业主在 UI 操作或给令牌加该权限） |
+| 目录命名 | `apps/<平台>` ✅ |
+| CI | 给 `apps/android` 加 path 过滤的任务；服务端改动不触发它（见 §17.6） |
+| 下一步 | 真机未到 → 先做**端侧 RAG**（见 §19） |
 
 ---
 

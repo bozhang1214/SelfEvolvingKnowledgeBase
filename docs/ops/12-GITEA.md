@@ -163,7 +163,7 @@ curl -u bo:<密码> -X POST http://localhost:3000/api/v1/user/repos \
 - 运维工具：**`scripts/gitea_mirror.py`**（`status` / `sync` / `rebuild`），下面的坑都已处理。
 
 ```bash
-python3 scripts/gitea_mirror.py status    # 查看五个仓库的镜像状态
+python3 scripts/gitea_mirror.py status    # 查看四个仓库的镜像状态
 python3 scripts/gitea_mirror.py sync      # 触发一次同步（正确端点）
 python3 scripts/gitea_mirror.py rebuild   # token 轮换后用新 token 重建
 ```
@@ -211,7 +211,7 @@ python3 scripts/gitea_mirror.py rebuild && python3 scripts/gitea_mirror.py sync
 
 | 项 | 状态 |
 |---|---|
-| 镜像配置 | ✅ **五个**仓库均已配置，地址正确（2026-09-18 新增 `sekb-ondevice-agent`：端侧宿主独立成仓，Gitea 私有 / GitHub 公开，参数与 `sekb` 一致） |
+| 镜像配置 | ✅ **四个**仓库均已配置，地址正确。（2026-09-18 曾新增 `sekb-ondevice-agent`；同日又删除——端侧代码并入主仓 `apps/android/`，独立仓不再需要，见 RFC §17） |
 | 实际推送 | ✅ 正常（`sekb` / `jobcopilot` 与 Gitea 一致，两个空仓库待有内容后推送） |
 | Token | ✅ 已轮换为新 PAT；旧 PAT 实测 `Bad credentials`（已失效） |
 | **全链路自动镜像** | ✅ **已实测闭环**（2026-09-14 19:27）：本地 `push gitea main` → Gitea `sync_on_commit` **自动触发** → GitHub。三点 SHA 一致（`dee8b47`），`sekb` 的 `last_update` 由 18:55（手动）自动推进到 19:27，**无需人工 `sync`** |

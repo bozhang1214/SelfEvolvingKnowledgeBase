@@ -19,13 +19,14 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${HERE}/../../.." && pwd)"
 ROOT="$(cd "${HERE}/../../.." && pwd)"
 cd "$ROOT"
 
 PASS_ARGS=()
 FAIL=0
 
-echo "── 1/4 文档链接与代码引用（全仓 Markdown）──"
+echo "── 1/5 文档链接与代码引用（全仓 Markdown）──"
 if command -v python3 >/dev/null 2>&1; then
     python3 "${HERE}/check-docs.py" "$@" || FAIL=1
 else
@@ -33,17 +34,23 @@ else
 fi
 
 echo ""
-echo "── 2/4 技术文档孤儿与 tech 内链接 ──"
+echo "── 2/5 技术文档孤儿与 tech 内链接 ──"
 bash "${HERE}/check-links.sh" || FAIL=1
 
 echo ""
-echo "── 3/4 文档新鲜度（last-updated / based-on-commit）──"
+echo "── 3/5 文档新鲜度（last-updated / based-on-commit）──"
 bash "${HERE}/check-freshness.sh" || FAIL=1
 
 echo ""
-echo "── 4/4 活数字一致性（同一事实多处不得取值矛盾）──"
+echo "── 4/5 活数字一致性（同一事实多处不得取值矛盾）──"
 if command -v python3 >/dev/null 2>&1; then
     python3 "${HERE}/check-facts.py" || FAIL=1
+fi
+
+echo ""
+echo "── 5/5 端云协议三方一致（文档 ↔ 服务端路由 ↔ 端侧客户端）──"
+if command -v python3 >/dev/null 2>&1; then
+    python3 "${ROOT_DIR}/scripts/check_protocol_paths.py" || FAIL=1
 fi
 
 echo ""

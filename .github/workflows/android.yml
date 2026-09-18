@@ -1,0 +1,84 @@
+name: Android
+
+# 只在端侧代码/脚本变更时跑：服务端改动不该触发 Android 工具链（反之亦然）。
+# 单独一个 workflow 文件（而不是塞进 ci.yml）就是为了用**原生**的 paths 过滤，
+# 不引入第三方 paths-filter action，也不影响现有 CI 各作业的触发范围。
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "apps/android/**"
+      - "scripts/android.sh"
+      - ".github/workflows/android.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "apps/android/**"
+      - "scripts/android.sh"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android (unit tests + debug APK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # 与 scripts/android.sh 的默认一致；显式写出来是为了能被 actions/cache 缓存
+      GRADLE_USER_HOME: ${{ github.workspace }}/.tooling/gradle-home
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # SDK platform 有两套可能：本机装的是 android-36.1（Android 16 QPR2 的次版本），
+      # GitHub runner 上不一定有。所以先试 36.1，失败再退回 36 —— **不赌**某一种，
+      # 并把选中的次版本传给 Gradle（构建脚本用 -PsekbCompileSdkMinor 控制）。
+      - name: Install SDK platform (36.1，缺失则退回 36)
+        id: sdk
+        run: |
+          set -euo pipefail
+          if yes | sdkmanager --licenses >/dev/null 2>&1; then :; fi
+          if yes | sdkmanager "platforms;android-36.1" "build-tools;36.0.0" >/dev/null 2>&1; then
+            echo "选中 platforms;android-36.1"
+            echo "minor=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::platforms;android-36.1 不可用，退回 platforms;android-36（compileSdkMinor=0）"
+            yes | sdkmanager "platforms;android-36" "build-tools;36.0.0" >/dev/null
+            echo "minor=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache Gradle state
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}
+          key: gradle-${{ runner.os }}-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Unit tests（纯逻辑，96 用例）
+        env:
+          SEKB_COMPILE_SDK_MINOR: ${{ steps.sdk.outputs.minor }}
+        run: bash scripts/android.sh test
+
+      - name: Assemble debug APK
+        env:
+          SEKB_COMPILE_SDK_MINOR: ${{ steps.sdk.outputs.minor }}
+        run: bash scripts/android.sh assemble
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sekb-ondevice-debug-apk
+          path: apps/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

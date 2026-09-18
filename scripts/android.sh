@@ -34,7 +34,8 @@ fi
 #    - ANDROID_USER_HOME：AGP 要在这里生成 **debug.keystore**（否则 assembleDebug 会因为
 #      写不了 ~/.android 直接失败——实测报 "Unable to create debug keystore ... not writable"）
 #    - ANDROID_AVD_HOME：模拟器 AVD（可选搬进来；不搬则启动模拟器仍需授权）
-export GRADLE_USER_HOME="$ROOT/.tooling/gradle-home"
+# 已显式设置时不覆盖（CI 上会指向被 actions/cache 缓存的那个目录）
+export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$ROOT/.tooling/gradle-home}"
 export ANDROID_USER_HOME="$ROOT/.tooling/android-home"
 # ⚠️ 不要再设 ANDROID_PREFS_ROOT（哪怕设成同一个路径）：AGP 9 会因此直接崩在
 #    "AndroidLocationsBuildService ... AndroidDirectoryCreator" 上（实测）。
@@ -56,14 +57,17 @@ export ANDROID_SDK_ROOT="$SDK" ANDROID_HOME="$SDK"
 
 cd "$APP_DIR"
 
+# compileSdk 次版本：本机 1（android-36.1），只有 android-36 的环境传 0
+MINOR_FLAG="-PsekbCompileSdkMinor=${SEKB_COMPILE_SDK_MINOR:-1}"
+
 STATUS=0
 for task in "$@"; do
     case "$task" in
-        test)      ./gradlew :app:testDebugUnitTest --console=plain ;;
-        assemble)  ./gradlew :app:assembleDebug --console=plain \
+        test)      ./gradlew :app:testDebugUnitTest --console=plain $MINOR_FLAG ;;
+        assemble)  ./gradlew :app:assembleDebug --console=plain $MINOR_FLAG \
                        ${SEKB_SEKB_URL:+-PsekbBaseUrl="$SEKB_SEKB_URL"} ;;
-        install)   ./gradlew :app:installDebug --console=plain ;;
-        *)         ./gradlew "$task" --console=plain ;;
+        install)   ./gradlew :app:installDebug --console=plain $MINOR_FLAG ;;
+        *)         ./gradlew "$task" --console=plain $MINOR_FLAG ;;
     esac || STATUS=$?
 done
 exit $STATUS

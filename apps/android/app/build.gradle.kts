@@ -9,6 +9,12 @@
 //    `EncryptedSharedPreferences` 替代实现都需要 23+，取 26 是为了覆盖绝大多数在用机型。
 // 3. 依赖尽量用**本机 Gradle 缓存里已有**的版本（见根 build.gradle.kts 注释）：
 //    少一次下载就少一次"构建卡在网络上"的可能。
+// compileSdk 的**次版本**（API 36.1 = Android 16 QPR2）可覆盖：
+//   本机（与模拟器镜像一致）装的是 `platforms/android-36.1` → 默认 1；
+//   CI / 标准 SDK 往往只有 `android-36` → 传 `-PsekbCompileSdkMinor=0`。
+// 为什么要可覆盖：不能让"某台机器上装了哪个 platform"变成构建脚本的硬依赖。
+val sekbCompileSdkMinor = (project.findProperty("sekbCompileSdkMinor") as String?)?.toIntOrNull() ?: 1
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -17,7 +23,7 @@ plugins {
 android {
     namespace = "com.sekb.ondevice"
     compileSdk = 36
-    compileSdkMinor = 1
+    if (sekbCompileSdkMinor > 0) compileSdkMinor = sekbCompileSdkMinor
 
     defaultConfig {
         applicationId = "com.sekb.ondevice"

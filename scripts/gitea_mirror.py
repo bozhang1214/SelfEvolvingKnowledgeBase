@@ -2,7 +2,7 @@
 """Gitea 推送镜像运维工具：查看状态 / 触发同步 / 重建（换 token 用）。
 
 用法（在服务器上执行）：
-    python3 scripts/gitea_mirror.py status     # 查看五个仓库的镜像状态（默认）
+    python3 scripts/gitea_mirror.py status     # 查看四个仓库的镜像状态（默认）
     python3 scripts/gitea_mirror.py sync       # 触发一次推送（同步到 GitHub）
     python3 scripts/gitea_mirror.py rebuild    # 用当前 token 重建镜像（token 轮换后用）
 
@@ -38,8 +38,8 @@ REPO_MAP: dict[str, str] = {
     "jobcopilot": "jobcopilot",
     "jobcopilot-prompts": "jobcopilot-prompts",
     "jobcopilot-dsh-plugin": "jobcopilot-dsh-plugin",
-    # 端侧宿主（M2 起独立成仓）：Gitea 主 + GitHub 辅，同步参数与上面几个一致
-    "sekb-ondevice-agent": "sekb-ondevice-agent",
+    # 注：sekb-ondevice-agent 已于 2026-09-18 删除——端侧代码并入主仓 apps/android/
+    # （见 docs/RFC §17）。这里不再保留条目，否则 status 会对不存在的仓库报 ❌。
 }
 
 HOME = Path.home()
@@ -85,7 +85,7 @@ def api(path: str, method: str = "GET", payload: dict | None = None) -> object:
 
 
 def cmd_status() -> int:
-    """打印五个仓库的镜像状态；地址不符或同步报错则返回非 0。"""
+    """打印四个仓库的镜像状态；地址不符或同步报错则返回非 0。"""
     bad = 0
     for gitea_name, gh_name in REPO_MAP.items():
         mirrors = api(f"/repos/{GITEA_OWNER}/{gitea_name}/push_mirrors")
@@ -143,7 +143,7 @@ def cmd_sync(retries: int = 3) -> int:
 
 
 def cmd_rebuild() -> int:
-    """用当前 GitHub token 重建五个镜像（**token 轮换后必做**）。"""
+    """用当前 GitHub token 重建四个镜像（**token 轮换后必做**）。"""
     gh = github_token()
     for gitea_name, gh_name in REPO_MAP.items():
         print(f"  === {gitea_name} -> {gh_name} ===")
