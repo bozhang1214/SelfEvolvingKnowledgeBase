@@ -3,6 +3,14 @@
 把 SEKB 做成**端云协同**：能在端侧算的就在端侧算（延迟优先），端侧算不了/算不好的再上云，
 并且**如实告诉用户这次到底在哪算的**。
 
+| 项 | 值 |
+|---|---|
+| Gitea（**主**，开发在这里推） | `ssh://git@100.71.24.105:2222/bo/sekb-ondevice-agent.git` |
+| GitHub（**辅**，只读镜像） | https://github.com/bozhang1214/sekb-ondevice-agent |
+
+> **别往 GitHub 推**：它是 Gitea 的**推送镜像**（`sync_on_commit` + 8h 定时），
+> 直接推 GitHub 会在下次同步时被覆盖。
+
 设计文档（权威）：SEKB 仓库 [`docs/RFC-端云协同与端侧Agent.md`](https://100.71.24.105:3000/bo/sekb)
 接口契约：SEKB 仓库 `docs/ops/16-端云协同协议.md`
 
@@ -61,6 +69,8 @@ Gradle **9.2.1** + AGP **9.0.0** + Kotlin **2.2.10** + Compose BOM 2024.09.00。
 ## 验证状态
 
 见 [`docs/VERIFICATION.md`](docs/VERIFICATION.md)：哪些已经验过、怎么复现、哪些**还没验**。
+一句话：91 个 JVM 单测 + 模拟器真机 E2E **14/14**（真实 Ollama 流式、越权拦截率 50%、
+云端 SSE 执行位置、路由事件落库）+ 工具调用合法率对照实验（40 次调用四种条件全 100%）。
 
 ## 与 SEKB 的关系
 
