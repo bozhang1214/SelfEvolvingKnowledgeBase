@@ -50,6 +50,42 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 # → app/build/outputs/apk/debug/app-debug.apk
 ```
 
+### 1.4 验收数字：工具调用 JSON 合法率（约束解码 ON/OFF 对照）
+
+```bash
+adb shell am force-stop com.sekb.ondevice
+adb shell am start -n com.sekb.ondevice/.MainActivity --ez eval true            # 易档
+adb shell am start -n com.sekb.ondevice/.MainActivity --ez eval true --ez hard true  # 难档
+adb logcat -d -s SEKB_EVAL:I
+```
+
+做法：同一批提示词 × 同一模型 × 同一温度，只切换
+`response_format={"type":"json_object"}`（约束解码在 OpenAI 兼容协议里的对应物）；
+分母用**尝试次数**（"模型有没有想调工具"）而不是全部回答——否则模型越不敢用工具，这个数字越好看。
+
+| 档位 | 提示词 | 约束解码 | 尝试 | 合法 | 合法率 | 平均延迟 |
+|---|---|---|---|---|---|---|
+| qwen3.5-2b | 易档（含"只调用工具"） | ON | 10/10 | 10 | **100%** | 187ms |
+| qwen3.5-2b | 易档 | OFF | 10/10 | 10 | **100%** | 163ms |
+| qwen3.5-4b | 易档 | ON | 10/10 | 10 | **100%** | 319ms |
+| qwen3.5-4b | 易档 | OFF | 10/10 | 10 | **100%** | 346ms |
+| qwen3.5-2b | 难档（不给"只输出 JSON"指令） | ON | 10/10 | 10 | **100%** | 190ms |
+| qwen3.5-2b | 难档 | OFF | 10/10 | 10 | **100%** | 183ms |
+| qwen3.5-4b | 难档 | ON | 10/10 | 10 | **100%** | 358ms |
+| qwen3.5-4b | 难档 | OFF | 10/10 | 10 | **100%** | 361ms |
+
+**结论（如实说，包括它推翻的东西）**：40 次调用里**没有一次**非法，也没有一次工具名幻觉；
+两种模式的延迟差在噪声范围（±20ms，且方向在两个档位间不一致）。
+所以**在这批条件下，约束解码没有带来可测量的收益**——原本假设"小模型必须靠 grammar 才能产出合法
+工具调用"，实测**不成立**（qwen3.5-2b 在难档下同样是 100%）。据此的建议是：
+**先不要为 grammar 付出工程复杂度**，把 `response_format` 留成开关，等换了更弱的模型再验证。
+
+**这个实验的局限（同样要说清楚）**：
+- 系统提示里仍然给了完整的 JSON 形状与工具清单——没有测"完全不给 schema"的极端条件；
+- 10 条提示词各只跑 **1 次**，没有重复采样，因此**没有方差估计**，100% 也可能只是运气好；
+- 工具集只有 3 个且互不冲突，未测"多个相似工具里选错"的情况；
+- 全部在**模拟器 + 宿主 Ollama** 上完成（见 §9.1：模拟器不产出性能结论，这里只做功能与协议判定）。
+
 ### 1.3 模拟器真机 E2E（14 项全绿，2026-09-18）
 
 环境：macOS Apple Silicon + AVD `Medium_Phone_API_36.1`（arm64-v8a，`-memory 4096`）
