@@ -27,7 +27,7 @@ related: [docs/RFC-自迭代闭环设计, docs/ops/15-MCP-ENDPOINT, docs/tech/03
 | # | 决策 | 结论 |
 |---|---|---|
 | D1 | 鸿蒙本期做吗 | **不做**（列为 M3 后 stretch；鸿蒙不兼容 APK = 第二套 App + 第二套推理栈，额外 2–4 周） |
-| D2 | 仓库形态 | **独立 repo** `sekb-ondevice-agent`；SEKB 只加 §8 的 S1–S3 |
+| D2 | 仓库形态 | ~~独立 repo `sekb-ondevice-agent`~~ → **修正为 monorepo**：端侧并入 SEKB 主仓库的 `apps/`（见 §17，2026-09-18）；SEKB 只加 §8 的 S1–S3 |
 | D3 | 云端对话入口 | 走**已有的** SEKB REST/SSE（`/api/v1/chat` + `/stream`），不给内核加 chat 工具 |
 | D4 | 设备身份 | **设备级 token**；共享 `JOBCOPILOT_HTTP_TOKEN` 与 LLM Key **绝不进 APK** |
 | D5 | 端侧 RAG | **直接上向量**（bge-small-zh INT8 + sqlite-vec），与云端同 512 维空间；跳过 BM25 |
@@ -531,7 +531,7 @@ MVP **不做**"同一会话在手机和 Mac 上同时编辑"。改为：
 | # | 决策 | 结论 |
 |---|---|---|
 | D1 | **鸿蒙是否本期做** | **不做**，列为 M3 后的 stretch。理由：鸿蒙不兼容 APK，等于第二套 App（ArkTS/ArkUI）+ 第二套推理栈（MindSpore Lite/HiAI）+ 华为上架流程，**额外 2–4 周**；而目标岗（小米/字节）的题眼是 Android 深度 |
-| D2 | 仓库形态 | ✅ **已确认**：独立 repo；SEKB 只加 §8 的 S1–S3 |
+| D2 | 仓库形态 | ✅ **已确认（2026-09-18 修正为 monorepo）**：端侧代码放 SEKB 主仓库 `apps/<平台>/`；SEKB 只加 §8 的 S1–S3 |
 | D3 | 云端对话入口 | ✅ **已确认** |
 | D4 | 设备身份 | ✅ **已确认** |
 | D5 | 端侧 RAG | ✅ **已确认** |
@@ -831,7 +831,7 @@ role=planner     平面=cloud  原因=output_over_edge_budget(600>300)   模型=
 
 ### 16.3 Android 宿主（本轮）
 
-仓库 `sekb-ondevice-agent`（独立 repo，D2）已经有**第一批可运行代码**：
+端侧宿主（当时在独立 repo，**2026-09-18 已并入 `apps/android/`**，见 §17）第一批可运行代码：
 Kotlin + Compose，Gradle 9.2.1 + AGP 9.0.0 + Kotlin 2.2.10（版本组合按本机已缓存工具链选定）。
 
 | 模块 | 位置（新 repo 内） | 说明 |
@@ -905,6 +905,64 @@ Kotlin + Compose，Gradle 9.2.1 + AGP 9.0.0 + Kotlin 2.2.10（版本组合按本
       （私有）+ GitHub `bozhang1214/sekb-ondevice-agent`（公开）+ 推送镜像（8h + 提交即同步），
       `gitea_mirror.py status` 五仓全绿，GitHub 侧用 `git ls-remote` **独立核对**到同一 commit
 - [ ] M3：llama.cpp NDK 真·端侧推理 + 真机性能数字
+
+---
+
+## 17. 仓库形态修正：从"端侧独立成仓"到 monorepo（2026-09-18）
+
+### 17.1 为什么改 D2
+
+原决策（D2）是端侧独立成仓。实际跑完 M2 后，业主提出三点，逐条成立：
+
+1. **"希望用户一次 clone 拿到全量代码，按需编译各端"** —— 多仓 + 子模块会把这件事
+   变成需要说明书的操作（本项目 `jobcopilot` 子模块已有先例，AGENTS.md 明确记着
+   "子模块指针是全局单点：谁改了指针，别人一 pull 就跟着变"）。
+2. **"后续一定支持鸿蒙、iOS"** —— 端越多，独立仓的维护成本越高（每加一端就要
+   再建一个仓、再配一次镜像、再造一套跨仓同步）。
+3. **协议是共享契约** —— `docs/ops/16-端云协同协议.md` 与三端实现必须在**同一个提交**里改，
+   否则必然出现"文档说 A、代码做 B"。
+
+### 17.2 改成了什么
+
+| 项 | 决定 |
+|---|---|
+| 代码位置 | SEKB 主仓库 `apps/android/`（原 `sekb-ondevice-agent` 独立仓**冻结为只读**） |
+| 历史 | 完整保留：用 `git merge -s ours --allow-unrelated-histories` + `git read-tree --prefix` 导入，合并提交有两个父提交（原仓 6 个提交可达）。⚠️ `git log --follow <新路径>` **跨不过导入边界**，查旧历史要用原路径或合并提交的第二父提交 |
+| 多端目录 | `apps/android/`（可用）、`apps/ios/`、`apps/harmony/`（占位 + 开工须知） |
+| 跨端纯逻辑 | 目标 `shared/`（Kotlin Multiplatform）：`route/` `net/` `tools/` `chat/` `eval/` 这批**不 import `android.*`** 的代码搬家即可，不是重写。抽出的时机 = 开始做 iOS 时 |
+| 鸿蒙例外 | ArkTS 不能复用 Kotlin → 三条路线（ArkTS 重写 + 契约测试 / C 核心 + 三端绑定 / 瘦客户端）见 `apps/harmony/README.md` |
+| 镜像 | 新代码随 `sekb` 仓库镜像（Gitea → GitHub）；原 `sekb-ondevice-agent` 镜像保留但不再更新 |
+
+### 17.3 附带收获：构建不再需要仓库外的写权限
+
+端侧代码进仓库后，把**构建状态**也收进仓库即可彻底摆脱"每次构建都要授权"：
+
+| 变量 | 指向 | 为什么 |
+|---|---|---|
+| `GRADLE_USER_HOME` | `.tooling/gradle-home` | Gradle 默认写 `~/.gradle`（本机 1.4G） |
+| `ANDROID_USER_HOME` | `.tooling/android-home` | AGP 要在这里生成 **debug.keystore**，否则 `assembleDebug` 直接失败 |
+| `ANDROID_AVD_HOME` | `.tooling/android-avd` | 模拟器 AVD（可选搬入，4.4G） |
+
+统一入口 `scripts/android.sh`（`test` / `assemble` / `install`）。
+**实测结果**：`bash scripts/android.sh test assemble` 在**没有任何额外授权**的情况下通过，
+产出 APK。两个坑记在脚本注释与 AGENTS.md §4.5：
+① 不设 `ANDROID_USER_HOME` → `Unable to create debug keystore ... not writable`；
+② **同时**设 `ANDROID_PREFS_ROOT`（哪怕同一路径）→ AGP 9 崩在
+`AndroidLocationsBuildService ... AndroidDirectoryCreator`。
+
+### 17.4 工具链现状（本机实测，决定"哪些端现在就能做"）
+
+| 端 | 工具链 | 结论 |
+|---|---|---|
+| Android | Android Studio（JBR 21）+ SDK platform 36.1 + AVD arm64 | ✅ 可构建可跑（已验证） |
+| iOS | **Xcode 26.6** + iOS 26.3/26.4 模拟器运行时 + swift/swiftc | ✅ 可做，但 `xcode-select` 指向 CommandLineTools → 需 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` |
+| 鸿蒙 | DevEco Studio（`Contents/sdk/default`、`tools/hvigor`、`tools/ohpm`、内置 node/jbr） | ✅ 命令行可构建（hvigor + ohpm），不必只用 IDE 界面 |
+
+### 17.5 待确认
+
+- 原独立仓 `sekb-ondevice-agent`（Gitea + GitHub）**归档还是删除**？（当前冻结、仍可读）
+- 目录命名 `apps/<平台>` 是否合意（备选 `clients/`）；
+- `shared/` KMP 抽取的时机：建议**开始做 iOS 时**（现在只有一个端，抽了也没有第二消费方）。
 
 ---
 

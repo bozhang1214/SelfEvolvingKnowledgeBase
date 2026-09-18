@@ -5,11 +5,13 @@
 
 | 项 | 值 |
 |---|---|
-| Gitea（**主**，开发在这里推） | `ssh://git@100.71.24.105:2222/bo/sekb-ondevice-agent.git` |
-| GitHub（**辅**，只读镜像） | https://github.com/bozhang1214/sekb-ondevice-agent |
+| 本仓库位置 | **`apps/android/`**（2026-09-18 起并入 SEKB 主仓库，原独立仓 `sekb-ondevice-agent` 冻结） |
+| 拉全量代码 | `git clone` SEKB 主仓库即可（无需子模块） |
+| 构建 | 在仓库根执行 `bash scripts/android.sh test\|assemble\|install` |
 
-> **别往 GitHub 推**：它是 Gitea 的**推送镜像**（`sync_on_commit` + 8h 定时），
-> 直接推 GitHub 会在下次同步时被覆盖。
+> 为什么要并进来：用户希望**一次 clone 拿到全量代码**，后续还要上鸿蒙、iOS；
+> 而且端云协议是三端共享的契约，文档与实现必须在同一个提交里改。
+> 原独立仓的 6 个提交历史完整保留（在并入的合并提交里）。
 
 设计文档（权威）：SEKB 仓库 [`docs/RFC-端云协同与端侧Agent.md`](https://100.71.24.105:3000/bo/sekb)
 接口契约：SEKB 仓库 `docs/ops/16-端云协同协议.md`
@@ -47,11 +49,13 @@ M2 的目标是**把协议与功能做对**，而性能数字只有在真机上�
 ## 构建与测试
 
 ```bash
-# 依赖：JDK 17+（本机用 Android Studio 自带 JBR）、Android SDK（platform 36.1）
-export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+# 推荐：在**仓库根**用统一入口（自动设好 JDK / GRADLE_USER_HOME / Android SDK）
+bash scripts/android.sh test        # 纯逻辑单测（无需模拟器、无需联网）
+bash scripts/android.sh assemble    # 产出 app/build/outputs/apk/debug/app-debug.apk
+bash scripts/android.sh install     # 装到已连接的模拟器/真机
 
-./gradlew :app:testDebugUnitTest    # 纯逻辑单测（无需模拟器、无需联网）
-./gradlew :app:assembleDebug        # 产出 app/build/outputs/apk/debug/app-debug.apk
+# 直接用 gradlew 也可以，但要自己 export JAVA_HOME / GRADLE_USER_HOME
+cd apps/android && ./gradlew :app:testDebugUnitTest
 ```
 
 > 首次构建前把 `local.properties` 里的 `sdk.dir` 改成本机 SDK 路径（该文件不入库）。

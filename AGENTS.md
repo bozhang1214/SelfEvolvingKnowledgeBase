@@ -29,6 +29,8 @@
 | `backend/app/api/routes/job.py` | 接口层，双方都会加端点 |
 | `docker-compose*.yml` / `deploy/nginx.conf` / `deploy/deploy.sh` | 基础设施，改错影响全站 |
 | `docs/CHANGELOG.md` | **历史冲突热点** → 见第 2 条，不要再直接改它 |
+| `apps/*/` | 各端应用（2026-09-18 起 Android 在 `apps/android/`）：端侧改动与 SEKB 主代码同仓，**冲突窗口比过去大**，改前先看认领表 |
+| `.tooling/` | 本机构建状态（Gradle 缓存等，不入库）。**不要提交**、也不要清理别人的缓存——清了就是几十分钟重新下载 |
 
 ## 2. 写变更记录：用**碎片文件**，不要改 CHANGELOG
 
@@ -69,6 +71,24 @@ git status && git diff          # ⚠️ 看 diff 里有没有「不是我改的
 
 - 改 `jobcopilot/**` → 必须同时更新 SEKB 的子模块指针并**在同一个提交里说明**；
 - 开工前跑 `bash scripts/check_kernel.sh`，确认没人正在动它。
+
+## 4.5 端侧构建（`apps/`）：统一走 `scripts/android.sh`
+
+`apps/android` 的构建状态（Gradle 缓存、Android debug keystore）全部落在仓库内的
+`.tooling/`，所以：
+
+```bash
+bash scripts/android.sh test | assemble | install
+```
+
+不要手工 `export GRADLE_USER_HOME=~/.gradle` 再构建——那会把缓存写到仓库外，
+在受限沙箱（如 DSH 的 workspace-write）里直接失败，而且缓存会分裂成两份。
+
+两个已踩过的坑（写在脚本注释里，改脚本前先读）：
+
+- **必须设 `ANDROID_USER_HOME`**，否则 `assembleDebug` 会因为写不了 `~/.android/debug.keystore` 失败；
+- **不要再设 `ANDROID_PREFS_ROOT`**（哪怕指向同一路径）——AGP 9 会崩在
+  `AndroidLocationsBuildService ... AndroidDirectoryCreator`。
 
 ## 5. 部署：脚本自带锁，别绕过
 

@@ -1,0 +1,8 @@
+# 构建工具状态（Gradle 缓存、wrapper 分发包、Android debug.keystore 等）——**不入库**。
+# 但目录本身要留在仓库里：`scripts/android.sh` 需要有个一定能写的地方，
+# 这正是"构建不需要工作区外写权限"的前提。
+#
+# 实测体积：gradle-home 约 1.4G（依赖缓存）、android-avd 约 4.4G（若把 AVD 搬进来）。
+*
+!.gitignore
+!README.md

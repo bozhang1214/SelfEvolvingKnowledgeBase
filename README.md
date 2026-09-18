@@ -23,6 +23,7 @@
 - [快速开始](#快速开始)
 - [API 端点列表](#api-端点列表)
 - [项目结构](#项目结构)
+- [多端应用（apps/）](#多端应用apps)
 - [测试说明](#测试说明)
 - [技术栈](#技术栈)
 
@@ -514,6 +515,9 @@ SelfEvolvingKnowledgeBase/
 │   ├── requirements.txt                # 依赖清单
 │   └── pyproject.toml                  # 项目元数据
 │
+├── apps/                               # **各端应用**（Android 已可用；iOS/鸿蒙规划中，见 apps/README.md）
+│   └── android/                        #   Kotlin + Jetpack Compose 端侧宿主（含单测与自检）
+├── .tooling/                           # 本机构建状态（Gradle 缓存等，.gitignore 忽略；让构建无需仓库外写权限）
 ├── frontend/                           # 前端（Phase 3，React + Vite）
 ├── deploy/                             # 部署配置（Phase 4）
 │   ├── nginx.conf                      #   Nginx 反向代理配置
@@ -541,6 +545,29 @@ SelfEvolvingKnowledgeBase/
 ├── .gitignore
 └── .env.project
 ```
+
+---
+
+## 多端应用（apps/）
+
+一个仓库装下**服务端 + 所有端侧应用**：一次 clone 拿到全量代码，按需编译各端。
+
+| 端 | 目录 | 状态 | 构建 |
+|---|---|---|---|
+| Android | `apps/android/` | ✅ 可用（96 单测、模拟器 E2E 14/14） | `bash scripts/android.sh assemble` |
+| iOS | `apps/ios/` | 📋 规划中（本机 Xcode 26.6 + iOS 26.3/26.4 模拟器已就绪） | 见 `apps/ios/README.md` |
+| 鸿蒙 | `apps/harmony/` | 📋 规划中（本机 DevEco Studio + hvigor/ohpm 已就绪） | 见 `apps/harmony/README.md` |
+
+端云协同的**协议**是三方共享的契约，见 [`docs/ops/16-端云协同协议.md`](docs/ops/16-端云协同协议.md)；
+设计动机与决策见 [`docs/RFC-端云协同与端侧Agent.md`](docs/RFC-端云协同与端侧Agent.md)。
+
+为什么放在同一个仓库（而不是各端独立成仓）：**① 用户一次 clone 拿到全量**；
+**② 协议文档与三端实现能在同一个提交里改**，避免"文档说 A、代码做 B"；
+**③ 跨端纯逻辑只写一遍**（`route/` `net/` `tools/` `chat/` 这批不依赖 `android.*` 的代码
+将被抽成 Kotlin Multiplatform 的 `shared/`，Android 与 iOS 共用）。
+
+构建状态（Gradle 缓存、Android debug keystore）统一落在仓库内的 `.tooling/`，
+因此**构建与测试不需要任何仓库外的写权限**。
 
 ---
 
