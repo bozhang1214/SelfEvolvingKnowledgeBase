@@ -53,9 +53,18 @@ def test_monthly_window_december_rollover() -> None:
     assert until.astimezone(timezone.utc) == datetime(2026, 12, 31, 16, 0, tzinfo=timezone.utc)
 
 
-def test_period_window_daily_returns_none() -> None:
-    """日报不按自然周期（返回 None，调用方回退小时窗口）。"""
-    assert NewsAgent._period_window("daily", "2026-09-15", "Asia/Shanghai") is None
+def test_period_window_daily_is_natural_day() -> None:
+    """日报回填的窗口 = 该**自然日** [00:00, 次日 00:00)，且保持本地时区偏移。
+
+    注意：日常调度的日报**不用**这个窗口（那走滚动小时窗口），只有回填
+    ``refresh(day=...)`` 才显式传入 period，见 test_news_backfill.py。
+    """
+    window = NewsAgent._period_window("daily", "2026-09-15", "Asia/Shanghai")
+    assert window is not None
+    since, until = window
+    assert since.strftime("%Y-%m-%d %H:%M") == "2026-09-15 00:00"
+    assert (until - since).total_seconds() == 24 * 3600
+    assert since.utcoffset() is not None and since.utcoffset().total_seconds() == 8 * 3600
 
 
 def test_period_window_bad_label_returns_none() -> None:

@@ -1,9 +1,11 @@
 """
 CLI 主入口模块
 
-基于 Typer 框架定义命令组，提供三个子命令：
+基于 Typer 框架定义命令组，提供以下子命令：
     - chat：启动交互式聊天
     - eval：运行评估测试
+    - rag-eval：运行 RAG 检索质量评测
+    - news-backfill：回填指定日期的科技资讯日报
     - health：健康检查
 
 每个命令都通过 app.core.bootstrap.initialize_app 装配依赖，
@@ -17,6 +19,7 @@ CLI 主入口模块
     sekb chat --conv-id <uuid> --config config.yaml
     sekb eval --dataset app/eval/datasets/golden_qa.json \\
               --output tests/reports/eval_report.md
+    sekb news-backfill 2026-09-17
     sekb health
 """
 
@@ -169,6 +172,68 @@ def rag_eval(
             raise typer.Exit(code=1)
         except Exception as e:
             console.print(f"[red]评测意外错误: {e}[/red]")
+            raise typer.Exit(code=1)
+        finally:
+            await shutdown_app(ctx)
+
+    asyncio.run(_run())
+
+
+# ============================================================
+# 子命令：news-backfill
+# ============================================================
+
+@app.command(name="news-backfill")
+def news_backfill(
+    dates: list[str] = typer.Argument(
+        ..., help="要回填的日报日期，可多个（YYYY-MM-DD）"
+    ),
+    force: bool = typer.Option(
+        True, "--force/--no-force", help="该日已有日报时是否覆盖重建"
+    ),
+    config_path: str = typer.Option(
+        "config.yaml", "--config", help="配置文件路径"
+    ),
+) -> None:
+    """回填指定日期的科技资讯日报（内容窗口取该自然日）。
+
+    为什么需要它：``refresh()`` 的默认目标是「今天」，启动补跑也只补今天，所以
+    **历史上缺失的日报无法自动恢复**（2026-09-17 因定时任务空转而永久丢失）。
+    用法示例：
+
+        sekb news-backfill 2026-09-17
+        sekb news-backfill 2026-09-17 2026-09-18 --no-force
+    """
+    async def _run() -> None:
+        try:
+            ctx = await initialize_app(config_path)
+        except SEKBError as e:
+            console.print(f"[red]初始化失败: {e.message}[/red]")
+            raise typer.Exit(code=1)
+        try:
+            agent = ctx.news_agent
+            if agent is None:
+                console.print("[red]科技资讯未启用（news.enabled=false），无法回填[/red]")
+                raise typer.Exit(code=1)
+            failed = 0
+            for day in dates:
+                try:
+                    result = await agent.refresh(force=force, day=day)
+                except ValueError as e:  # 日期参数本身不合法
+                    console.print(f"[red]{e}[/red]")
+                    failed += 1
+                    continue
+                if result.get("skipped"):
+                    console.print(f"[yellow]{day}：已存在，跳过（要覆盖请加 --force）[/yellow]")
+                else:
+                    console.print(
+                        f"[green]{day}：回填完成[/green] "
+                        f"（抓取 {result.get('fetched', 0)} 条 / 入选 {result.get('filtered', 0)} 条）"
+                    )
+            if failed:
+                raise typer.Exit(code=1)
+        except SEKBError as e:
+            console.print(f"[red]回填失败: {e.message}[/red]")
             raise typer.Exit(code=1)
         finally:
             await shutdown_app(ctx)

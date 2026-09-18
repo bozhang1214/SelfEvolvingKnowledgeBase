@@ -53,39 +53,63 @@ class NewsAgent:
         self._generator = DailyReportGenerator(llm_factory)
         self._storage = NewsStorage(config.report_dir, config.retention_days)
 
-    async def refresh(self, force: bool = False) -> dict:
+    def validate_day(self, day: str) -> str:
+        """校验「指定日期」回填参数，返回原值；不合法抛 ``ValueError``。
+
+        为什么要前置校验：``POST /news/refresh`` 是**后台任务**，参数错误发生在后台就
+        只能变成一行日志，用户看不到；所以在提交前先校验，好返回 400。
+        """
+        try:
+            parsed = datetime.strptime(day, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            raise ValueError(f"日期格式必须是 YYYY-MM-DD：{day!r}") from None
+        if parsed.isoformat() != day:
+            raise ValueError(f"日期写法不规范（应为 YYYY-MM-DD）：{day!r}")
+        if day > self._today_local():
+            raise ValueError(f"不能回填未来日期：{day}")
+        return day
+
+    async def refresh(self, force: bool = False, day: str | None = None) -> dict:
         """
         执行一次完整日报刷新。
 
-        force=False（默认，调度器用）：今日已生成则跳过（幂等），避免多 worker 重复生成。
+        force=False（默认，调度器用）：目标日期已生成则跳过（幂等），避免多 worker 重复生成。
         force=True（手动「重新生成」）：无论是否已生成都重新跑。
+        day=``YYYY-MM-DD``：生成**指定日期**的日报（回填），内容窗口取该自然日
+            ``[当日 00:00, 次日 00:00)``；缺省为今天，且今天的窗口仍是滚动小时窗口
+            ——日常调度的行为一行不变。
+
+        为什么需要 day：``expected_period("daily")`` 恒为「今天」，启动补跑也只补今天，
+        因此**历史上缺失的日报永远补不回来**（2026-09-17 就这么永久丢了）。这个入口
+        （``sekb news-backfill`` / ``POST /news/refresh {"date": ...}``）补上那条路径。
         """
-        day = self._today_local()
-        if not force and self._storage.daily_exists(day):
-            logger.info("今日日报已存在，跳过生成", day=day)
-            return {"type": "daily", "period": day, "skipped": True, "fetched": 0, "filtered": 0}
+        target = self.validate_day(day) if day else self._today_local()
+        if not force and self._storage.daily_exists(target):
+            logger.info("日报已存在，跳过生成", day=target)
+            return {"type": "daily", "period": target, "skipped": True, "fetched": 0, "filtered": 0}
 
         # 文件锁：跨 worker 互斥，保证同一时刻只有一个进程在生成
+        # （回填与日常调度共用 "daily" 锁：两者都会写 index.json，不能并发）
         lock = await self._acquire_lock("daily")
         if lock is None:
-            logger.warning("获取日报生成锁超时，跳过", day=day)
-            return {"type": "daily", "period": day, "skipped": True, "fetched": 0, "filtered": 0}
+            logger.warning("获取日报生成锁超时，跳过", day=target)
+            return {"type": "daily", "period": target, "skipped": True, "fetched": 0, "filtered": 0}
         started = datetime.now(timezone.utc)
         try:
             # 拿到锁后二次检查（可能在等待锁期间已被别的 worker 生成）
-            if not force and self._storage.daily_exists(day):
-                logger.info("今日日报已存在（锁内二次检查），跳过", day=day)
-                return {"type": "daily", "period": day, "skipped": True, "fetched": 0, "filtered": 0}
-            result = await self._generate_report("daily")
+            if not force and self._storage.daily_exists(target):
+                logger.info("日报已存在（锁内二次检查），跳过", day=target)
+                return {"type": "daily", "period": target, "skipped": True, "fetched": 0, "filtered": 0}
+            result = await self._generate_report("daily", period=day)
             self.write_status(
-                "daily", ok=True, period=str(result.get("period") or day),
+                "daily", ok=True, period=str(result.get("period") or target),
                 started_at=started.isoformat(),
                 duration_s=(datetime.now(timezone.utc) - started).total_seconds(),
             )
             return result
         except Exception as e:  # noqa: BLE001 - 记状态后继续抛，调用方仍能感知
             self.write_status(
-                "daily", ok=False, period=day, error=f"{type(e).__name__}: {str(e)[:200]}",
+                "daily", ok=False, period=target, error=f"{type(e).__name__}: {str(e)[:200]}",
                 started_at=started.isoformat(),
                 duration_s=(datetime.now(timezone.utc) - started).total_seconds(),
             )
@@ -143,9 +167,12 @@ class NewsAgent:
 
         - ``weekly``：label = 上周一 ``YYYY-MM-DD`` → ``[该日 00:00, +7 天)``
         - ``monthly``：label = ``YYYY-MM`` → ``[该月 1 日 00:00, 次月 1 日)``
+        - ``daily``：label = ``YYYY-MM-DD`` → ``[该日 00:00, 次日 00:00)``。
+          只给**回填**用（``refresh(day=...)``）：日常调度仍走「此刻往前 N 小时」的滚动
+          窗口，否则 08:00 出报会丢掉前一天傍晚的资讯。
 
         Args:
-            report_type: ``weekly`` / ``monthly``（其他返回 ``None``）。
+            report_type: ``daily`` / ``weekly`` / ``monthly``（其他返回 ``None``）。
             label: 周期标签。
             tz_name: 本地时区名（如 ``Asia/Shanghai``）。
 
@@ -163,6 +190,9 @@ class NewsAgent:
                 year, month = (int(x) for x in label.split("-"))
                 start = datetime(year, month, 1, tzinfo=tz)
                 end = datetime(year + (month // 12), (month % 12) + 1, 1, tzinfo=tz)
+            elif report_type == "daily":
+                start = datetime.strptime(label, "%Y-%m-%d").replace(tzinfo=tz)
+                end = start + timedelta(days=1)
             else:
                 return None
         except (ValueError, KeyError):
@@ -179,8 +209,14 @@ class NewsAgent:
         #    ⚠️ 必须先算标签：周报/月报的窗口要按 period 算**自然周期**，
         #    而不是「生成时刻往前 N 小时」（否则标签写上周、内容却含本周）。
         if report_type == "daily":
-            period_label = self._today_local()
-            window = None
+            period_label = period or self._today_local()
+            # period 只在**回填**时被显式传入：那时按自然日取窗口；日常调度（period=None）
+            # 仍旧用「此刻往前 N 小时」的滚动窗口，行为与修复前一致。
+            window = (
+                self._period_window("daily", period_label, self._config.timezone)
+                if period
+                else None
+            )
         else:
             period_label = self._period_label(report_type, period)
             window = self._period_window(report_type, period_label, self._config.timezone)

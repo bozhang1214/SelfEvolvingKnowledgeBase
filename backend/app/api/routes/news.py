@@ -53,15 +53,24 @@ async def refresh_news(
 ):
     """提交一次日报生成（**立即返回**，结果由 /status 汇报）。
 
-    force=true（默认）表示「重新生成」；false 表示今日已生成则跳过。
+    force=true（默认）表示「重新生成」；false 表示目标日期已生成则跳过。
+    date=``YYYY-MM-DD`` 表示**回填指定日期**（内容窗口取该自然日），缺省为今天。
     已在生成中时返回 409，前端据此提示「正在生成中」，而不是当成失败。
     """
     agent = _require_news_agent()
     force = bool((body or {}).get("force", True))
+    date = (body or {}).get("date")
+    if date is not None:
+        try:
+            agent.validate_day(str(date))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
     if agent.is_running("daily"):
         raise HTTPException(409, "日报正在生成中，请稍候（可在页面查看进度）")
-    background.add_task(_run_in_background, agent, "daily", lambda: agent.refresh(force=force))
-    return {"accepted": True, "kind": "daily"}
+    background.add_task(
+        _run_in_background, agent, "daily", lambda: agent.refresh(force=force, day=date)
+    )
+    return {"accepted": True, "kind": "daily", "date": date or ""}
 
 
 @router.get("/reports")
