@@ -105,9 +105,13 @@ object ToolCallJson {
     /** 未注册工具名的调用 → 交由 [ToolRegistry] 判为幻觉并走升级信号。 */
     fun isKnownTool(call: ToolCall, knownTools: Set<String>): Boolean = call.tool in knownTools
 
-    /** 缺必填参数的调用：不执行，返回可读原因（而不是把 null 传给工具）。 */
+    /**
+     * 缺必填参数的调用：不执行，返回可读原因（而不是把 null 传给工具）。
+     *
+     * 只看 [DeviceTool.requiredArgs]：声明过的**可选**参数不算缺（见那里的注释）。
+     */
     fun missingRequired(call: ToolCall, tool: DeviceTool): List<String> =
-        tool.args.keys.filter { it !in call.args }.toList()
+        tool.requiredArgs.filter { it !in call.args }.toList()
 
     /** 把执行结果压成给模型看的一行（避免把整段 JSON 塞回上下文）。 */
     fun resultForModel(result: ToolResult): String = when {

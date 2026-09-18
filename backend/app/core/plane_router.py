@@ -72,7 +72,11 @@ DEFAULT_EXPECTED_OUTPUT: dict[str, int] = {
 #: executor 实际能派发的工具名（依据 `app/agents/executor.py::_dispatch_tool` 的 if/elif 链）。
 #: 规划器输出 `steps[].tool` 若不在这个集合里，executor 会走到兜底分支 —— 这就是
 #: 「工具幻觉」，端侧小模型上尤其常见，必须作为升级信号。配置可覆盖。
-DEFAULT_AVAILABLE_TOOLS = ("web_search", "rag_retrieve", "search_jobs", "llm_generate")
+#: ⚠️ 与端侧宿主的 `EdgeRuntimeConfig.availableTools` **必须同一口径**：
+#: 该清单是"工具幻觉"信号的判据，两边不一致会把合法工具误判成幻觉（或反之）。
+#: `kb_search`（2026-09-18 加）：端侧宿主新增的**本机**知识检索工具。
+DEFAULT_AVAILABLE_TOOLS = ("web_search", "rag_retrieve", "search_jobs", "llm_generate",
+                           "kb_search")
 
 #: 弃答/低置信的文本标记（覆盖中英常见说法）
 ABSTAIN_MARKERS = (

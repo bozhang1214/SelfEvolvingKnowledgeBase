@@ -86,6 +86,44 @@ adb logcat -d -s SEKB_EVAL:I
 - 工具集只有 3 个且互不冲突，未测"多个相似工具里选错"的情况；
 - 全部在**模拟器 + 宿主 Ollama** 上完成（见 §9.1：模拟器不产出性能结论，这里只做功能与协议判定）。
 
+### 1.6 端侧 RAG（M3 第一批，2026-09-18）
+
+单测：`rag.*` / `embed.*` / `tools.KbSearchToolTest` 共 **41 条**（首次构建时抓到一个真缺陷，见下）。
+
+模拟器自检（`--ez selftest true`）新增六项，**PASS=15 FAIL=0 SKIP=1**：
+
+```
+rag_ingest          PASS  doc-diet:1块 doc-weather:1块 doc-rag:1块 空间=stub-hash@256
+rag_retrieve        PASS  命中=doc-rag 分=0.360 嵌入=1ms 检索=0ms
+rag_space_guard     PASS  索引空间=stub-hash@256 与云端一致=false（桩实现应为 false）
+rag_space_refuses   PASS  embedding_space_mismatch:索引=stub-hash@256 当前模型=other-model@256
+rag_device_only_guard PASS device_only_requires_on_device_embedding:当前嵌入=stub-hash@256 非本机计算
+rag_tool_search     PASS  ok=true 输出=[0.348] doc-rag: 端侧 RAG 把知识索引放在设备上…
+```
+
+**三个"拒绝"路径是重点**（比"能检索"更能说明设计成立）：
+
+| 场景 | 期望行为 | 实测 |
+|---|---|---|
+| 索引空间 ≠ 当前嵌入模型（换模型没重建索引） | **拒绝检索**，而不是混算余弦 | ✅ 返回 `embedding_space_mismatch` + 空结果 |
+| 设备专属集合 + 嵌入非本机 | **拒绝**（宁可答不出来） | ✅ 返回 `device_only_requires_on_device_embedding` |
+| 桩实现的空间 ≠ 云端空间 | 本机可检索，但标记**不可与云端融合** | ✅ `cloudCompatible=false` |
+
+当前嵌入是**确定性桩**（`stub-hash@256`），不是真实语义模型——它让整条链路（切片→嵌入→检索→
+工具→审计）在没有模型的情况下也能被验证；换 ONNX 版 `bge-small-zh-v1.5` 后空间戳才与云端一致。
+
+**首次构建抓到的真缺陷**：`DeviceTool.args` 被同时当作"给模型看的 schema"和"必填参数"，
+于是 `kb_search` 的可选参数 `top_k` 让**每次调用都变成"缺少参数: top_k"**（工具直接不可用）。
+修法：`DeviceTool` 拆出 `requiredArgs`（默认取 `args.keys`，可选参数显式声明）——已补 1 条回归测试。
+
+**两个环境坑**（都写进了脚本/记录）：
+
+1. `scripts/emulator.sh` 原先只等 adb 认到设备，会在"能 adb 但 PackageManager 还没起完"时
+   返回假就绪 → `install` 报 `Error: device is still booting`。**已改为同时等 `sys.boot_completed=1`**。
+2. 把 `ANDROID_USER_HOME` 搬进仓库会**换掉 debug 签名密钥**，于是模拟器上旧装的 APK 无法覆盖安装
+   （`INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`）→ 先 `adb uninstall` 一次即可。
+   这是一次性代价，之后签名稳定。
+
 ### 1.5 UI 人工路径验收（2026-09-18）
 
 自检（§1.3）走的是"编排器直连"，**绕过了界面**；这一节补的是界面本身：真实点击、"设备接入"、

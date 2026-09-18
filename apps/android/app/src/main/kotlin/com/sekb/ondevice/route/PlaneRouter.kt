@@ -262,8 +262,14 @@ data class EdgeRuntimeConfig(
         PlaneRouter.SIGNAL_DEGENERATE, PlaneRouter.SIGNAL_TIMEOUT,
         PlaneRouter.SIGNAL_LOW_CONFIDENCE, PlaneRouter.SIGNAL_TOOL_HALLUCINATION,
     ),
+    /**
+     * 端侧可派发的工具集。
+     *
+     * ⚠️ 这里必须与 SEKB 服务端的 `plane_router.DEFAULT_AVAILABLE_TOOLS` **保持同一口径**：
+     * 该清单是"工具幻觉"信号的判据，两边不一致会把合法工具误判成幻觉（或反之）。
+     */
     val availableTools: Set<String> = setOf(
-        "device_time", "device_network", "device_contacts_search",
+        "device_time", "device_network", "device_contacts_search", "kb_search",
     ),
     val appVersion: String = "0.1.0",
     /** 端侧向量空间标识：跨端交换必须一致，不一致要重算而不是复用缓存（§4.5-F） */

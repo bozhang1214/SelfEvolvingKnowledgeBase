@@ -14,8 +14,16 @@ data class DeviceTool(
     val description: String,
     /** 需要的 Android 权限（如 `android.permission.READ_CONTACTS`）；null = 不需要 */
     val requiredPermission: String? = null,
-    /** 参数名 → 说明（用于生成给模型的 schema） */
+    /** 参数名 → 说明（用于生成给模型的 schema，**不代表必填**） */
     val args: Map<String, String> = emptyMap(),
+    /**
+     * 必填参数。
+     *
+     * ⚠️ 必须与 [args] 分开：第一版把"声明过的参数"一律当必填，于是 `kb_search` 的可选参数
+     * `top_k` 让每次调用都变成"缺少参数: top_k"，工具直接不可用。
+     * 默认取 [args] 的全部键（保持既有工具行为不变），有可选参数的工具显式声明。
+     */
+    val requiredArgs: Set<String> = args.keys,
     /** 真正的实现。**只有过了权限闸门才会被调用** */
     val run: (Map<String, String>) -> ToolResult,
 )

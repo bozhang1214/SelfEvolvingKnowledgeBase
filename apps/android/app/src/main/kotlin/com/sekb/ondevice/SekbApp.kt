@@ -8,6 +8,13 @@ import com.sekb.ondevice.chat.CloudReply
 import com.sekb.ondevice.chat.ToolCallEval
 import com.sekb.ondevice.device.KeystoreCredentialStore
 import com.sekb.ondevice.edge.OpenAiCompatibleEdgeLlm
+import com.sekb.ondevice.embed.DeterministicEmbedding
+import com.sekb.ondevice.embed.EmbeddingProvider
+import com.sekb.ondevice.rag.InMemoryVectorStore
+import com.sekb.ondevice.rag.KnowledgeIndex
+import com.sekb.ondevice.rag.Retriever
+import com.sekb.ondevice.rag.VectorStore
+import com.sekb.ondevice.tools.KbSearchTool
 import com.sekb.ondevice.net.OkHttpTransport
 import com.sekb.ondevice.net.SekbApi
 import com.sekb.ondevice.route.EdgeRuntimeConfig
@@ -39,9 +46,28 @@ class AppContainer(context: Context) {
 
     val audit = PermissionAudit()
 
+    /**
+     * 端侧嵌入实现（**可插拔**）。
+     *
+     * 当前用确定性桩：它**不是**真实语义模型，只是让"切片→嵌入→检索→工具调用→审计"
+     * 这条链路在没有模型的情况下也能跑通并被验证（空间戳为 `stub-hash@256`，
+     * 因此 **cloudCompatible=false**：绝不允许与云端向量融合，见 RFC §18.1）。
+     *
+     * 下一步（真机/ONNX）：把这里换成 ONNX 版 `bge-small-zh-v1.5`（512 维），
+     * 空间戳变成 `BAAI/bge-small-zh-v1.5@512` → 与云端一致，才允许跨端复用。
+     * 换实现必须**重建索引**（[VectorStore.space] 是构造期确定的）。
+     */
+    val embeddingProvider: EmbeddingProvider = DeterministicEmbedding()
+
+    /** 端侧知识索引（当前是内存实现；SQLite 实现在下一批）。 */
+    val vectorStore: VectorStore = InMemoryVectorStore(embeddingProvider.space)
+    val knowledgeIndex = KnowledgeIndex(embeddingProvider, vectorStore)
+    val retriever = Retriever(embeddingProvider, vectorStore)
+
     /** 端侧工具（含权限闸门所需的真实权限检查）。 */
     val tools = ToolRegistry(
-        tools = AndroidDeviceTools.all(context),
+        // kb_search：本机知识检索（deviceOnly=true —— 本机索引里的内容按设备专属处理）
+        tools = AndroidDeviceTools.all(context) + KbSearchTool.create(retriever, deviceOnly = true),
         checker = AndroidPermissionChecker(context),
         audit = audit,
     )

@@ -871,6 +871,18 @@ def test_generated_dual_profile_documents_guard_and_all_signals():
     assert "stream_guard_chars" in text
 
 
+def test_available_tools_include_edge_rag_tool():
+    """口径同步回归：`kb_search` 是端侧宿主新增的本机检索工具。
+
+    它必须同时出现在服务端的可派发工具集里——否则端侧调 `kb_search` 时，
+    服务端的"工具幻觉"判定会把它当未知工具（两边清单不一致 = 误判）。
+    端侧对应处：`apps/android/.../route/PlaneRouter.kt` 的 `availableTools`。
+    """
+    from app.core.plane_router import DEFAULT_AVAILABLE_TOOLS
+
+    assert "kb_search" in DEFAULT_AVAILABLE_TOOLS
+
+
 def test_stats_json_serializable(tmp_path):
     """统计要能直接进 HTTP 响应（不能带不可序列化对象）。"""
     s = EdgeRouteStore(tmp_path / "r.jsonl").stats()

@@ -52,11 +52,15 @@ find "$ANDROID_AVD_HOME" -name "*.lock" -delete 2>/dev/null || true
 ARGS=(-avd "$AVD" -memory 4096 -no-snapshot-save -no-boot-anim)
 if [ "${1:-}" = "--background" ]; then
     nohup "$SDK/emulator/emulator" "${ARGS[@]}" > "$ROOT/.tooling/emulator.log" 2>&1 &
-    echo "模拟器后台启动中（日志 .tooling/emulator.log），等待 adb ..."
-    for i in $(seq 1 60); do
+    echo "模拟器后台启动中（日志 .tooling/emulator.log），等待 adb 与系统启动完成 ..."
+    for i in $(seq 1 80); do
         sleep 3
-        if "$ADB" devices | grep -q "device$"; then
-            echo "✅ 就绪：$("$ADB" devices | grep 'device$' | head -1)"
+        # 两个条件都要满足：adb 认到设备，**并且** Android 系统起完。
+        # 只等前者会得到一个"能 adb、但 PackageManager 还没起来"的假就绪——
+        # 那时 install 会报 "Error: device is still booting"（实测踩到）。
+        if "$ADB" devices | grep -q "device$" && \
+           [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+            echo "✅ 就绪：$("$ADB" devices | grep 'device$' | head -1)（boot_completed=1）"
             echo "   后续 adb 命令请带上同一个 HOME：HOME=$HOME"
             exit 0
         fi

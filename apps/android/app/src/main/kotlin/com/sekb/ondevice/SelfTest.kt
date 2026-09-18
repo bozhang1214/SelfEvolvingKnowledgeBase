@@ -120,6 +120,53 @@ object SelfTest {
         record("edge_tool_json", legal,
             "chars=${jsonOut?.text?.length ?: 0} head=${jsonOut?.text?.take(60)}")
 
+        // ---------- 端侧 RAG（M3 第一批） ----------
+        val ragDocs = listOf(
+            "doc-diet" to "端侧推理省电的原因：计算留在本机，没有网络传输，也没有云端排队等待。",
+            "doc-weather" to "北京今天多云转晴，最高气温 26 度，适合骑行。",
+            "doc-rag" to "端侧 RAG 把知识索引放在设备上，检索不出网，因此隐私更好、延迟更低。",
+        )
+        val ingestReports = ragDocs.map { (id, text) -> container.knowledgeIndex.ingest(id, text) }
+        record("rag_ingest", ingestReports.all { it.chunks >= 1 },
+            ingestReports.joinToString(" ") { "${it.sourceId}:${it.chunks}块" } +
+                " 空间=${container.embeddingProvider.space.id}")
+
+        val hit = container.retriever.retrieve("端侧 RAG 为什么隐私更好", topK = 1)
+        record("rag_retrieve", hit.hits.firstOrNull()?.sourceId == "doc-rag",
+            "命中=${hit.hits.firstOrNull()?.sourceId} 分=${hit.hits.firstOrNull()?.let { "%.3f".format(it.score) }} " +
+                "嵌入=${hit.embedMillis.toInt()}ms 检索=${hit.searchMillis.toInt()}ms")
+
+        // 空间一致性：桩的空间与云端不同 → 必须明确标为"不可与云端融合"
+        record("rag_space_guard", !container.retriever.cloudCompatible(),
+            "索引空间=${hit.space.id} 与云端一致=${hit.cloudCompatible}（桩实现应为 false）")
+
+        // 空间不一致必须**拒绝检索**而不是混算余弦
+        val mismatched = com.sekb.ondevice.rag.Retriever(
+            com.sekb.ondevice.embed.DeterministicEmbedding(
+                space = com.sekb.ondevice.embed.EmbeddingSpace("other-model@256", 256),
+            ),
+            container.vectorStore,
+        )
+        val mismatchOutcome = mismatched.retrieve("端侧 RAG")
+        record("rag_space_refuses", !mismatchOutcome.searchable && mismatchOutcome.hits.isEmpty(),
+            mismatchOutcome.reason.take(80))
+
+        // 设备专属集合 + 非本机嵌入 → 必须拒绝（隐私闸门）
+        val remoteEmbed = com.sekb.ondevice.rag.Retriever(
+            com.sekb.ondevice.embed.DeterministicEmbedding(isOnDevice = false),
+            container.vectorStore,
+        )
+        val ragDenied = remoteEmbed.retrieve("端侧 RAG", deviceOnly = true)
+        record("rag_device_only_guard", !ragDenied.searchable,
+            ragDenied.reason.take(80))
+
+        // 工具化：模型可调用的 kb_search 走同一套闸门
+        val toolRes = container.tools.execute(
+            com.sekb.ondevice.model.ToolCall("kb_search", mapOf("query" to "端侧 RAG 隐私")),
+        )
+        record("rag_tool_search", toolRes.ok && toolRes.output.contains("doc-rag"),
+            "ok=${toolRes.ok} 输出=${toolRes.output.take(50)}")
+
         // ---------- 云端四项（协议 E2E：登录 → 接入 → 聊天 → 上报） ----------
         if (cloud == null) {
             record("cloud_login", null, "未提供账号（--es email/--es password）")
