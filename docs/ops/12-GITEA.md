@@ -135,6 +135,11 @@ curl -u bo:<密码> -X POST http://localhost:3000/api/v1/user/repos \
 - 配置位置：Gitea 仓库 → Settings → Mirror Settings → **Push Mirror**（或用 API `POST /repos/{owner}/{repo}/push_mirrors`）。
 - 策略：`interval: 8h` + `sync_on_commit: true`。
 
+> ⚠️ **CI 跑在 GitHub 镜像上 ⇒ 镜像滞后 = CI 滞后**（2026-09-18 记录）：
+> `.github/workflows/*` 只能在 GitHub 侧执行（源码真相在 Gitea）。所以推送镜像失败时，
+> GitHub 上还是旧代码，CI 不会跑或跑的是旧版。**推送后没看到 CI，先 `gitea_mirror.py sync` 重试**。
+> （另：`push_mirrors-sync` 在同步进行中返回 **422** 属正常，不是错误。）
+
 > 🔴 **核对 GitHub 时不要用 `git ls-remote https://github.com/...`**（2026-09-18 踩到）：
 > 本机全局 git 配置里有
 > `url.ssh://git@100.71.24.105:2222/bo/.insteadOf = https://github.com/bozhang1214/`，
@@ -146,6 +151,11 @@ curl -u bo:<密码> -X POST http://localhost:3000/api/v1/user/repos \
 > # B. 临时屏蔽 insteadOf
 > git -c url.ssh://git@100.71.24.105:2222/bo/.insteadOf= ls-remote https://github.com/bozhang1214/<repo>.git
 > ```
+
+> ⚠️ **服务器→GitHub 的 HTTPS 会间歇性 SSL 中断**（2026-09-18 实测两次）：
+> `push failed: ... OpenSSL SSL_read: unexpected eof while reading`。
+> **这是国际链路抖动，不是 token/地址配置问题**——别去改镜像配置，`sync` 重试即可
+> （`gitea_mirror.py` 已对网络异常加退避重试，并把 SSL 错误单独识别为"可重试"）。
 
 > ⚠️ **`sync_on_commit` 不保证"立刻"**（2026-09-18 实测）：一次推送后 3 分钟内 GitHub
 > 仍是旧提交（`push_mirrors.last_update` 停在推送**之前**的时间且 `last_error` 为空），

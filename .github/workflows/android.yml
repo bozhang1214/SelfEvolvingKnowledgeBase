@@ -1,5 +1,10 @@
 name: Android
 
+# ⚠️ 这个 workflow 实际跑在 **GitHub 镜像**上（源码真相在 Gitea，见 docs/ops/12-GITEA.md）。
+# 因此"镜像滞后 = CI 滞后"：服务器到 GitHub 的 HTTPS 通路会间歇性 SSL 中断，
+# 推送镜像失败时 GitHub 上还是旧代码，job 不会跑或跑的是旧版。
+# 推送后如果没看到 CI，先在服务器上 `python3 scripts/gitea_mirror.py sync` 重试同步。
+#
 # 只在端侧代码/脚本变更时跑：服务端改动不该触发 Android 工具链（反之亦然）。
 # 单独一个 workflow 文件（而不是塞进 ci.yml）就是为了用**原生**的 paths 过滤，
 # 不引入第三方 paths-filter action，也不影响现有 CI 各作业的触发范围。

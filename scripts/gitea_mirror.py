@@ -64,8 +64,15 @@ def github_token() -> str:
     return f.read_text(encoding="utf-8").strip()
 
 
-def api(path: str, method: str = "GET", payload: dict | None = None) -> object:
-    """调用 Gitea API；HTTP 错误以 ``{"__http_error__": ...}`` 返回而不抛。"""
+def api(path: str, method: str = "GET", payload: dict | None = None,
+        timeout: int = 180, retries: int = 3) -> object:
+    """调用 Gitea API；HTTP 错误以 ``{"__http_error__": ...}`` 返回而不抛。
+
+    ⚠️ 为什么要重试与放大超时（2026-09-18 实测）：镜像同步是**同步阻塞**的，而服务器到
+    GitHub 的 HTTPS 通路会**间歇性 SSL 中断**（``unexpected eof while reading``）。
+    于是触发同步的 API 调用可能几十秒不返回、甚至超时——这不是"服务挂了"，重试即可。
+    第一版脚本在这里直接抛 TimeoutError 崩掉，等于把网络抖动伪装成脚本 bug。
+    """
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(
         f"{GITEA_BASE}{path}",
@@ -76,12 +83,20 @@ def api(path: str, method: str = "GET", payload: dict | None = None) -> object:
             "Content-Type": "application/json",
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            body = resp.read().decode()
-        return json.loads(body) if body else {}
-    except urllib.error.HTTPError as e:
-        return {"__http_error__": e.code, "body": e.read().decode()[:200]}
+    last: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode()
+            return json.loads(body) if body else {}
+        except urllib.error.HTTPError as e:
+            return {"__http_error__": e.code, "body": e.read().decode()[:200]}
+        except Exception as e:  # noqa: BLE001 - 网络类异常统一重试
+            last = e
+            if attempt < retries:
+                print(f"  ⚠️ {method} {path} 第 {attempt} 次失败（{type(e).__name__}），重试 ...")
+                time.sleep(5 * attempt)
+    raise RuntimeError(f"{method} {path} 连续 {retries} 次失败：{last}")
 
 
 def cmd_status() -> int:
@@ -110,12 +125,21 @@ def cmd_status() -> int:
 
 
 def _sync_once(gitea_name: str) -> bool:
-    """触发一次同步并返回是否已无错误。"""
+    """触发一次同步并返回是否已无错误。
+
+    两种"看起来像失败、其实不是"的情况（都实测过）：
+    * ``422``：同步**正在进行中**（上一次还没跑完），不是错误；
+    * ``last_error`` 里是 ``OpenSSL SSL_read ... unexpected eof``：服务器到 GitHub 的
+      国际链路抖动，**重试**即可（不是 token/地址问题，别去改配置）。
+    """
     api(f"/repos/{GITEA_OWNER}/{gitea_name}/push_mirrors-sync", method="POST")
     mirrors = api(f"/repos/{GITEA_OWNER}/{gitea_name}/push_mirrors")
     if not isinstance(mirrors, list) or not mirrors:
         return False
     err = (mirrors[0].get("last_error") or "").strip()
+    if "SSL" in err or "unable to access" in err:
+        print(f"  ⚠️ {gitea_name}: GitHub 通路抖动（SSL/网络），重试中 ...")
+        return False
     return not err
 
 
