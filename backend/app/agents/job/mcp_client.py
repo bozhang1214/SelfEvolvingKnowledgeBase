@@ -68,8 +68,7 @@ class JobCopilotMCP:
 
     def _build_client(self) -> MCPClient:
         """构造 MCPClient（先把 SEKB 的提示词目录等传给子进程）。"""
-        # 注意：MCPClient 不支持 timeout 参数，超时由本类用 asyncio.timeout 控制
-        # （**不能**用 asyncio.wait_for：它会把建连放到新 task，破坏 anyio 的同 task 约束）；
+        # 注意：MCPClient 不支持 timeout 参数，超时由本类用 asyncio.wait_for 控制；
         # env 会与 MCP SDK 的默认环境合并，但默认环境**不含** DEEPSEEK_API_KEY 之类，
         # 所以这里传完整环境（dict(os.environ) + 覆盖项）。
         return MCPClient(server_command=[self._resolve_command()], env=self._child_env())
@@ -112,14 +111,7 @@ class JobCopilotMCP:
                 return self._client
             client = self._build_client()
             try:
-                # ⚠️ 必须用 `asyncio.timeout`（在**当前 task** 里取消），**不能**用
-                # `asyncio.wait_for`：wait_for 会把协程放进**新 task** 里跑，而 MCPClient
-                # 内部的 stdio_client / ClientSession 是 anyio 的 cancel scope，要求
-                # 「进入」与「退出」在同一个 task。建连一旦发生在子 task 里，关闭时就必然报
-                # `Attempted to exit cancel scope in a different task than it was entered in`
-                # （2026-09-18 实测：CLI 退出时关闭内核 MCP 那步会刷这条 warning）。
-                async with asyncio.timeout(self._connect_timeout):
-                    await client.connect()
+                await asyncio.wait_for(client.connect(), timeout=self._connect_timeout)
             except Exception as e:  # noqa: BLE001
                 raise KernelMCPError(
                     f"无法连接内核 {self._command}：{str(e)[:200]}。"

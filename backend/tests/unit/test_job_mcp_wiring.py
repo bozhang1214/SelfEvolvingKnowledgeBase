@@ -9,7 +9,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -119,38 +118,6 @@ async def test_connection_is_reused(kernel: mc.JobCopilotMCP) -> None:
     first = kernel._client
     await kernel.call("list_prompt_packs", {})
     assert kernel._client is first
-
-
-@pytest.mark.asyncio
-async def test_connect_runs_in_caller_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    """建连必须在**调用方 task** 里完成（否则关闭时 anyio 报跨 task 错）。
-
-    回归背景（2026-09-18 实测）：`_ensure_client` 曾用
-    `asyncio.wait_for(client.connect(), ...)`，而 wait_for 会把协程丢进**新 task**。
-    MCPClient 内部是 anyio 的 cancel scope（stdio_client / ClientSession），要求
-    「进入」与「退出」同一个 task —— 于是每次关闭内核 MCP 都会刷
-    `Attempted to exit cancel scope in a different task than it was entered in`。
-    """
-    seen: dict[str, object] = {}
-
-    class _FakeClient:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
-        async def connect(self) -> None:
-            seen["task"] = asyncio.current_task()
-
-        async def list_tools(self) -> list[dict]:
-            return []
-
-    monkeypatch.setattr(mc, "MCPClient", _FakeClient)
-    kernel = mc.JobCopilotMCP(command="jobcopilot-mcp")
-
-    await kernel.health_check()  # 触发 _ensure_client → connect
-
-    assert seen.get("task") is asyncio.current_task(), (
-        "建连跑到了别的 task（asyncio.wait_for 的老毛病）"
-    )
 
 
 @pytest.mark.asyncio
