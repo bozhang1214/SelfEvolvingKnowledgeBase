@@ -829,11 +829,39 @@ role=planner     平面=cloud  原因=output_over_edge_budget(600>300)   模型=
 3. **多模态 chunk 的 `content` 可能是 `list`**：旧代码直接当字符串 yield，SSE 会序列化出
    **数组**给前端（此前没暴露是因为一路都是纯文本模型）。已收口为 `_chunk_text()`。
 
-### 16.3 M2 待办
+### 16.3 Android 宿主（本轮）
 
-- [ ] 独立 repo `sekb-ondevice-agent`：建仓 + push mirror + REPO_MAP 增行（**等服务器 SSH**）
-- [ ] Android 宿主：设备凭证存储 / 聊天 SSE / 执行位置展示 / 路由事件上报 / 3 个设备工具 + 权限审计
-- [ ] 评测：工具调用 JSON 合法率（grammar 开/关）、越权拦截率、断网可用性（§9 的验收数字）
+仓库 `sekb-ondevice-agent`（独立 repo，D2）已经有**第一批可运行代码**：
+Kotlin + Compose，Gradle 9.2.1 + AGP 9.0.0 + Kotlin 2.2.10（版本组合按本机已缓存工具链选定）。
+
+| 模块 | 位置（新 repo 内） | 说明 |
+|---|---|---|
+| 平面路由 | `route/PlaneRouter.kt` | 与服务端 `plane_router.py` **同口径**：token 估算、档位→模型、预算、6 类信号、退化判定（≥40 字符） |
+| 流式前缀守卫 | `route/StreamGuard.kt` | 先攒 60 字符再判，命中则丢弃前缀改道云端；`json_invalid` 不参与前缀判定 |
+| SSE 解析 | `net/SseParser.kt` | 对齐 `chat_stream` 四类事件 + `done.meta.execution` → 执行位置徽标 |
+| 设备工具 + 权限闸门 | `tools/` | 三道闸门（未注册/缺参数/未授权）+ 权限审计（越权拦截率的唯一来源） |
+| 工具调用解析 | `tools/ToolCallJson.kt` | 宽容解析，把"意图对"与"语法对"分开统计 |
+
+**已验**：`./gradlew :app:testDebugUnitTest` = **54 用例全绿**；`:app:assembleDebug` 产出 APK（17.9MB）。
+**构建期抓到的真缺陷**（值得记一笔）：端侧输出预算最初照抄服务端的 300，
+而 `chat` 角色预期输出 400 → **每一次聊天都被判去云端**，"端侧优先"名存实亡。
+单元测试当场抓住，改为 512（依据 M0 实测 2b 86–116 tok/s），并加回归测试钉住默认值组合。
+
+三个构建坑也一并记进了新 repo 的 README：AGP 9 **自带 Kotlin 支持**（再叠 `kotlin.android`
+会报 `Cannot add extension with name 'kotlin'`）、`kotlin{}` 必须写在 `android{}` 外面、
+本机只有 `android-36.1` 故需 `compileSdkMinor = 1`。
+
+### 16.4 M2 待办
+
+- [ ] **独立 repo 建仓 + push mirror**：代码已在本地 `~/VSCodeSpace/sekb-ondevice-agent` 完成首个提交
+      （32 文件 / 2208 行），远端已配好；**卡在**：需要把公钥加到服务器 `authorized_keys`
+      才能在 Gitea 建仓（本机没有 Gitea/GitHub API 令牌），另需在 `scripts/gitea_mirror.py`
+      的 `REPO_MAP` 增加 `sekb-ondevice-agent` 一行
+- [ ] Android 宿主第二批：设备凭证存储（Keystore AES-GCM）、HTTP 传输抽象、
+      Ollama/SEKB 客户端、编排器（决策→端侧流式→守卫→升级→上报）
+- [ ] Android 宿主第三批：Compose UI（聊天 + 执行位置徽标 + 审计面板 + enroll）
+- [ ] 模拟器联调：App → 宿主 Ollama 真实流式；设备 enroll / SSE / 上报落库
+- [ ] 评测：工具调用 JSON 合法率（约束解码开/关）、越权拦截率、断网可用性（§9 的验收数字）
 - [ ] M3：llama.cpp NDK 真·端侧推理 + 真机性能数字
 
 ---
