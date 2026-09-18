@@ -903,7 +903,9 @@ Kotlin + Compose，Gradle 9.2.1 + AGP 9.0.0 + Kotlin 2.2.10（版本组合按本
       M3 评测项）
 - [x] ~~**独立 repo 建仓 + push mirror**~~ → 2026-09-18 完成：Gitea `bo/sekb-ondevice-agent`
       （私有）+ GitHub `bozhang1214/sekb-ondevice-agent`（公开）+ 推送镜像（8h + 提交即同步），
-      `gitea_mirror.py status` 五仓全绿，GitHub 侧用 `git ls-remote` **独立核对**到同一 commit
+      `gitea_mirror.py status` 五仓全绿；GitHub 侧用 **API** 核对到同一 commit
+      （⚠️ 不能用 `git ls-remote https://github.com/...`：本机有 `insteadOf` 会把它重写成 Gitea，
+      详见 `docs/ops/12-GITEA.md`；另 `sync_on_commit` 不保证及时，必要时显式触发同步）
 - [ ] M3：llama.cpp NDK 真·端侧推理 + 真机性能数字
 
 ---

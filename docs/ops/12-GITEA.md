@@ -135,6 +135,23 @@ curl -u bo:<密码> -X POST http://localhost:3000/api/v1/user/repos \
 - 配置位置：Gitea 仓库 → Settings → Mirror Settings → **Push Mirror**（或用 API `POST /repos/{owner}/{repo}/push_mirrors`）。
 - 策略：`interval: 8h` + `sync_on_commit: true`。
 
+> 🔴 **核对 GitHub 时不要用 `git ls-remote https://github.com/...`**（2026-09-18 踩到）：
+> 本机全局 git 配置里有
+> `url.ssh://git@100.71.24.105:2222/bo/.insteadOf = https://github.com/bozhang1214/`，
+> 会把这类 URL **静默重写成 Gitea**——于是"核对 GitHub"实际核的是 Gitea，永远"通过"。
+> 正确做法（二选一）：
+> ```bash
+> # A. 走 GitHub API（推荐，公开仓库无需鉴权）
+> curl -s https://api.github.com/repos/bozhang1214/<repo>/commits/main | grep -m1 '"sha"'
+> # B. 临时屏蔽 insteadOf
+> git -c url.ssh://git@100.71.24.105:2222/bo/.insteadOf= ls-remote https://github.com/bozhang1214/<repo>.git
+> ```
+
+> ⚠️ **`sync_on_commit` 不保证"立刻"**（2026-09-18 实测）：一次推送后 3 分钟内 GitHub
+> 仍是旧提交（`push_mirrors.last_update` 停在推送**之前**的时间且 `last_error` 为空），
+> 显式 `POST /repos/bo/<repo>/push_mirrors-sync` 之后才同步到最新。
+> **要立刻可用就显式触发**，不要假设提交即同步。
+
 > ⚠️ **`last_update` 不能用来判断"提交即同步"是否生效**（2026-09-18 实测）：
 > `sync_on_commit` 触发的自动推送**不会**刷新 `push_mirrors` 的 `last_update`
 > （它停在最后一次手动同步的时间），让人误以为没同步。真正的判据是去 GitHub 侧核对：
