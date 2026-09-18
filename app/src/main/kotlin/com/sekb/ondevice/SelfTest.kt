@@ -27,7 +27,13 @@ object SelfTest {
 
     data class Item(val name: String, val status: String, val detail: String)
 
-    fun run(container: AppContainer, log: (String) -> Unit): List<Item> {
+    /**
+     * @param cloud 云端 E2E 参数（email/password/sekbBaseUrl）。为空则跳过云端四项——
+     *   端侧的七项不需要任何凭据，随时可跑。
+     */
+    data class CloudParams(val email: String, val password: String, val sekbBaseUrl: String)
+
+    fun run(container: AppContainer, log: (String) -> Unit, cloud: CloudParams? = null): List<Item> {
         val items = mutableListOf<Item>()
         fun record(name: String, ok: Boolean?, detail: String) {
             val status = when (ok) { true -> "PASS"; false -> "FAIL"; null -> "SKIP" }
@@ -113,6 +119,68 @@ object SelfTest {
         val legal = jsonOut?.let { ToolCallJsonProbe.isLegal(it.text) } ?: false
         record("edge_tool_json", legal,
             "chars=${jsonOut?.text?.length ?: 0} head=${jsonOut?.text?.take(60)}")
+
+        // ---------- 云端四项（协议 E2E：登录 → 接入 → 聊天 → 上报） ----------
+        if (cloud == null) {
+            record("cloud_login", null, "未提供账号（--es email/--es password）")
+            return items
+        }
+        container.updateConfig(sekbBaseUrl = cloud.sekbBaseUrl)
+        val api = container.api()
+
+        val userToken = runCatching { api.login(cloud.email, cloud.password) }.getOrNull()
+        record("cloud_login", userToken != null, cloud.sekbBaseUrl)
+        if (userToken == null) return items
+
+        val cred = runCatching {
+            api.enroll(
+                userToken = userToken, name = "模拟器自检", appVersion = cfg.appVersion,
+                embeddingSpace = cfg.embeddingSpace,
+            )
+        }.getOrNull()
+        record("cloud_enroll", cred != null,
+            "device_id=${cred?.deviceId} ttl=${cred?.let { (it.expiresAtMillis - it.issuedAtMillis) / 3600000 }}h")
+        if (cred == null) return items
+
+        val tokens = StringBuilder()
+        val thinking = StringBuilder()
+        val chatAttempt = runCatching {
+            api.chatStream(cred.deviceToken, "用一句话说明端侧推理的优势。", null,
+                onToken = { tokens.append(it) }, onThinking = { thinking.append(it).append(" ") })
+        }
+        val chatResult = chatAttempt.getOrNull()
+        val execution = chatResult?.execution
+        // 失败时**必须把原因带出来**：静默失败会让"云端不通"和"模型答得慢"看起来一样
+        // （第一版就是这样，白白多跑了一轮 10 分钟）。
+        val detail = if (chatResult == null) {
+            "失败：${chatAttempt.exceptionOrNull()?.let { "${it.javaClass.simpleName}: ${it.message}" } ?: "未知"}"
+        } else {
+            "chars=${tokens.length} conversation=${chatResult.conversationId} " +
+                "execution=${execution?.primaryPlane ?: "无"} model=${execution?.model ?: "-"} " +
+                "reason=${execution?.reason ?: "-"} thinking=${thinking.toString().take(30)} " +
+                "text=${tokens.toString().take(40)}"
+        }
+        record("cloud_chat", tokens.isNotEmpty(), detail)
+
+        val eventId = "selftest-" + System.currentTimeMillis()
+        val reported = runCatching {
+            api.reportRouteEvent(
+                cred.deviceToken,
+                com.sekb.ondevice.model.RouteEventPayload(
+                    eventId = eventId, role = "chat", plane = "edge",
+                    reason = "edge_preferred", model = router.modelFor("default"),
+                    tier = "default", inputTokens = 42, outputTokens = 64, latencyMs = 83.0,
+                    escalated = false, signals = emptyList(),
+                    versions = mapOf("app_version" to cfg.appVersion,
+                        "embedding_space" to cfg.embeddingSpace),
+                ),
+            )
+        }.getOrDefault(false)
+        record("cloud_route_event", reported, "event_id=$eventId")
+
+        val cloudStats = runCatching { api.routeStats(cred.deviceToken) }.getOrNull()
+        record("cloud_stats", cloudStats != null && cloudStats.isNotEmpty(),
+            cloudStats?.entries?.take(4)?.joinToString(" ") { "${it.key}=${it.value}" } ?: "无")
 
         return items
     }

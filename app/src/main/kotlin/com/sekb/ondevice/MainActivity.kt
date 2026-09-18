@@ -33,9 +33,17 @@ class MainActivity : ComponentActivity() {
 
     private fun runSelfTest() {
         val container = (application as SekbApp).container
+        val email = intent?.getStringExtra("email").orEmpty()
+        val password = intent?.getStringExtra("password").orEmpty()
+        val sekb = intent?.getStringExtra("sekb").orEmpty()
+        val cloud = if (email.isNotBlank() && password.isNotBlank() && sekb.isNotBlank()) {
+            SelfTest.CloudParams(email, password, sekb)
+        } else {
+            null
+        }
         Thread {
             try {
-                val items = SelfTest.run(container) { line -> log(line) }
+                val items = SelfTest.run(container, { line -> log(line) }, cloud)
                 log(SelfTest.summary(items))
             } catch (e: Exception) {
                 log("[FAIL] selftest_crashed — ${e.message}")

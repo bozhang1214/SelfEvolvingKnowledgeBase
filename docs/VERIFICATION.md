@@ -50,16 +50,74 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 # → app/build/outputs/apk/debug/app-debug.apk
 ```
 
+### 1.3 模拟器真机 E2E（14 项全绿，2026-09-18）
+
+环境：macOS Apple Silicon + AVD `Medium_Phone_API_36.1`（arm64-v8a，`-memory 4096`）
++ 宿主机 Ollama（`10.0.2.2:11434`）+ **本地** SEKB 后端（`10.0.2.2:8010`，双平面档）。
+
+```bash
+# 1) 起模拟器与本地后端
+emulator -avd Medium_Phone_API_36.1 -memory 4096 &
+cd <SEKB>/backend && HF_HUB_OFFLINE=1 SEKB_CONFIG_PATH=/tmp/sekb-e2e.yaml \
+  .venv/bin/python -m uvicorn app.api.main:app --host 0.0.0.0 --port 8010
+
+# 2) 装机 + 跑自检（**必须先 force-stop**：extras 只在 onCreate 生效）
+./gradlew :app:installDebug
+adb shell am force-stop com.sekb.ondevice
+adb shell am start -n com.sekb.ondevice/.MainActivity --ez selftest true \
+  --es sekb "http://10.0.2.2:8010" --es email <账号> --es password <密码>
+adb logcat -d -s SEKB_SELFTEST:I
+```
+
+实测结果（原样摘录 logcat）：
+
+| 项 | 结果 |
+|---|---|
+| `edge_reachable` | PASS `http://10.0.2.2:11434/v1` |
+| `edge_models` | PASS qwen3.5-2b/4b/9b 等 8 个模型在位 |
+| `edge_warmup` | PASS qwen3.5-4b keep_alive=30m |
+| `router_decision` | PASS plane=edge reason=edge_preferred tier=default model=qwen3.5-4b |
+| `edge_stream` | PASS 39–59 字符真实流式，**预热后 TTFT 73–178ms**（预热前 1780ms） |
+| `permission_gate` | PASS 未授权 `READ_CONTACTS` → 拦截 |
+| `permissionless_tool` | PASS `device_time` 正常返回 |
+| `audit_stats` | PASS 总调用=2 拦截=1 **越权拦截率 50%** |
+| `edge_tool_json` | PASS 约束模式产出 `{"tool":"device_time","args":{}}` |
+| `cloud_login` | PASS 真实 SEKB 登录 |
+| `cloud_enroll` | PASS device_id=… ttl=720h |
+| `cloud_chat` | PASS 106 字符流式 + `execution=cloud` + `reason=output_over_edge_budget(800>300)\|stream_no_escalate` + thinking 事件 |
+| `cloud_route_event` | PASS 上报幂等键 `selftest-…`，服务端 200 |
+| `cloud_stats` | PASS `by_plane={"edge":7,"cloud":28}` `by_role={...,"chat":2,...}` ← **设备上报的事件真的落库了** |
+
+**这套 E2E 抓到两个只有真客户端能暴露的缺陷**：
+
+1. **登录字段名猜错**：客户端按 OAuth 习惯读 `access_token`，而 SEKB 的
+   `LoginResponse` 是 `{"user":…,"token":…}` → 服务端 200 OK、客户端却报"登录失败"。
+   单测当时喂的是我**以为**的响应体，所以照样全绿（这就是"用假传输测出来的绿"的边界）。
+2. **SEKB 流式路由事件缺 `model`**：`execution.model` 为空。修在 SEKB 侧
+   （新增 `_resolved_model`，不依赖实例缓存），并补了回归测试。
+
+**环境注意事项**（踩过，写下来省下一次）：
+
+- 本地后端必须 `HF_HUB_OFFLINE=1`：否则 sentence-transformers 会对 huggingface.co
+  发 HEAD 探测（本网络不可达），每次调用重试 5×2s，聊天能拖到 10 分钟并触发客户端读超时。
+- 本地后端要关掉资讯调度（`news.enabled=false`）：单 worker 下长报告生成会独占 LLM 容量。
+- 用 `/tmp` 下的临时配置时要**显式指定 `storage.data_dir`**，否则数据目录跟着配置走，
+  已注册的账号会"消失"。
+- 自检用 `am force-stop` 后再 `am start`（extras 只在 `onCreate` 生效）。
+
 ---
 
 ## 2. 待验（需要模拟器 / 联网 / 云端）
 
 这一节是**尚未完成**的部分，不要当成已验：
 
-- [ ] 模拟器安装并启动 App（**UI 还没写**，当前只有可运行的单测与 APK 骨架）
-- [ ] 端侧链路：App → 宿主机 Ollama（`10.0.2.2:11434`）真实流式回答
-- [ ] 端云协同：设备 enroll / 聊天 SSE / 执行位置徽标 / 路由事件上报落库
-- [ ] 验收数字（RFC §9）：**工具调用 JSON 合法率**（约束解码开/关对比）、**越权拦截率**、断网可用性
+- [x] ~~模拟器安装并启动 App~~ → §1.3
+- [x] ~~端侧链路：App → 宿主机 Ollama 真实流式回答~~ → §1.3（预热后 TTFT 73–178ms）
+- [x] ~~端云协同：enroll / SSE / 执行位置 / 上报落库~~ → §1.3
+- [ ] **工具调用 JSON 合法率**：约束解码开/关的**同一批提示词对比**（当前只验了"能产出合法 JSON"，
+      还没跑成组的合法率对比——需要固定一组提示词 + 各跑 N 次）
+- [ ] **UI 手工走一遍**：自检走的是编排器直连，Compose 界面只做了编译验证，还没人工点过
+- [ ] 断网可用性（飞行模式下端侧链路是否仍可用）
 - [ ] 真机性能（decode tok/s、TTFT、内存峰值）——**模拟器测不了**，属 M3
 
 ## 3. 怎么验（模拟器联调步骤）

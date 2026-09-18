@@ -35,8 +35,12 @@ class SekbApi(
         val body = JSONObject().put("email", email).put("password", password).toString()
         val resp = transport.postJson("$baseUrl/api/v1/auth/login", jsonHeaders(), body)
         if (!resp.isOk) throw SekbApiException(resp.code, errorDetail(resp.body))
-        val token = JsonX.string(JsonX.parseObject(resp.body), "access_token")
-        if (token.isBlank()) throw SekbApiException(resp.code, "登录响应里没有 access_token")
+        // 字段名以服务端 LoginResponse 为准：`{"user": {...}, "token": "..."}`。
+        // 第一版按 OAuth 习惯猜了 `access_token` → 明明 200 OK 却被判成"登录失败"，
+        // 是模拟器真机 E2E 抓出来的（服务端日志有 200，客户端说失败）。
+        val obj = JsonX.parseObject(resp.body)
+        val token = JsonX.string(obj, "token").ifBlank { JsonX.string(obj, "access_token") }
+        if (token.isBlank()) throw SekbApiException(resp.code, "登录响应里没有 token")
         return token
     }
 

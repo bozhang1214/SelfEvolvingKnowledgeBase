@@ -16,11 +16,27 @@ class SekbApiTest {
     private fun api(t: FakeTransport) = SekbApi(t, base, now = { now })
 
     @Test
-    fun `login returns access token`() {
+    fun `login reads the token field the server actually returns`() {
+        // 真实响应形状（SEKB LoginResponse）：{"user": {...}, "token": "..."}
         val t = FakeTransport()
-        t.enqueueJson("""{"access_token":"user-token-1"}""")
+        t.enqueueJson("""{"user":{"user_id":"u1","email":"a@b.c"},"token":"user-token-1"}""")
         assertEquals("user-token-1", api(t).login("a@b.c", "pw"))
         assertTrue(t.lastCall().url.endsWith("/api/v1/auth/login"))
+    }
+
+    @Test
+    fun `login also tolerates access_token naming`() {
+        val t = FakeTransport()
+        t.enqueueJson("""{"access_token":"user-token-2"}""")
+        assertEquals("user-token-2", api(t).login("a@b.c", "pw"))
+    }
+
+    @Test
+    fun `login without any token is an error not an empty string`() {
+        val t = FakeTransport()
+        t.enqueueJson("""{"user":{"user_id":"u1"}}""")
+        val e = runCatching { api(t).login("a@b.c", "pw") }.exceptionOrNull()
+        assertTrue(e is SekbApiException)
     }
 
     @Test
