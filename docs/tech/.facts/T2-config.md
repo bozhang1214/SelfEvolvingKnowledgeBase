@@ -252,7 +252,7 @@ status: draft（阶段1 SSOT 工作产物）
 | news.report_dir | str | data/news | "data/news" | service.py:50（NewsStorage） | 已引用 |
 | news.retention_days | int | 70 | 70 | service.py:50 | 已引用 |
 | news.daily_cron | str | "0 8 * * *" | 同上 | scheduler.py:36（CronTrigger.from_crontab） | 已引用（news 启用时） |
-| news.weekly_cron | str | "0 8 * * 1" | 同上 | scheduler.py:43 | 已引用 |
+| news.weekly_cron | str | "0 8 * * 0" | 同上 | scheduler.py:43（APScheduler day_of_week 0=周一，写 1 会落到周二） | 已引用 |
 | news.monthly_cron | str | "0 8 1 * *" | 同上 | scheduler.py:50 | 已引用 |
 | news.timezone | str | Asia/Shanghai | "Asia/Shanghai" | scheduler.py:36/43/50（from_crontab timezone） | 已引用 |
 | news.rss_sources | list[str] | 34 个 URL（含容器内 `http://rsshub:1200/…` 5 类 8 条） | [] | bootstrap.py:236（数量日志）；service.py:38（RSSFetcher） | 已引用 |

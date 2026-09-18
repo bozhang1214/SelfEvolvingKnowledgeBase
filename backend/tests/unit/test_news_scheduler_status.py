@@ -336,3 +336,42 @@ def test_expected_period_labels(tmp_path) -> None:
         today.replace(day=1) - timedelta(days=1)
     ).strftime("%Y-%m")
 
+
+def test_default_weekly_cron_lands_on_monday() -> None:
+    """默认周报 cron 必须落在**周一**：APScheduler 的 day_of_week 是 0=周一。
+
+    历史缺陷（2026-09-18 实测）：`weekly_cron="0 8 * * 1"` 配上任务名
+    「科技周报（每周一）」——但在 APScheduler 里 1 是**周二**，所以周报一直在周二跑
+    （生产的 next_run_time 三次都落在周二 09-15 / 09-22），名字与实际不符。
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apscheduler.triggers.cron import CronTrigger
+
+    from app.core.config import NewsConfig
+
+    tz = ZoneInfo("Asia/Shanghai")
+    trigger = CronTrigger.from_crontab(NewsConfig().weekly_cron, timezone=tz)
+    # 2026-09-19 是周六，下一个触发点应为 09-21（周一）08:00
+    nxt = trigger.get_next_fire_time(None, datetime(2026, 9, 19, 12, 0, tzinfo=tz))
+    assert nxt is not None
+    assert (nxt.year, nxt.month, nxt.day, nxt.hour) == (2026, 9, 21, 8), nxt
+    assert nxt.weekday() == 0, f"应落在周一，实际 {nxt:%Y-%m-%d %A}"
+
+
+def test_shipped_configs_weekly_cron_is_monday() -> None:
+    """出厂的 config*.yaml 也必须写 0。
+
+    为什么单独测文件：生产读的是 config.yaml 而不是 ``NewsConfig`` 的默认值——
+    只改默认值的话，线上仍旧跑周二，测试还全绿。
+    """
+    import pathlib
+
+    import yaml
+
+    backend_dir = pathlib.Path(__file__).resolve().parents[2]
+    for name in ("config.yaml", "config.local.yaml", "config.edge-cloud.yaml"):
+        data = yaml.safe_load((backend_dir / name).read_text(encoding="utf-8"))
+        assert data["news"]["weekly_cron"] == "0 8 * * 0", f"{name} 的周报 cron 不是周一"
+

@@ -425,7 +425,10 @@ class NewsConfig(BaseModel):
     time_window_hours: int = 24           # 日报信息时效窗口（小时）
     llm_role: str = "chat_simple"         # 生成日报用的 LLM 角色
     daily_cron: str = "0 8 * * *"         # 日报：每天 08:00（北京时间）
-    weekly_cron: str = "0 8 * * 1"        # 周报：每周一 08:00（北京时间）
+    # ⚠️ APScheduler 的 day_of_week 是 **0=周一**（不是 crontab 的 0=周日）：
+    # 「每周一」必须写 0。写成 1 实际落在**周二**——任务名、注释却都写着"每周一"，
+    # 于是一直没人发现（2026-09-18 用 next_run_time 实测修正：1 → 09-15/09-22 都是周二）。
+    weekly_cron: str = "0 8 * * 0"        # 周报：每周一 08:00（北京时间）
     monthly_cron: str = "0 8 1 * *"       # 月报：每月 1 日 08:00（北京时间）
     timezone: str = "Asia/Shanghai"       # 定时任务时区（容器默认 UTC，需显式指定北京时间）
 

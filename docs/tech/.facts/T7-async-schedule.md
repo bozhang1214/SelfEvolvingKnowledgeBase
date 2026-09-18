@@ -52,7 +52,7 @@ version: v0.1.0
   - `news_weekly`：周报，`agent.generate_periodic("weekly")`，cron=`config.news.weekly_cron`
   - `news_monthly`：月报，`agent.generate_periodic("monthly")`，cron=`config.news.monthly_cron`
   - 均 `replace_existing=True`；时区 `config.news.timezone`。
-- cron 默认/实际值：config.py:344-347 默认 `daily_cron="0 8 * * *"` / `weekly_cron="0 8 * * 1"` / `monthly_cron="0 8 1 * *"` / `timezone="Asia/Shanghai"`；backend/config.yaml:301-304 相同；news.enabled=true（config.yaml:295；默认 False 见 config.py:333）。
+- cron 默认/实际值：config.py:344-347 默认 `daily_cron="0 8 * * *"` / `weekly_cron="0 8 * * 0"`（APScheduler 的 `day_of_week` 是 **0=周一**，不是 crontab 的 0=周日；写 1 实际落在周二，2026-09-18 实测修正） / `monthly_cron="0 8 1 * *"` / `timezone="Asia/Shanghai"`；backend/config.yaml:301-304 相同；news.enabled=true（config.yaml:295；默认 False 见 config.py:333）。
 - 进程内调度前提：生产 uvicorn `--workers 1`（backend/Dockerfile:136-139 注释明示避免 scheduler 重复执行；compose 端口回环绑定 docker-compose.prod.yml:54）。APScheduler 无持久化 job store → 进程重启后按 cron 从零注册（scheduler.py:28-55）【推断：无 misfire_grace 配置，靠 enabled 门控】。
 - **docker-compose.prod.yml 无独立 scheduler 服务**：services 仅 backend/frontend/rsshub/browser/postgres(with-db profile)/redis(with-db profile)（docker-compose.prod.yml:35-242）。即定时任务与 API 同进程承载。
 - A13 死代码：`trigger_now()`（scheduler.py:69-76）全仓库无调用方（grep 无结果），手动触发实际走 HTTP（A12）。
