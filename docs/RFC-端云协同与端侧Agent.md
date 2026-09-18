@@ -851,17 +851,45 @@ Kotlin + Compose，Gradle 9.2.1 + AGP 9.0.0 + Kotlin 2.2.10（版本组合按本
 会报 `Cannot add extension with name 'kotlin'`）、`kotlin{}` 必须写在 `android{}` 外面、
 本机只有 `android-36.1` 故需 `compileSdkMinor = 1`。
 
-### 16.4 M2 待办
+### 16.4 Android 宿主：模拟器真机 E2E（2026-09-18）
 
-- [ ] **独立 repo 建仓 + push mirror**：代码已在本地 `~/VSCodeSpace/sekb-ondevice-agent` 完成首个提交
-      （32 文件 / 2208 行），远端已配好；**卡在**：需要把公钥加到服务器 `authorized_keys`
-      才能在 Gitea 建仓（本机没有 Gitea/GitHub API 令牌），另需在 `scripts/gitea_mirror.py`
-      的 `REPO_MAP` 增加 `sekb-ondevice-agent` 一行
-- [ ] Android 宿主第二批：设备凭证存储（Keystore AES-GCM）、HTTP 传输抽象、
-      Ollama/SEKB 客户端、编排器（决策→端侧流式→守卫→升级→上报）
-- [ ] Android 宿主第三批：Compose UI（聊天 + 执行位置徽标 + 审计面板 + enroll）
-- [ ] 模拟器联调：App → 宿主 Ollama 真实流式；设备 enroll / SSE / 上报落库
-- [ ] 评测：工具调用 JSON 合法率（约束解码开/关）、越权拦截率、断网可用性（§9 的验收数字）
+**14/14 全绿**（`adb shell am start --ez selftest true` + logcat；端侧走宿主机 Ollama，
+云端走本地 SEKB）：端侧可达 / 三档模型在位 / 预热 / 路由决策 / 真实流式
+（**预热后 TTFT 73–178ms，预热前 1780ms**）/ 权限拦截 / 无权限工具可用 /
+审计越权拦截率 50% / 约束模式产出合法工具 JSON / 云端登录 / 设备接入（ttl=720h）/
+聊天 SSE（106 字符 + `execution=cloud` + thinking 事件）/ 路由事件上报 / 统计查询
+（`by_role` 里出现 `chat:2` → **设备上报的事件确实落库**）。
+
+**这套 E2E 抓到两个只有真客户端能暴露的缺陷**：
+1. 客户端按 OAuth 习惯读 `access_token`，而 SEKB 的 `LoginResponse` 是 `token` →
+   服务端 200 OK、客户端报"登录失败"（单测喂的是**我以为**的响应体，所以照样全绿）；
+2. **SEKB 流式路由事件缺 `model`** → 响应里 `execution.model` 为空。
+   根因：流式路径在创建实例**之前**就写事件，只能退回配置里的模型名。
+   修法：新增 `_resolved_model(role, plane)`（按平面**事先**解析，不依赖实例缓存），已修并补回归测试。
+
+### 16.5 验收数字：工具调用 JSON 合法率（约束解码 ON/OFF）
+
+结论先说：**在这批条件下约束解码没有可测量收益**，初始假设被推翻。
+40 次调用（2B/4B × 易档/难档 × ON/OFF，各 10 条提示词）**全部 100% 合法、零工具名幻觉**；
+延迟差在噪声范围（2B 190/183ms、4B 358/361ms）。难档已去掉"只调用工具"的明示指令，
+2B 依然是 100%——所以"小模型必须靠 grammar"不成立。
+**建议：先不为 grammar 付工程复杂度**，把 `response_format` 留作开关，等换更弱模型再验。
+局限：系统提示仍给了完整 schema、每条件只跑 1 次（无方差估计）、工具集仅 3 个且不冲突。
+
+### 16.6 M2 待办
+
+- [x] ~~Android 宿主第二/三批（凭证存储、传输抽象、两个客户端、编排器、UI、装配）~~ → 5 个提交，
+      单测 91 用例全绿
+- [x] ~~模拟器联调：端侧真实流式 / enroll / SSE / 上报落库~~ → §16.4（14/14）
+- [x] ~~工具调用 JSON 合法率（约束解码开/关）~~ → §16.5
+- [x] ~~越权拦截率~~ → 50%（1 拦截 / 2 调用；`READ_CONTACTS` 未授权路径）
+- [ ] **断网可用性**（飞行模式下端侧链路是否仍可用）——尚未测
+- [ ] **UI 人工走一遍**：编排器已被自检充分验证，但 Compose 界面只做过编译验证，
+      没有人工点击验收（自检绕过 UI 直接调编排器）
+- [ ] **独立 repo 建仓 + push mirror**：代码已在本地 `~/VSCodeSpace/sekb-ondevice-agent`
+      （6 个提交、91 用例、14 项 E2E 全绿），远端地址已配好；**卡在**需要把公钥加到服务器
+      `authorized_keys` 才能在 Gitea 建仓（本机无 Gitea/GitHub API 令牌），
+      并需在 `scripts/gitea_mirror.py` 的 `REPO_MAP` 增加 `sekb-ondevice-agent` 一行
 - [ ] M3：llama.cpp NDK 真·端侧推理 + 真机性能数字
 
 ---
