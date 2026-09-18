@@ -21,6 +21,11 @@ import com.sekb.ondevice.route.PlaneRouter
  *
  * 每项输出 `PASS/FAIL/SKIP` 一行，末尾给出汇总——可以直接贴进验证记录。
  */
+/** 自检需要 Android `Context` 来验证"换模型打开旧库必须失败"；由 Activity 注入。 */
+object SelfTestContextHolder {
+    var appContext: android.content.Context? = null
+}
+
 object SelfTest {
 
     private const val TAG = "SEKB_SELFTEST"
@@ -126,10 +131,24 @@ object SelfTest {
             "doc-weather" to "北京今天多云转晴，最高气温 26 度，适合骑行。",
             "doc-rag" to "端侧 RAG 把知识索引放在设备上，检索不出网，因此隐私更好、延迟更低。",
         )
+        // 持久化检查：自检每次都是**新进程**（跑前会 force-stop），所以启动时索引非空
+        // 就证明上一轮的索引真的落盘存活了（SQLite 实现的意义就在这里）。
+        val preexisting = container.vectorStore.size()
         val ingestReports = ragDocs.map { (id, text) -> container.knowledgeIndex.ingest(id, text) }
         record("rag_ingest", ingestReports.all { it.chunks >= 1 },
             ingestReports.joinToString(" ") { "${it.sourceId}:${it.chunks}块" } +
-                " 空间=${container.embeddingProvider.space.id}")
+                " 空间=${container.embeddingProvider.space.id}" +
+                " 启动时已有=$preexisting（SQLite 持久化）")
+
+        // 空间戳入库并在打开时校验：换嵌入模型打开旧库必须当场失败（RFC §18.1）
+        val appContext = SelfTestContextHolder.appContext
+        val spaceMismatchOnOpen = if (appContext == null) null else runCatching {
+            com.sekb.ondevice.rag.SqliteVectorStore(
+                appContext, com.sekb.ondevice.embed.EmbeddingSpace("other-model@256", 256),
+            )
+        }.exceptionOrNull()
+        record("rag_sqlite_space_guard", spaceMismatchOnOpen != null,
+            (spaceMismatchOnOpen?.message ?: "未触发（不应发生）").take(90))
 
         val hit = container.retriever.retrieve("端侧 RAG 为什么隐私更好", topK = 1)
         record("rag_retrieve", hit.hits.firstOrNull()?.sourceId == "doc-rag",

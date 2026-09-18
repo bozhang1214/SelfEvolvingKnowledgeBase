@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
 
     private fun runSelfTest() {
         val container = (application as SekbApp).container
+        SelfTestContextHolder.appContext = applicationContext
         val email = intent?.getStringExtra("email").orEmpty()
         val password = intent?.getStringExtra("password").orEmpty()
         val sekb = intent?.getStringExtra("sekb").orEmpty()

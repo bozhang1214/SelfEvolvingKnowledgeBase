@@ -101,13 +101,23 @@ rag_device_only_guard PASS device_only_requires_on_device_embedding:当前嵌入
 rag_tool_search     PASS  ok=true 输出=[0.348] doc-rag: 端侧 RAG 把知识索引放在设备上…
 ```
 
-**三个"拒绝"路径是重点**（比"能检索"更能说明设计成立）：
+存储：SQLite 持久化（`SqliteVectorStore`）。**跨进程重启验证**（跑前 force-stop，每次都是新进程）：
+
+```
+第 1 次：rag_ingest … 启动时已有=0（SQLite 持久化）
+第 2 次：rag_ingest … 启动时已有=3（SQLite 持久化）   ← 上一轮的索引真的落盘存活了
+rag_sqlite_space_guard  PASS  索引的空间是 stub-hash@256，当前嵌入模型是 other-model@256：
+                              换模型必须重建索引（RFC §18.1）
+```
+
+**四个"拒绝/约束"路径是重点**（比"能检索"更能说明设计成立）：
 
 | 场景 | 期望行为 | 实测 |
 |---|---|---|
 | 索引空间 ≠ 当前嵌入模型（换模型没重建索引） | **拒绝检索**，而不是混算余弦 | ✅ 返回 `embedding_space_mismatch` + 空结果 |
 | 设备专属集合 + 嵌入非本机 | **拒绝**（宁可答不出来） | ✅ 返回 `device_only_requires_on_device_embedding` |
 | 桩实现的空间 ≠ 云端空间 | 本机可检索，但标记**不可与云端融合** | ✅ `cloudCompatible=false` |
+| 换嵌入模型后打开旧索引（SQLite） | **打开就失败**并要求重建 | ✅ 抛出并带明确原因 |
 
 当前嵌入是**确定性桩**（`stub-hash@256`），不是真实语义模型——它让整条链路（切片→嵌入→检索→
 工具→审计）在没有模型的情况下也能被验证；换 ONNX 版 `bge-small-zh-v1.5` 后空间戳才与云端一致。

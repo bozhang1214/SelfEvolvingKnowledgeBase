@@ -10,8 +10,8 @@ import com.sekb.ondevice.device.KeystoreCredentialStore
 import com.sekb.ondevice.edge.OpenAiCompatibleEdgeLlm
 import com.sekb.ondevice.embed.DeterministicEmbedding
 import com.sekb.ondevice.embed.EmbeddingProvider
-import com.sekb.ondevice.rag.InMemoryVectorStore
 import com.sekb.ondevice.rag.KnowledgeIndex
+import com.sekb.ondevice.rag.SqliteVectorStore
 import com.sekb.ondevice.rag.Retriever
 import com.sekb.ondevice.rag.VectorStore
 import com.sekb.ondevice.tools.KbSearchTool
@@ -59,8 +59,8 @@ class AppContainer(context: Context) {
      */
     val embeddingProvider: EmbeddingProvider = DeterministicEmbedding()
 
-    /** 端侧知识索引（当前是内存实现；SQLite 实现在下一批）。 */
-    val vectorStore: VectorStore = InMemoryVectorStore(embeddingProvider.space)
+    /** 端侧知识索引（SQLite 持久化：索引要能跨 App 重启存活）。 */
+    val vectorStore: VectorStore = SqliteVectorStore(context, embeddingProvider.space)
     val knowledgeIndex = KnowledgeIndex(embeddingProvider, vectorStore)
     val retriever = Retriever(embeddingProvider, vectorStore)
 
