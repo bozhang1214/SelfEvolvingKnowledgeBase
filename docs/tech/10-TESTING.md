@@ -21,13 +21,13 @@ related: [00-README, 07-DESIGN-PATTERNS, 11-EVOLUTION]
 
 | 层 | 数量 | 技术栈 | 说明 |
 |----|------|--------|------|
-| 后端单元 | 945 用例（59 文件）<!-- fact:backend_unit_cases=945 --> | pytest + pytest-asyncio + respx | 覆盖 config/graph/agent/storage/memory/news/job/state/plane_router 等 |
+| 后端单元 | 949 用例（60 文件）<!-- fact:backend_unit_cases=949 --> | pytest + pytest-asyncio + respx | 覆盖 config/graph/agent/storage/memory/news/job/state/plane_router 等 |
 | 后端集成 | 16 | pytest | storage+memory 集成、eval pipeline |
-| 后端 API 路由级 | 7（**已含在上面的 945 内**，此处单列只为标注技术栈） | FastAPI TestClient | test_api_client.py（知识列表/搜索/401/403） |
+| 后端 API 路由级 | 7（**已含在上面的 949 内**，此处单列只为标注技术栈） | FastAPI TestClient | test_api_client.py（知识列表/搜索/401/403） |
 | 前端单元 | 68<!-- fact:frontend_unit_cases=68 --> | vitest + @testing-library/react | frontend/tests/ 下 api/auth-service/chat-store/file/home/logger/news/series-tree/user-store |
 | Eval | golden_qa.json | app.eval | 黄金问答评估 |
 
-**全量口径**：`pytest tests/` = **961**（945 单元 + 16 集成；API 路由级 7 条在单元目录内，
+**全量口径**：`pytest tests/` = **965**（949 单元 + 16 集成；API 路由级 7 条在单元目录内，
 不重复计数）。加用例时请一并更新上面的活数字 `backend_unit_cases`。
 
 **运行方式**：

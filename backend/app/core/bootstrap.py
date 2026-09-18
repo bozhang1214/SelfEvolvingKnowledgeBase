@@ -403,6 +403,22 @@ async def shutdown_app(ctx: AppContext) -> None:
     except Exception as e:
         logger.warning("工具注册表关闭异常", error=str(e))
 
+    # 内核 MCP（招聘分析）共享客户端：必须在这里也关一次。
+    #
+    # 为什么必须有：客户端是 initialize_app 预热时建的（见 _warmup_kernel_mcp），
+    # 而关闭原先只写在 api/server.py 的 lifespan 里——服务端有，**CLI 没有**
+    # （chat/eval/rag-eval/news-backfill 都只调 shutdown_app）。于是 stdio_client
+    # 这个异步生成器被泄漏，解释器退出时由**异步生成器终结器**在另一个 task 里关闭，
+    # 报 `Attempted to exit cancel scope in a different task than it was entered in`，
+    # 并可能遗留子进程（2026-09-18 在 news-backfill 上实测到）。
+    # 重复调用安全：close_shared_kernel 关完会把单例置回 None。
+    try:
+        from app.agents.job.mcp_client import close_shared_kernel
+
+        await close_shared_kernel()
+    except Exception as e:  # noqa: BLE001 - 关闭失败不该影响整体退出
+        logger.warning("内核 MCP 关闭异常", error=str(e)[:200])
+
     # L3 知识库资源清理：ChromaDB PersistentClient 由磁盘自动持久化，
     # 当前无需显式 close；若后续接入需要释放的资源，在此补充。
     if ctx.knowledge_base is not None:
