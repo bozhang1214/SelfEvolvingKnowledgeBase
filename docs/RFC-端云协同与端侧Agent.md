@@ -887,7 +887,7 @@ Kotlin + Compose，Gradle 9.2.1 + AGP 9.0.0 + Kotlin 2.2.10（版本组合按本
 - [ ] **UI 人工走一遍**：编排器已被自检充分验证，但 Compose 界面只做过编译验证，
       没有人工点击验收（自检绕过 UI 直接调编排器）
 - [ ] **独立 repo 建仓 + push mirror**：代码已在本地 `~/VSCodeSpace/sekb-ondevice-agent`
-      （6 个提交、91 用例、14 项 E2E 全绿），远端地址已配好；**卡在**需要把公钥加到服务器
+      （5 个提交、91 用例、14 项 E2E 全绿），远端地址已配好；**卡在**需要把公钥加到服务器
       `authorized_keys` 才能在 Gitea 建仓（本机无 Gitea/GitHub API 令牌），
       并需在 `scripts/gitea_mirror.py` 的 `REPO_MAP` 增加 `sekb-ondevice-agent` 一行
 - [ ] M3：llama.cpp NDK 真·端侧推理 + 真机性能数字
