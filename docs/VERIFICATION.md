@@ -9,7 +9,7 @@ AVD `Medium_Phone_API_36.1`（arm64-v8a，google_apis_playstore）。
 
 ## 1. 已验（可在任何机器复现）
 
-### 1.1 纯逻辑单测（54 用例）
+### 1.1 纯逻辑与端云全流程单测（88 用例）
 
 ```bash
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
@@ -24,12 +24,24 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 | `ToolCallJsonTest` | 9 | 围栏/单引号/尾随逗号宽容解析、缺工具名与"没有 JSON"分别归类、字符串内花括号 |
 | `ToolRegistryTest` | 8 | 三道闸门（未注册/缺参数/未授权）、**越权拦截率**计算、工具异常不崩 |
 | `PermissionAuditTest` | 4 | 审计容量裁剪、最近优先、空日志不产生 NaN |
+| `ChatOrchestratorTest` | 10 | **端云协同全流程**（无网、无模拟器）：端侧完成 / 退化前缀改道且零字符外泄 / 端点不可用改道 / DEVICE_ONLY 不升级且保留端侧结果 / 工具轮执行 / 越权拦截 / 交接块内容与截断 |
+| `EdgeLlmClientTest` | 7 | 请求体约定（`reasoning_effort=none` 且**不带** `think`、JSON 模式）、OpenAI 兼容流式解析、HTTP 错误与网络异常不抛 |
+| `SekbApiTest` | 8 | enroll/refresh/heartbeat/上报/聊天的**请求形状**与错误分类（401/403/429）、SSE 执行位置解析 |
+| `CredentialCodecTest` | 5 | 凭证编解码往返、坏数据解成 null 而不是崩、轮换阈值随服务端 TTL 变 |
+| `ToolCallEvalTest` | 4 | 合法率分母是"尝试次数"而非全部回答 |
 
-**构建期抓到的一个真缺陷**（值得记录）：端侧输出预算最初照抄服务端的 300，
-而 `chat` 角色的预期输出是 400 → 每一次聊天都被判去云端，"端侧优先"名存实亡。
-单元测试当场抓住，改为 512（依据：M0 实测 2B decode 86–116 tok/s → 512 token ≈ 4.5–6s 最坏，
-首字延迟由 `maxTtftMs` 与前缀守卫兜住）。并补了回归测试
-`default chat role must be able to run on device` 钉住这个默认值组合。
+**构建期抓到的真缺陷**（单元测试的第一价值就是这些）：
+
+1. **端侧输出预算照抄服务端的 300**，而 `chat` 角色的预期输出是 400 →
+   **每一次聊天都被判去云端**，"端侧优先"名存实亡。改为 512（依据：M0 实测 2B
+   decode 86–116 tok/s → 512 token ≈ 4.5–6s 最坏，首字延迟由 `maxTtftMs` 与前缀守卫兜住），
+   并补回归测试 `default chat role must be able to run on device` 钉住默认值组合。
+2. **改道成功后回答被重复输出一遍**：工具轮没走时 `toolRound.text` 就是刚吐过的那段，
+   又补发了一次。修法：只有真的做了工具轮才补发（`toolRound.attempted`）。
+3. **"端点连不上"被误报成"模型答了空"**：守卫的整段评估先跑，空输出命中 `empty`，
+   把真正的失败原因盖掉了。修法：失败判定提到守卫之前。
+4. **DEVICE_ONLY 场景下用户看到空回答**：判定该改道却不许改道时，守卫缓冲里的内容被丢弃了。
+   修法：不允许改道时把缓冲内容保留并展示——宁可给一段不完美的本机回答，也不能给空白。
 
 ### 1.2 APK 构建
 
@@ -44,7 +56,7 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 
 这一节是**尚未完成**的部分，不要当成已验：
 
-- [ ] 模拟器安装并启动 App（真机联调第一步）
+- [ ] 模拟器安装并启动 App（**UI 还没写**，当前只有可运行的单测与 APK 骨架）
 - [ ] 端侧链路：App → 宿主机 Ollama（`10.0.2.2:11434`）真实流式回答
 - [ ] 端云协同：设备 enroll / 聊天 SSE / 执行位置徽标 / 路由事件上报落库
 - [ ] 验收数字（RFC §9）：**工具调用 JSON 合法率**（约束解码开/关对比）、**越权拦截率**、断网可用性
@@ -77,5 +89,6 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ## 4. 已知限制
 
 - **无真机**：所有性能类结论都不在本仓库产出（RFC §9.1 的 D10 决策）。
-- 设备凭证存于 App 私有目录 + Keystore 加密（`device/`，M2 第二批实现）；
-  当前提交里尚未包含凭据存储与网络客户端。
+- 设备凭证存储（Keystore AES-GCM）与网络客户端**只做了 JVM 可验的部分**：
+  Keystore 本身、真实 SSE 连接、真实 Ollama 调用都必须在模拟器上验（见 §2）。
+- 未做：Compose UI、Android 运行时装配（把上面这些接起来）、约束解码开关的对比实验。

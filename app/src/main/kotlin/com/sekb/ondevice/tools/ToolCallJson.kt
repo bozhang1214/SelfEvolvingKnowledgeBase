@@ -91,6 +91,17 @@ object ToolCallJson {
         }
     }
 
+    /**
+     * 模型这一轮是否**试图**调用工具。
+     *
+     * 判据刻意宽松：出现已注册工具名，或出现 `"tool"` 键。因为"合法率"的分母必须是
+     * **尝试次数**而不是"总回答数"——否则模型越少尝试工具，这个指标看起来越漂亮。
+     */
+    fun looksLikeAttempt(text: String, knownTools: Set<String>): Boolean {
+        if (knownTools.any { text.contains(it) }) return true
+        return text.contains("\"tool\"") || text.contains("'tool'")
+    }
+
     /** 未注册工具名的调用 → 交由 [ToolRegistry] 判为幻觉并走升级信号。 */
     fun isKnownTool(call: ToolCall, knownTools: Set<String>): Boolean = call.tool in knownTools
 

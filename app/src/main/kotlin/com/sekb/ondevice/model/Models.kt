@@ -65,10 +65,16 @@ data class DoneMeta(
     val raw: Map<String, String> = emptyMap(),
 )
 
-/** 设备凭证（`POST /api/v1/device/enroll` 的产物）。 */
+/**
+ * 设备凭证（`POST /api/v1/device/enroll` 的产物）。
+ *
+ * 签发时间要**显式存**：轮换判断按"剩余不足总有效期 1/3"来算，若用
+ * `过期时间 - 默认TTL` 反推，服务端一旦改了 TTL（比如压到 7 天），端侧算出的总时长就是错的。
+ */
 data class DeviceCredentials(
     val deviceId: String,
     val deviceToken: String,
+    val issuedAtMillis: Long,
     val expiresAtMillis: Long,
 ) {
     /** 剩余有效期不足 1/3 时就该轮换（RFC §4.5-H：设备不该等过期才换证）。 */
@@ -78,10 +84,16 @@ data class DeviceCredentials(
         return total > 0 && left < total / 3
     }
 
-    val issuedAtMillis: Long get() = expiresAtMillis - DEFAULT_TTL_MILLIS
+    fun isExpired(nowMillis: Long): Boolean = nowMillis >= expiresAtMillis
 
     companion object {
-        const val DEFAULT_TTL_MILLIS: Long = 720L * 3600 * 1000
+        const val DEFAULT_TTL_HOURS: Long = 720
+
+        /** 按服务端返回的 `expires_in_hours` 构造（**不要**猜 TTL）。 */
+        fun fromTtl(deviceId: String, token: String, nowMillis: Long, ttlHours: Long): DeviceCredentials {
+            val ttl = if (ttlHours > 0) ttlHours else DEFAULT_TTL_HOURS
+            return DeviceCredentials(deviceId, token, nowMillis, nowMillis + ttl * 3600 * 1000)
+        }
     }
 }
 

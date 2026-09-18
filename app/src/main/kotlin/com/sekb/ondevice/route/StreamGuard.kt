@@ -24,6 +24,15 @@ class StreamGuard(
 
     val bufferedChars: Int get() = buffer.length
 
+    /**
+     * 已缓冲但**尚未放行**的前缀。
+     *
+     * 用途只有一个：判定"该改道"但**不允许改道**时（DEVICE_ONLY 数据永不出端，RFC §5.2），
+     * 不能把端侧已经算出来的东西白白丢掉——用户宁可看到一段不完美的本机回答，
+     * 也不该看到空白。
+     */
+    fun bufferedText(): String = buffer.toString()
+
     fun noteFirstToken(millis: Double) {
         if (ttftMillis == 0.0) ttftMillis = millis
     }
