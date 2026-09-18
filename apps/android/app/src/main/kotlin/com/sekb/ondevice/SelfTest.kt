@@ -135,6 +135,16 @@ object SelfTest {
         // 就证明上一轮的索引真的落盘存活了（SQLite 实现的意义就在这里）。
         val preexisting = container.vectorStore.size()
         val ingestReports = ragDocs.map { (id, text) -> container.knowledgeIndex.ingest(id, text) }
+        val providerKind = if (container.onnxModelAvailable) "ONNX bge-small-zh-v1.5" else "确定性桩（未找到 ONNX 模型）"
+        record("rag_provider", true, "嵌入=$providerKind 空间=${container.embeddingProvider.space.id} " +
+            "本机计算=${container.embeddingProvider.isOnDevice}")
+        record("rag_model_path", container.onnxModelAvailable,
+            container.modelDirDiagnostics.take(150))
+        if (container.reembeddedChunks > 0) {
+            record("rag_reembed", true,
+                "空间从 ${container.previousIndexSpace} 变为 ${container.embeddingProvider.space.id}，" +
+                    "原地重算 ${container.reembeddedChunks} 块（不丢文本，RFC §4.5-F 的\"重算\"）")
+        }
         record("rag_ingest", ingestReports.all { it.chunks >= 1 },
             ingestReports.joinToString(" ") { "${it.sourceId}:${it.chunks}块" } +
                 " 空间=${container.embeddingProvider.space.id}" +
@@ -150,14 +160,33 @@ object SelfTest {
         record("rag_sqlite_space_guard", spaceMismatchOnOpen != null,
             (spaceMismatchOnOpen?.message ?: "未触发（不应发生）").take(90))
 
+        // 嵌入合理性：两个语义无关的句子必须给出不同的向量。
+        // 若所有向量都一样，检索会"任何问题都命中同一篇且余弦=1.000"——表象很像 bug，
+        // 但根因在嵌入这一层（实测踩到过：输入张量/掩码构造错了）。
+        val vA = container.embeddingProvider.embedOne("端侧推理为什么省电")
+        val vB = container.embeddingProvider.embedOne("北京今天多云转晴，适合骑行")
+        val cosAB = com.sekb.ondevice.rag.VectorMath.cosine(vA, vB)
+        val dbg = container.embeddingProvider as? com.sekb.ondevice.embed.OnnxBgeEmbedding
+        if (dbg != null) {
+            val idsA = dbg.debugTokenIds("端侧推理为什么省电")
+            val idsB = dbg.debugTokenIds("北京今天多云转晴，适合骑行")
+            record("rag_token_debug", idsA.size != idsB.size || idsA != idsB,
+                "A=${idsA.take(8)}(${idsA.size}) B=${idsB.take(8)}(${idsB.size})")
+        }
+        record("rag_embed_sanity", cosAB < 0.95,
+            "两段无关文本余弦=${"%.3f".format(cosAB)}（应明显小于 1；=1.000 说明所有向量相同）" +
+                " 维度=${vA.size} 首维=${vA.take(2).joinToString { "%.4f".format(it) }}")
+
         val hit = container.retriever.retrieve("端侧 RAG 为什么隐私更好", topK = 1)
         record("rag_retrieve", hit.hits.firstOrNull()?.sourceId == "doc-rag",
             "命中=${hit.hits.firstOrNull()?.sourceId} 分=${hit.hits.firstOrNull()?.let { "%.3f".format(it.score) }} " +
                 "嵌入=${hit.embedMillis.toInt()}ms 检索=${hit.searchMillis.toInt()}ms")
 
         // 空间一致性：桩的空间与云端不同 → 必须明确标为"不可与云端融合"
-        record("rag_space_guard", !container.retriever.cloudCompatible(),
-            "索引空间=${hit.space.id} 与云端一致=${hit.cloudCompatible}（桩实现应为 false）")
+        val expectedCloudCompatible = container.onnxModelAvailable
+        record("rag_space_guard", hit.cloudCompatible == expectedCloudCompatible,
+            "索引空间=${hit.space.id} 与云端一致=${hit.cloudCompatible}（期望 $expectedCloudCompatible：" +
+                "ONNX 与云端同空间应为 true，桩为 false）")
 
         // 空间不一致必须**拒绝检索**而不是混算余弦
         val mismatched = com.sekb.ondevice.rag.Retriever(
@@ -170,11 +199,15 @@ object SelfTest {
         record("rag_space_refuses", !mismatchOutcome.searchable && mismatchOutcome.hits.isEmpty(),
             mismatchOutcome.reason.take(80))
 
-        // 设备专属集合 + 非本机嵌入 → 必须拒绝（隐私闸门）
-        val remoteEmbed = com.sekb.ondevice.rag.Retriever(
-            com.sekb.ondevice.embed.DeterministicEmbedding(isOnDevice = false),
-            container.vectorStore,
-        )
+        // 设备专属集合 + 非本机嵌入 → 必须拒绝（隐私闸门）。
+        // ⚠️ 必须用**同一空间**但 isOnDevice=false 的提供者，否则先触发的是"空间不一致"
+        // 那条规则，就测不到隐私闸门本身（第一版就是这么写错的）。
+        val sameSpaceRemote = object : com.sekb.ondevice.embed.EmbeddingProvider {
+            override val space = container.embeddingProvider.space
+            override val isOnDevice = false
+            override fun embed(texts: List<String>) = container.embeddingProvider.embed(texts)
+        }
+        val remoteEmbed = com.sekb.ondevice.rag.Retriever(sameSpaceRemote, container.vectorStore)
         val ragDenied = remoteEmbed.retrieve("端侧 RAG", deviceOnly = true)
         record("rag_device_only_guard", !ragDenied.searchable,
             ragDenied.reason.take(80))

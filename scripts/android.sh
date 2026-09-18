@@ -67,6 +67,29 @@ for task in "$@"; do
         assemble)  ./gradlew :app:assembleDebug --console=plain $MINOR_FLAG \
                        ${SEKB_SEKB_URL:+-PsekbBaseUrl="$SEKB_SEKB_URL"} ;;
         install)   ./gradlew :app:installDebug --console=plain $MINOR_FLAG ;;
+        push-model)
+            # 把 ONNX 模型推进 App 的**内部**私有目录。
+            #
+            # ⚠️ 不能用 `adb push` 直接推外部私有目录：那样文件属主是 shell、目录权限
+            # `drwxrws--- shell:ext_data_rw`，App 不在该组里 → 读不到，表现为
+            # "模型明明在、App 却说没找到"（踩过）。所以走 run-as + stdin 写成 App 自己的文件。
+            # 需要 debuggable 构建（debug 版即可）与已连接的设备/模拟器。
+            PKG="com.sekb.ondevice"
+            # 必须用**绝对路径**：run-as 的工作目录不保证是 App 数据目录（实测不是），
+            # 用相对路径会报 "can't create files/…: No such file or directory"。
+            DATA="/data/data/${PKG}/files/models/bge-small-zh-v1.5"
+            SRC="$ROOT/.tooling/models/bge-small-zh-v1.5"
+            [ -f "$SRC/model.onnx" ] || { echo "缺模型：先跑 bash scripts/fetch_embedding_model.sh" >&2; exit 1; }
+            ADB="${ANDROID_SDK_ROOT}/platform-tools/adb"
+            "$ADB" shell run-as "$PKG" mkdir -p "$DATA"
+            for f in model.onnx vocab.txt; do
+                # 整条远程命令必须是**一个**字符串：否则 adb shell 会把参数摊平，
+                # `>` 由设备上的 shell 用户解释 → "Permission denied"（踩过）。
+                "$ADB" shell "run-as ${PKG} sh -c 'cat > ${DATA}/${f}'" < "$SRC/$f"
+            done
+            echo "✅ 模型已写入 App 内部目录（${DATA}）"
+            "$ADB" shell run-as "$PKG" ls -l "$DATA"
+            ;;
         *)         ./gradlew "$task" --console=plain $MINOR_FLAG ;;
     esac || STATUS=$?
 done

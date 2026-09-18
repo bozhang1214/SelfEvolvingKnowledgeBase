@@ -119,8 +119,33 @@ rag_sqlite_space_guard  PASS  索引的空间是 stub-hash@256，当前嵌入模
 | 桩实现的空间 ≠ 云端空间 | 本机可检索，但标记**不可与云端融合** | ✅ `cloudCompatible=false` |
 | 换嵌入模型后打开旧索引（SQLite） | **打开就失败**并要求重建 | ✅ 抛出并带明确原因 |
 
-当前嵌入是**确定性桩**（`stub-hash@256`），不是真实语义模型——它让整条链路（切片→嵌入→检索→
-工具→审计）在没有模型的情况下也能被验证；换 ONNX 版 `bge-small-zh-v1.5` 后空间戳才与云端一致。
+### 端侧 ONNX 嵌入（已接入，2026-09-18）
+
+| 项 | 实测 |
+|---|---|
+| 提供者 | **ONNX `bge-small-zh-v1.5`**（不是桩） |
+| 空间 | `BAAI/bge-small-zh-v1.5@512` → `cloudCompatible=**true**`（与云端同空间） |
+| 区分度自检 | 两段无关文本余弦 **0.244**（云端参照 0.243864；桩会是 1.000 那种"塌缩"） |
+| 检索 | 查询"端侧 RAG 为什么隐私更好" → 命中 **doc-rag 得分 0.696**；嵌入 36ms、检索 <1ms |
+| 工具 | `kb_search` 返回 doc-rag 0.642 |
+| 隐私闸门 | 同空间但 `isOnDevice=false` → 拒绝，原因 `device_only_requires_on_device_embedding` |
+| 自检汇总 | **PASS=20 FAIL=0 SKIP=1** |
+
+**两个环境约束**（都写进了脚本）：
+
+1. **ONNX Runtime 必须用 1.20.0**：1.30.0 在模拟器上 **SIGILL**（`ILL_ILLOPC`）——
+   模拟器 CPU 暴露了 `asimddp/bf16` 但**没有 `i8mm`**，ORT 新版 arm64 内核用到了它。
+2. **模型不能 `adb push` 到外部私有目录**：推过去的属主是 `shell`、目录权限
+   `drwxrws--- shell:ext_data_rw`，App 不在该组里 → 读不到（表现为"模型在但找不到"）。
+   改用 `adb shell run-as <pkg> sh -c 'cat > <绝对路径>'`（整条远程命令必须是一个字符串）。
+   日常用 `bash scripts/android.sh push-model` 即可（已封装）。
+
+**踩过的坑（值得单独记）**：主机上"ONNX 与 sentence-transformers 余弦 1.000000"曾被当成
+导出成功的证据，其实是**空洞验证**——两边都用了我这台 Mac 缓存里**退化的 `model.safetensors`**。
+用 `pytorch_model.bin` 加载才正常（0.243864，与云端 safetensors 完全一致）。
+详见 SEKB RFC §18.6；`scripts/fetch_embedding_model.sh --verify` 现在会额外做**区分度检查**。
+
+> 桩（`stub-hash@256`）仍保留：模型不在设备上时自动退回，并在自检里如实标注提供者。
 
 **首次构建抓到的真缺陷**：`DeviceTool.args` 被同时当作"给模型看的 schema"和"必填参数"，
 于是 `kb_search` 的可选参数 `top_k` 让**每次调用都变成"缺少参数: top_k"**（工具直接不可用）。

@@ -10,6 +10,7 @@ import com.sekb.ondevice.device.KeystoreCredentialStore
 import com.sekb.ondevice.edge.OpenAiCompatibleEdgeLlm
 import com.sekb.ondevice.embed.DeterministicEmbedding
 import com.sekb.ondevice.embed.EmbeddingProvider
+import com.sekb.ondevice.embed.OnnxBgeEmbedding
 import com.sekb.ondevice.rag.KnowledgeIndex
 import com.sekb.ondevice.rag.SqliteVectorStore
 import com.sekb.ondevice.rag.Retriever
@@ -57,10 +58,27 @@ class AppContainer(context: Context) {
      * 空间戳变成 `BAAI/bge-small-zh-v1.5@512` → 与云端一致，才允许跨端复用。
      * 换实现必须**重建索引**（[VectorStore.space] 是构造期确定的）。
      */
-    val embeddingProvider: EmbeddingProvider = DeterministicEmbedding()
+    private val modelDir = OnnxBgeEmbedding.resolveDir(context)
 
-    /** 端侧知识索引（SQLite 持久化：索引要能跨 App 重启存活）。 */
-    val vectorStore: VectorStore = SqliteVectorStore(context, embeddingProvider.space)
+    /** 模型路径诊断（自检里打印；"模型没被认到"最常见的原因就是路径/属主问题）。 */
+    val modelDirDiagnostics: String = OnnxBgeEmbedding.diagnostics(context)
+
+    /** ONNX 模型是否就位（就位则用与云端同空间的真实嵌入，否则退回桩）。 */
+    val onnxModelAvailable: Boolean = OnnxBgeEmbedding.isAvailable(modelDir)
+
+    val embeddingProvider: EmbeddingProvider =
+        if (onnxModelAvailable) OnnxBgeEmbedding(modelDir) else DeterministicEmbedding()
+
+    /**
+     * 端侧知识索引（SQLite 持久化：索引要能跨 App 重启存活）。
+     *
+     * 打开时若发现"库里记的空间 ≠ 当前嵌入模型"（例如刚从桩切到 ONNX），
+     * 走**原地重嵌入**而不是删库——索引里的文本是设备侧唯一副本（RFC §4.5-F 的"重算"）。
+     */
+    private val openResult = SqliteVectorStore.openOrReembed(context, embeddingProvider)
+    val vectorStore: VectorStore = openResult.store
+    val reembeddedChunks: Int = openResult.reembedded
+    val previousIndexSpace: String? = openResult.previousSpace
     val knowledgeIndex = KnowledgeIndex(embeddingProvider, vectorStore)
     val retriever = Retriever(embeddingProvider, vectorStore)
 

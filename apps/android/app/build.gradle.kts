@@ -99,6 +99,8 @@ dependencies {
 
     // 网络：SSE（流式）必须用 OkHttp 的流式 body，不能用一次性请求
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // 端侧嵌入：ONNX Runtime（跑 bge-small-zh-v1.5，与云端同空间，见 embed/OnnxBgeEmbedding.kt）
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     testImplementation("junit:junit:4.13.2")
