@@ -40,10 +40,14 @@ C/C++/Rust 核心，三端各自做绑定。**不要**在没有契约测试的�
 
 ```bash
 # Android（唯一已可用的端）
-bash scripts/android.sh test        # 单元测试，无需模拟器
-bash scripts/android.sh assemble    # 打 debug APK
-bash scripts/android.sh install     # 装到已连接的模拟器/真机
+bash scripts/android.sh test            # 单元测试，无需模拟器
+bash scripts/android.sh assemble        # 打 debug APK
+bash scripts/emulator.sh --background   # 起模拟器（状态全在 .tooling/ 内）
+bash scripts/android.sh install         # 装到已连接的模拟器/真机
 ```
+
+**实测（2026-09-18）**：从零到"模拟器里跑出端侧推理"全程**没有任何仓库外的写操作**，
+因此也不需要额外授权——构建缓存、debug keystore、AVD、模拟器的临时文件都在 `.tooling/`。
 
 构建状态全部落在仓库内的 `.tooling/`（Gradle 缓存、Android debug.keystore），
 所以**不需要任何仓库外的写权限**——这也是把它放进仓库的附带好处。

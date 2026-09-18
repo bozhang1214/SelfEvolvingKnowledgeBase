@@ -78,7 +78,8 @@ git status && git diff          # ⚠️ 看 diff 里有没有「不是我改的
 `.tooling/`，所以：
 
 ```bash
-bash scripts/android.sh test | assemble | install
+bash scripts/android.sh test | assemble | install   # 构建/装包
+bash scripts/emulator.sh --background               # 起模拟器（同样状态全在仓库内）
 ```
 
 不要手工 `export GRADLE_USER_HOME=~/.gradle` 再构建——那会把缓存写到仓库外，
@@ -89,6 +90,12 @@ bash scripts/android.sh test | assemble | install
 - **必须设 `ANDROID_USER_HOME`**，否则 `assembleDebug` 会因为写不了 `~/.android/debug.keystore` 失败；
 - **不要再设 `ANDROID_PREFS_ROOT`**（哪怕指向同一路径）——AGP 9 会崩在
   `AndroidLocationsBuildService ... AndroidDirectoryCreator`。
+
+模拟器同理（`scripts/emulator.sh` 已封装），它默认往外写四处，缺一处就崩或连不上：
+`HOME`（jwk 目录，写不了会 **Abort trap**）、`TMPDIR`、`ANDROID_AVD_HOME`、`ANDROID_USER_HOME`；
+另外 **adb 密钥必须与 AVD 里授权的那把一致**（AVD 里存的是创建它时的 `~/.android/adbkey`，
+换了 HOME 会变成 `unauthorized`），以及被杀掉的模拟器会留下 `*.lock` 导致
+"Running multiple emulators with the same AVD"。
 
 ## 5. 部署：脚本自带锁，别绕过
 

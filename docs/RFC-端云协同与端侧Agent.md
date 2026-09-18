@@ -943,12 +943,22 @@ Kotlin + Compose，Gradle 9.2.1 + AGP 9.0.0 + Kotlin 2.2.10（版本组合按本
 | `ANDROID_USER_HOME` | `.tooling/android-home` | AGP 要在这里生成 **debug.keystore**，否则 `assembleDebug` 直接失败 |
 | `ANDROID_AVD_HOME` | `.tooling/android-avd` | 模拟器 AVD（可选搬入，4.4G） |
 
-统一入口 `scripts/android.sh`（`test` / `assemble` / `install`）。
-**实测结果**：`bash scripts/android.sh test assemble` 在**没有任何额外授权**的情况下通过，
-产出 APK。两个坑记在脚本注释与 AGENTS.md §4.5：
-① 不设 `ANDROID_USER_HOME` → `Unable to create debug keystore ... not writable`；
-② **同时**设 `ANDROID_PREFS_ROOT`（哪怕同一路径）→ AGP 9 崩在
-`AndroidLocationsBuildService ... AndroidDirectoryCreator`。
+统一入口 `scripts/android.sh`（`test` / `assemble` / `install`）与 `scripts/emulator.sh`。
+
+**实测结果（零额外授权）**：`test assemble` 通过并产出 APK；模拟器从仓库内的 AVD 启动到
+`sys.boot_completed=1`；装包后跑端侧自检 **9/9 PASS**（真实 Ollama 流式、TTFT 294ms、
+权限拦截率 50%、工具调用 JSON 合法）。**即：从构建到"模拟器里跑出端侧推理"全程没有
+任何仓库外的写操作**。
+
+踩出来的四个坑（都写进了脚本注释与 AGENTS.md §4.5，改脚本前先读）：
+1. 不设 `ANDROID_USER_HOME` → `assembleDebug` 失败：`Unable to create debug keystore ... not writable`；
+2. **同时**设 `ANDROID_PREFS_ROOT`（哪怕同一路径）→ AGP 9 崩在
+   `AndroidLocationsBuildService ... AndroidDirectoryCreator`；
+3. 模拟器把 jwk 写到 `$HOME/Library/Caches/TemporaryItems`，**写不进去会直接 Abort trap: 6**
+   （不是降级）→ 必须把 `HOME`/`TMPDIR` 也指到仓库内；
+4. adb 密钥必须与 AVD 里授权的那把一致（AVD 存的是**创建它时**的 `~/.android/adbkey`）——
+   换了 `HOME` 会变成 `unauthorized`，装不了包；另外被杀掉的模拟器会留下 `*.lock`
+   导致 "Running multiple emulators with the same AVD"。
 
 ### 17.4 工具链现状（本机实测，决定"哪些端现在就能做"）
 
