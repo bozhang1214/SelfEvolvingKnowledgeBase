@@ -139,7 +139,11 @@ object SelfTest {
         // 就证明上一轮的索引真的落盘存活了（SQLite 实现的意义就在这里）。
         val preexisting = container.vectorStore.size()
         val ingestReports = ragDocs.map { (id, text) -> container.knowledgeIndex.ingest(id, text) }
-        val providerKind = if (container.onnxModelAvailable) "ONNX bge-small-zh-v1.5" else "确定性桩（未找到 ONNX 模型）"
+        val providerKind = if (container.onnxModelAvailable) {
+            "ONNX " + container.embeddingProvider.space.id
+        } else {
+            "确定性桩（未找到 ONNX 模型）"
+        }
         record("rag_provider", true, "嵌入=$providerKind 空间=${container.embeddingProvider.space.id} " +
             "本机计算=${container.embeddingProvider.isOnDevice}")
         record("rag_model_path", container.onnxModelAvailable,
@@ -187,10 +191,15 @@ object SelfTest {
                 "嵌入=${hit.embedMillis.toInt()}ms 检索=${hit.searchMillis.toInt()}ms")
 
         // 空间一致性：桩的空间与云端不同 → 必须明确标为"不可与云端融合"
-        val expectedCloudCompatible = container.onnxModelAvailable
+        // 与云端能否融合，判据是**空间 id 是否等于云端空间**，不是"用的是不是 ONNX"：
+        //   fp32 bge 与云端同空间 → true；
+        //   **int8 量化模型空间不同 → false**（量化会把分数分布抬上去，混用就是混两套向量）；
+        //   确定性桩 → false。
+        val expectedCloudCompatible =
+            container.embeddingProvider.space.id == com.sekb.ondevice.embed.EmbeddingSpace.SERVER_SPACE_ID
         record("rag_space_guard", hit.cloudCompatible == expectedCloudCompatible,
             "索引空间=${hit.space.id} 与云端一致=${hit.cloudCompatible}（期望 $expectedCloudCompatible：" +
-                "ONNX 与云端同空间应为 true，桩为 false）")
+                "只有与云端同空间的模型才允许融合；int8 与桩都不行）")
 
         // 空间不一致必须**拒绝检索**而不是混算余弦
         val mismatched = com.sekb.ondevice.rag.Retriever(

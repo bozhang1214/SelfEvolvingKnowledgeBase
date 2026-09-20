@@ -12,6 +12,10 @@
 #   bash scripts/fetch_embedding_model.sh            # 导出（若已存在则跳过）
 #   bash scripts/fetch_embedding_model.sh --force    # 强制重导出
 #   bash scripts/fetch_embedding_model.sh --verify    # 与 sentence-transformers 比对余弦
+#   bash scripts/fetch_embedding_model.sh --int8      # 额外产出 int8 量化模型（体积 ~1/4）
+#
+# ⚠️ **量化会改变向量空间**：int8 模型的向量与 fp32 不同，绝不能混用（RFC §18.1）。
+#    端侧以 `BAAI/bge-small-zh-v1.5-int8@512` 作为独立空间标记，切换时自动原地重算索引。
 #
 # 产物（**不入库**，.tooling/ 已 gitignore；95MB fp32）：
 #   .tooling/models/bge-small-zh-v1.5/{model.onnx,vocab.txt,tokenizer.json,...}
@@ -22,10 +26,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/.tooling/models/bge-small-zh-v1.5"
 PY="$ROOT/backend/.venv/bin/python"
-FORCE=0; VERIFY=0
+FORCE=0; VERIFY=0; INT8=0
 for a in "$@"; do
   [ "$a" = "--force" ] && FORCE=1
   [ "$a" = "--verify" ] && VERIFY=1
+  [ "$a" = "--int8" ] && INT8=1
 done
 
 [ -x "$PY" ] || { echo "需要 SEKB 后端 venv（含 torch/transformers）：$PY 不存在" >&2; exit 1; }
@@ -78,6 +83,25 @@ tok.save_pretrained(out)
 # 旧导出器的 TracerWarning 会提示"动态形状可能被固化"——所以必须验证（见 --verify）。
 print("model.onnx: %.1f MB" % (os.path.getsize(os.path.join(out, "model.onnx")) / 1e6))
 PYEOF
+fi
+
+if [ "$INT8" -eq 1 ]; then
+    INT8_DIR="$ROOT/.tooling/models/bge-small-zh-v1.5-int8"
+    mkdir -p "$INT8_DIR"
+    if [ "$FORCE" -eq 0 ] && [ -f "$INT8_DIR/model.onnx" ]; then
+        echo "✅ int8 模型已存在：$INT8_DIR"
+    else
+        echo "int8 动态量化（只量化权重，激活在线量化）..."
+        "$PY" - "$OUT/model.onnx" "$INT8_DIR/model.onnx" <<'PYEOF'
+import os, sys
+from onnxruntime.quantization import quantize_dynamic, QuantType
+src, dst = sys.argv[1], sys.argv[2]
+quantize_dynamic(src, dst, weight_type=QuantType.QInt8)
+print("int8: %.1f MB（fp32 %.1f MB，压缩 %.1f 倍）" % (
+    os.path.getsize(dst)/1e6, os.path.getsize(src)/1e6, os.path.getsize(src)/os.path.getsize(dst)))
+PYEOF
+        cp "$OUT/vocab.txt" "$INT8_DIR/vocab.txt"
+    fi
 fi
 
 if [ "$VERIFY" -eq 1 ]; then

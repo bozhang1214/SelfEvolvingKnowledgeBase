@@ -60,6 +60,14 @@ cd "$APP_DIR"
 # compileSdk 次版本：本机 1（android-36.1），只有 android-36 的环境传 0
 MINOR_FLAG="-PsekbCompileSdkMinor=${SEKB_COMPILE_SDK_MINOR:-1}"
 
+# 需要设备的子命令必须先确认设备在线——否则 adb 的失败会被后面的 echo 掩盖成"成功"
+require_device() {
+    if ! "$1" get-state >/dev/null 2>&1; then
+        echo "❌ 没有已连接的设备/模拟器；先跑 bash scripts/emulator.sh --background" >&2
+        exit 1
+    fi
+}
+
 STATUS=0
 for task in "$@"; do
     case "$task" in
@@ -67,6 +75,34 @@ for task in "$@"; do
         assemble)  ./gradlew :app:assembleDebug --console=plain $MINOR_FLAG \
                        ${SEKB_SEKB_URL:+-PsekbBaseUrl="$SEKB_SEKB_URL"} ;;
         install)   ./gradlew :app:installDebug --console=plain $MINOR_FLAG ;;
+        push-sample)
+            # 端侧 RAG 导入 E2E 用的样本文档：写进 App 内部 filesDir（App 自己能读，无需存储权限）
+            PKG="com.sekb.ondevice"
+            DEST="/data/data/${PKG}/files/sekb-sample.md"
+            ADB="${ANDROID_SDK_ROOT}/platform-tools/adb"
+            require_device "$ADB"
+            SAMPLE="$(mktemp)"
+            cat > "$SAMPLE" <<'SAMPLE_EOF'
+# 端侧索引运维手册
+
+本机索引存放在 SQLite 数据库中，每段切片以 float32 小端 BLOB 存储，512 维占 2KB。
+检索默认使用暴力余弦，语料上万段之后再考虑换成近似最近邻索引。
+
+换嵌入模型后必须重新计算已有切片的向量：混用两套向量空间会返回看似相关、实则错误的结果。
+重新计算是原地进行的，切片文本不会丢失。
+
+删除文档时只删除该文档的切片，其他文档不受影响。
+误召回率高时应提高相似度阈值；召回率偏低时则相反。
+SAMPLE_EOF
+            "$ADB" shell "run-as ${PKG} sh -c 'cat > ${DEST}'" < "$SAMPLE"
+            rm -f "$SAMPLE"
+            # PDF 样本（用 JVM 单测的同一个夹具，内容是英文——便于用英文提问做检索断言）
+            PDF_DEST="/data/data/${PKG}/files/sekb-sample.pdf"
+            PDF_SRC="$ROOT/apps/android/app/src/test/resources/sample-text.pdf"
+            [ -f "$PDF_SRC" ] && "$ADB" shell "run-as ${PKG} sh -c 'cat > ${PDF_DEST}'" < "$PDF_SRC"
+            echo "✅ 样本已写入（md + pdf）"
+            "$ADB" shell run-as "$PKG" ls -l "$DEST" "$PDF_DEST"
+            ;;
         push-model)
             # 把 ONNX 模型推进 App 的**内部**私有目录。
             #
@@ -81,14 +117,28 @@ for task in "$@"; do
             SRC="$ROOT/.tooling/models/bge-small-zh-v1.5"
             [ -f "$SRC/model.onnx" ] || { echo "缺模型：先跑 bash scripts/fetch_embedding_model.sh" >&2; exit 1; }
             ADB="${ANDROID_SDK_ROOT}/platform-tools/adb"
+            require_device "$ADB"
             "$ADB" shell run-as "$PKG" mkdir -p "$DATA"
             for f in model.onnx vocab.txt; do
                 # 整条远程命令必须是**一个**字符串：否则 adb shell 会把参数摊平，
                 # `>` 由设备上的 shell 用户解释 → "Permission denied"（踩过）。
                 "$ADB" shell "run-as ${PKG} sh -c 'cat > ${DATA}/${f}'" < "$SRC/$f"
             done
-            echo "✅ 模型已写入 App 内部目录（${DATA}）"
-            "$ADB" shell run-as "$PKG" ls -l "$DATA"
+            echo "✅ fp32 模型已写入（${DATA}，94.9MB）"
+            # int8 量化模型：存在就一起推（App 优先用它——体积 1/4、排序与 fp32 一致，
+            # 但分数分布上移，阈值按 0.5 标定；空间戳与 fp32 不同，切换时自动原地重算索引）
+            SRC8="$ROOT/.tooling/models/bge-small-zh-v1.5-int8"
+            DATA8="/data/data/${PKG}/files/models/bge-small-zh-v1.5-int8"
+            if [ -f "$SRC8/model.onnx" ]; then
+                "$ADB" shell run-as "$PKG" mkdir -p "$DATA8"
+                for f in model.onnx vocab.txt; do
+                    "$ADB" shell "run-as ${PKG} sh -c 'cat > ${DATA8}/${f}'" < "$SRC8/$f"
+                done
+                echo "✅ int8 模型已写入（${DATA8}，23.9MB）"
+            else
+                echo "（未找到 int8 模型：先跑 bash scripts/fetch_embedding_model.sh --int8）"
+            fi
+            "$ADB" shell run-as "$PKG" ls -l "$DATA" "$DATA8" 2>/dev/null || "$ADB" shell run-as "$PKG" ls -l "$DATA"
             ;;
         *)         ./gradlew "$task" --console=plain $MINOR_FLAG ;;
     esac || STATUS=$?

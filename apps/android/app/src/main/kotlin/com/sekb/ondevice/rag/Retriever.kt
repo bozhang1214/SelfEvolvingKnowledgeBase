@@ -51,9 +51,14 @@ class Retriever(
      * | 0.4 | 87% | 100% | **0/3** ← 命中率不降，误召回归零 |
      * | 0.6 | 80% | 80% | 0/3 ← 开始伤召回 |
      *
-     * 换嵌入模型必须**重新标定**：不同模型的余弦可比区间完全不同（确定性桩在 0.2–0.6）。
+     * **int8 量化模型要单独看**（同一套标注集）：它的分数分布整体上移，
+     * 0.4 下误召回会变成 2/3，而 **0.5 下同样 87%/100%/0-3**。
+     * 所以默认取 **0.5**——对 fp32 与 int8 **都**成立（详见 RETRIEVAL-EVAL.md 的曲线）。
+     *
+     * 换嵌入模型/换语料都必须**重新标定**：不同模型的余弦可比区间完全不同
+     * （确定性桩在 0.2–0.6 量级）。
      */
-    private val minScore: Double = 0.4,
+    private val minScore: Double = 0.5,
     /** 云端向量空间（用于判断能否跨端融合；默认取服务端口径） */
     private val cloudSpace: EmbeddingSpace = EmbeddingSpace.SERVER,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },

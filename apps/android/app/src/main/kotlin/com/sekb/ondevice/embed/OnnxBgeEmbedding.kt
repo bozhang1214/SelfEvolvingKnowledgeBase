@@ -23,10 +23,12 @@ import java.io.File
  */
 class OnnxBgeEmbedding(
     modelDir: File,
+    /** 空间戳。**量化模型必须用不同的戳**（INT8_SPACE_ID）——向量不同就不能混用（RFC §18.1） */
+    spaceId: String = EmbeddingSpace.SERVER_SPACE_ID,
     private val maxLength: Int = 512,
 ) : EmbeddingProvider, AutoCloseable {
 
-    override val space: EmbeddingSpace = EmbeddingSpace.SERVER          // 与云端同一空间
+    override val space: EmbeddingSpace = EmbeddingSpace(spaceId, 512)
     override val isOnDevice: Boolean = true
 
     private val tokenizer = BertWordPieceTokenizer(File(modelDir, VOCAB_FILE), maxLength)
@@ -142,6 +144,16 @@ class OnnxBgeEmbedding(
             File(modelDir, MODEL_FILE).isFile && File(modelDir, VOCAB_FILE).isFile
 
         private const val REL = "models/bge-small-zh-v1.5"
+        private const val REL_INT8 = "models/bge-small-zh-v1.5-int8"
+
+        /**
+         * int8 量化模型的空间戳。
+         *
+         * ⚠️ **必须与 fp32 不同**：量化后的向量与 fp32 的余弦只有 ~0.96–0.97，
+         * 分数分布也整体上移（同一阈值下误召回会从 0/3 变成 2/3）。
+         * 用同一个戳就等于"两套向量混用"，那正是 §18.1 明令禁止的事。
+         */
+        const val INT8_SPACE_ID = "BAAI/bge-small-zh-v1.5-int8@512"
 
         /**
          * 候选目录（**内部私有目录优先**）。
@@ -154,8 +166,12 @@ class OnnxBgeEmbedding(
          */
         fun candidateDirs(context: android.content.Context): List<File> = buildList {
             add(File(context.filesDir, REL))
-            context.getExternalFilesDir(null)?.let { add(File(it, REL)) }
+            add(File(context.filesDir, REL_INT8))
+            context.getExternalFilesDir(null)?.let { add(File(it, REL)); add(File(it, REL_INT8)) }
         }
+
+        /** int8 模型目录（存在则优先用它：体积 1/4、排序与 fp32 一致）。 */
+        fun int8Dir(context: android.content.Context): File = File(context.filesDir, REL_INT8)
 
         /** 解析实际使用的模型目录：优先"已有模型的那个"，都没有则返回内部目录（等推送/下载）。 */
         fun resolveDir(context: android.content.Context): File {

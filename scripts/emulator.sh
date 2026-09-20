@@ -65,7 +65,7 @@ if [ "${1:-}" = "--background" ]; then
             exit 0
         fi
     done
-    echo "❌ 90s 内未就绪，看 .tooling/emulator.log" >&2
+    echo "❌ 240s 内未就绪，看 .tooling/emulator.log（模拟器偶发启动即崩，重跑一次通常即可）" >&2
     exit 1
 fi
 
