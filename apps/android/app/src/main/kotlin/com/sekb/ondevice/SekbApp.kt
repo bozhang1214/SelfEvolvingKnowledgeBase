@@ -33,6 +33,14 @@ import com.sekb.ondevice.tools.ToolRegistry
  */
 class AppContainer(context: Context) {
 
+    init {
+        // PdfBox-Android 必须初始化一次资源加载器：它的字形表（glyphlist）等资源打包在
+        // aar 的 assets 里，不 init 就找不到，抽取时抛 `ExceptionInInitializerError`
+        // （注意是 **Error 不是 Exception**，普通 try/catch 拦不住）。
+        runCatching { com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(context) }
+            .onFailure { android.util.Log.w("SEKB", "PdfBox 资源初始化失败：${it.message}") }
+    }
+
     val credentialStore = KeystoreCredentialStore(context)
 
     val transport = OkHttpTransport()

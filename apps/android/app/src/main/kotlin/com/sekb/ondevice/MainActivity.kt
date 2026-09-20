@@ -56,8 +56,9 @@ class MainActivity : ComponentActivity() {
             try {
                 val items = SelfTest.run(container, { line -> log(line) }, cloud)
                 log(SelfTest.summary(items))
-            } catch (e: Exception) {
-                log("[FAIL] selftest_crashed — ${e.message}")
+            } catch (e: Throwable) {
+                // 必须是 Throwable：类初始化失败（ExceptionInInitializerError）与 OOM 都是 Error
+                log("[FAIL] selftest_crashed — ${e.javaClass.simpleName}: ${e.message}")
             }
         }.start()
     }

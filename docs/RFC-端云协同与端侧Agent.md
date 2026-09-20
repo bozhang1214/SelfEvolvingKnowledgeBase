@@ -1009,6 +1009,25 @@ Kotlin + Compose，Gradle 9.2.1 + AGP 9.0.0 + Kotlin 2.2.10（版本组合按本
 | 检索 | `Retriever` | 查询 → 嵌入 → top-k → 相似度阈值 → 结果；空结果/低分是**升级信号**来源 |
 | 接入 | 设备工具 `kb_search` | 模型可调用；同时要同步**服务端的 `DEFAULT_AVAILABLE_TOOLS`**（否则云端会把 `kb_search` 判成工具幻觉） |
 
+### 18.2.1 索引的输入：本机文档与 PDF（2026-09-20 落地）
+
+索引的输入从"内置样例"扩展到**用户自己的本机文档**：
+
+| 输入 | 处理 |
+|---|---|
+| 纯文本（txt/md/json/csv） | SAF 读取 → 直接切片（≤2MB） |
+| **PDF** | `PdfBox-Android`（Apache-2.0）抽**文本层** → 切片（≤20MB，抽取文本 ≤40 万字符） |
+| 扫描件 PDF（无文本层） | **拒绝并如实说明需要 OCR**——不塞空内容/图片进索引（脏索引比空索引更糟） |
+| 加密 PDF / 解析失败 | 拒绝并带上可读原因 |
+| Word/Excel | 不在本期（见 BACKLOG） |
+
+三个实现要点（都是踩出来的）：
+1. **PdfBox 必须先 `PDFBoxResourceLoader.init(context)`**：资源在 aar 的 assets 里，
+   没初始化会抛 `ExceptionInInitializerError`——它是 **Error 不是 Exception**，
+   `catch (Exception)` 拦不住，会把线程干掉；所以抽取器捕获 **Throwable** 并转成可读结果。
+2. **先判 PDF 魔数、再判二进制**：PDF 里必然有二进制字节，顺序反了会把所有 PDF 拒掉（有回归测试）。
+3. **PDF 判定看 `%PDF` 而不是扩展名**：用户从聊天软件存的文件经常没有扩展名。
+
 ### 18.3 隐私与升级的关系（这一节决定端侧 RAG 的价值）
 
 - **设备专属集合**（`device_only`）：嵌入与检索**只在端侧**，检索为空就如实说"本机资料里没有"，

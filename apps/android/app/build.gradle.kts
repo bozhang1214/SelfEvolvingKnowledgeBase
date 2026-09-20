@@ -101,6 +101,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // 端侧嵌入：ONNX Runtime（跑 bge-small-zh-v1.5，与云端同空间，见 embed/OnnxBgeEmbedding.kt）
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    // PDF 文本抽取（Apache-2.0）。只抽文本层，不做 OCR——见 ui/PdfExtractor.kt 的说明。
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     testImplementation("junit:junit:4.13.2")

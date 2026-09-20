@@ -15,16 +15,23 @@ import java.io.ByteArrayOutputStream
  */
 object DocumentImporter {
 
-    /** 单文件上限：端侧索引是"小而准"，塞进超大文件只会拖慢嵌入且几乎必然切得很碎。 */
+    /** 纯文本单文件上限：端侧索引是"小而准"，塞进超大文件只会拖慢嵌入且几乎必然切得很碎。 */
     const val MAX_BYTES = 2 * 1024 * 1024
+
+    /** PDF 单文件上限（PDF 是容器，体积天然更大；限制的是**原始文件**而不是抽取后的文本）。 */
+    const val MAX_PDF_BYTES = 20 * 1024 * 1024
+
+    /** 抽取后的文本上限：防止一个 PDF 抽出几 MB 文本把索引灌爆。 */
+    const val MAX_EXTRACTED_CHARS = 400_000
 
     sealed interface Result {
         data class Ok(val name: String, val text: String, val sizeBytes: Long) : Result
         data class Rejected(val name: String, val reason: String) : Result
     }
 
-    fun read(context: Context, uri: Uri): Result {
+    fun read(context: Context, uri: Uri, pdf: PdfExtractor = PdfBoxExtractor): Result {
         val name = displayName(context, uri)
+        val limit = if (looksLikePdfName(name)) MAX_PDF_BYTES else MAX_BYTES
         val bytes = try {
             context.contentResolver.openInputStream(uri)?.use { input ->
                 val buf = ByteArrayOutputStream()
@@ -34,8 +41,8 @@ object DocumentImporter {
                     val n = input.read(chunk)
                     if (n <= 0) break
                     total += n
-                    if (total > MAX_BYTES) {
-                        return Result.Rejected(name, "文件超过 ${MAX_BYTES / 1024 / 1024}MB 上限")
+                    if (total > limit) {
+                        return Result.Rejected(name, "文件超过 ${limit / 1024 / 1024}MB 上限")
                     }
                     buf.write(chunk, 0, n)
                 }
@@ -44,11 +51,45 @@ object DocumentImporter {
         } catch (e: Exception) {
             return Result.Rejected(name, "读取失败：${e.message?.take(60) ?: "未知原因"}")
         }
+        return decide(bytes, name, pdf)
+    }
+
+    /**
+     * 纯判定：字节 → 导入结果（不碰 Android API，便于单测）。
+     *
+     * 分支顺序有意义：**先认 PDF**（PDF 里必然有二进制字节，先跑二进制判定会把所有 PDF 拒掉）。
+     */
+    fun decide(bytes: ByteArray, name: String, pdf: PdfExtractor): Result {
+        if (isPdf(bytes)) {
+            return when (val r = pdf.extract(bytes)) {
+                is PdfExtraction.Text -> {
+                    val text = if (r.text.length > MAX_EXTRACTED_CHARS) {
+                        r.text.take(MAX_EXTRACTED_CHARS)
+                    } else {
+                        r.text
+                    }
+                    Result.Ok(name, text, bytes.size.toLong())
+                }
+                is PdfExtraction.NoTextLayer ->
+                    Result.Rejected(name, "这份 PDF 没有文本层（${r.pages} 页，多半是扫描件）；" +
+                        "本期不做 OCR，请先用工具转成带文本的 PDF")
+                is PdfExtraction.Encrypted -> Result.Rejected(name, "PDF 已加密，需要密码：${r.detail}")
+                is PdfExtraction.Failed -> Result.Rejected(name, "PDF 解析失败：${r.detail}")
+            }
+        }
         if (looksBinary(bytes)) {
-            return Result.Rejected(name, "看起来是二进制/压缩格式（如 PDF、Word），本期只支持纯文本")
+            return Result.Rejected(name, "看起来是二进制/压缩格式（本期支持纯文本与 PDF；" +
+                "Word/Excel 见 BACKLOG）")
         }
         return Result.Ok(name, String(bytes, Charsets.UTF_8), bytes.size.toLong())
     }
+
+    /** PDF 判定看**魔数**（`%PDF`），不看扩展名：用户从聊天软件存的文件常常没有扩展名。 */
+    fun isPdf(bytes: ByteArray): Boolean =
+        bytes.size >= 4 && bytes[0] == 0x25.toByte() && bytes[1] == 0x50.toByte() &&
+            bytes[2] == 0x44.toByte() && bytes[3] == 0x46.toByte()
+
+    private fun looksLikePdfName(name: String): Boolean = name.lowercase().endsWith(".pdf")
 
     /**
      * 二进制判定（纯函数，便于单测）。

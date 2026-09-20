@@ -161,6 +161,41 @@ rag_sqlite_space_guard  PASS  索引的空间是 stub-hash@256，当前嵌入模
    （`INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`）→ 先 `adb uninstall` 一次即可。
    这是一次性代价，之后签名稳定。
 
+### 1.8 PDF 导入（M3 第三批，2026-09-20）
+
+**自检 E2E（模拟器）PASS=26 FAIL=0**，PDF 三步：
+
+```
+rag_pdf_extract  PASS  抽取 78 字符 / 1 页；开头=On-device RAG keeps the index on the device…
+rag_import_pdf   PASS  「sekb-sample.pdf」1 段；检索命中=sekb-sample.pdf 分=0.538
+rag_pdf_delete   PASS  删除 1 段，剩余切片=3
+```
+
+用的是 **PdfBox-Android 2.0.27.0**（Apache-2.0），只抽**文本层**。四种结果各自有可读原因：
+
+| 情况 | 行为 |
+|---|---|
+| 有文本层 | 抽文本 → 走既有切片/索引链路（抽取文本上限 40 万字符） |
+| **无文本层**（扫描件/纯图片页） | 拒绝，提示"多半是扫描件，本期不做 OCR，请先转成带文本的 PDF" |
+| **加密** | 拒绝，提示需要密码（并带上库给的细节） |
+| 解析失败 | 拒绝，带上失败原因（不是静默变空文本） |
+
+**踩到的坑（值得记）**：抽取时抛的是
+`IOException: GlyphList 'com/tom_roush/pdfbox/resources/glyphlist/glyphlist.txt' not found`
+——PdfBox 的资源打在 aar 的 assets 里，必须先 `PDFBoxResourceLoader.init(context)`。
+而且**没初始化时抛的是 `ExceptionInInitializerError`（Error 而不是 Exception）**，
+普通 `try/catch (Exception)` 拦不住，会把整个线程干掉（自检当时没有汇总行就是这个原因）。
+两处都改了：App 启动时 `init`，且抽取器与自检包装都改成捕获 **Throwable**。
+
+**范围与边界**：
+- 只支持**文本层**；扫描件需要 OCR（不在本期，见 BACKLOG）；
+- 单文件上限 **20MB**、抽取文本上限 **40 万字符**（防止一个 PDF 把索引灌爆）；
+- PDF 判定看**魔数 `%PDF`** 而不是扩展名（用户从聊天软件存的文件常没有扩展名），
+  而且**必须先判 PDF 再判二进制**——PDF 里必然有二进制字节（有专门的回归测试钉住这个顺序）；
+- 单测夹具是**手写的最小 PDF**（`sample-text.pdf` / `sample-no-text.pdf`，各 ~700B，
+  用 `pypdf` 交叉验证过能读出/读不出文本）；E2E 的 PDF 内容是英文（手写 PDF 不做中文字体嵌入），
+  所以检索断言用的是英文提问。
+
 ### 1.7 本机文档导入 / 列表 / 删除（M3 第二批，2026-09-20）
 
 **自检 E2E（模拟器 + ONNX 嵌入）PASS=23 FAIL=0**，其中文档三步：

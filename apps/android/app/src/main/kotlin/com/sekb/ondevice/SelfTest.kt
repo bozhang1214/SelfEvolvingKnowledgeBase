@@ -31,6 +31,9 @@ object SelfTest {
     /** 本机文档 E2E 用的样本文件名（放在 App 内部 filesDir 下）。 */
     const val SAMPLE_FILE = "sekb-sample.md"
 
+    /** PDF 导入 E2E 用的样本（同样放在内部 filesDir）。 */
+    const val PDF_SAMPLE_FILE = "sekb-sample.pdf"
+
     data class Item(val name: String, val status: String, val detail: String)
 
     /**
@@ -254,6 +257,40 @@ object SelfTest {
                 after.size == others && container.vectorStore.size() >= 1,
                 "删除 $removed 段，文档数 ${docs.size}→${after.size}（应保留 $others），" +
                     "剩余切片=${container.vectorStore.size()}")
+        }
+
+        // ---------- PDF 导入（M3 第三批：真实 PdfBox 抽取） ----------
+        val pdfSample = appCtx?.let { java.io.File(it.filesDir, PDF_SAMPLE_FILE) }
+        if (pdfSample == null || !pdfSample.isFile) {
+            record("rag_import_pdf", null, "未找到 PDF 样本（先跑：bash scripts/android.sh push-sample）")
+        } else {
+            val bytes = pdfSample.readBytes()
+            val extraction = com.sekb.ondevice.ui.PdfBoxExtractor.extract(bytes)
+            record("rag_pdf_extract", extraction is com.sekb.ondevice.ui.PdfExtraction.Text,
+                when (extraction) {
+                    is com.sekb.ondevice.ui.PdfExtraction.Text ->
+                        "抽取 ${extraction.text.length} 字符 / ${extraction.pages} 页；" +
+                            "开头=${extraction.text.take(60).replace("\n", " ")}"
+                    is com.sekb.ondevice.ui.PdfExtraction.NoTextLayer -> "无文本层（${extraction.pages} 页）"
+                    is com.sekb.ondevice.ui.PdfExtraction.Encrypted -> "已加密：${extraction.detail}"
+                    is com.sekb.ondevice.ui.PdfExtraction.Failed -> "解析失败：${extraction.detail}"
+                })
+
+            if (extraction is com.sekb.ondevice.ui.PdfExtraction.Text) {
+                val name = pdfSample.name
+                val report = container.knowledgeIndex.ingest(
+                    sourceId = name, text = extraction.text, name = name,
+                    sizeBytes = pdfSample.length(), deviceOnly = true,
+                )
+                val hit = container.retriever.retrieve("does deleting a document affect other documents?", 1)
+                record("rag_import_pdf", report.chunks >= 1 && hit.hits.firstOrNull()?.sourceId == name,
+                    "「$name」${report.chunks} 段；检索命中=${hit.hits.firstOrNull()?.sourceId} " +
+                        "分=${hit.hits.firstOrNull()?.let { "%.3f".format(it.score) }}")
+                val removed = container.knowledgeIndex.remove(name)
+                record("rag_pdf_delete", removed >= 1, "删除 $removed 段，剩余切片=${container.vectorStore.size()}")
+            } else {
+                record("rag_import_pdf", false, "抽取未得到文本，后续步骤跳过")
+            }
         }
 
         // ---------- 云端四项（协议 E2E：登录 → 接入 → 聊天 → 上报） ----------
