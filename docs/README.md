@@ -4,7 +4,7 @@ layer: 宪法层
 owner: SEKB Team
 status: active
 version: v1.0.0
-last-updated: 2026-09-16
+last-updated: 2026-09-20
 based-on-commit: 965b246
 related: [docs/tech/00-README, docs/ops/00-README, docs/codeReview/未修复问题跟踪]
 ---
@@ -31,7 +31,10 @@ related: [docs/tech/00-README, docs/ops/00-README, docs/codeReview/未修复问�
 | `docs/tech/.validation/` | 文档工程校验脚本（链接/孤儿/编号/新鲜度）+ 格式模板 | 维护者 |
 | `docs/tech/.facts/` | 事实表 T1–T8（单一事实源 SSOT 工作产物） | 维护者 |
 | `docs/RFC-自迭代闭环设计.md` | 自迭代研发-运维闭环平台**设计 RFC**（draft）：变更发布策略（`ops/14`）、Gitea 版本管理（`ops/12`）的决策依据 | 架构师 |
-| `docs/RFC-端云协同与端侧Agent.md` | **端云协同与端侧 Agent 实现方案**（draft，待 owner 确认）：端侧 Android 宿主本地推理 + 云端保留重推理、路由矩阵与升级信号 | 架构师 |
+| [`docs/RFC-端云协同与端侧Agent.md`](RFC-端云协同与端侧Agent.md) | **端云协同与端侧 Agent 设计方案**（活文档）：决策表、路由矩阵与升级信号、状态一致性、里程碑与风险 | 架构师 |
+| [`docs/RFC-端云协同-实施记录.md`](RFC-端云协同-实施记录.md) | **M0–M3 实施记录（已归档）**：每轮做了什么、实测数字、踩的坑；开头有**「阶段总结与恢复指引」**（暂停点状态、待办、恢复命令、三条不变量） | 架构师/接手人 |
+| [`docs/ops/16-端云协同协议.md`](ops/16-端云协同协议.md) | 端侧宿主 ↔ SEKB **接口契约**（设备凭证、聊天 SSE、执行位置、路由事件、权限边界、错误码） | 写客户端的人 |
+| [`apps/README.md`](../apps/README.md) | **多端目录**（Android 已可用 / iOS / 鸿蒙）+ 按需编译 + 跨端逻辑分层 | 所有人 |
 | `docs/tmp/` | **本地讨论区**（gitignore，不进版本库）：个人资料、已完成方案的过程稿、一次性脚本。⚠️ **被跟踪文档不要链接到这里的文件**——干净克隆里没有它（`doc_guard` 会拦） | 本人 |
 | 仓库根 [`README.md`](../README.md) / [`AGENTS.md`](../AGENTS.md) | 门面（能力速览）+ 协作硬约定；两者都不复制 docs 内容，只做导览 | 所有人 |
 
@@ -50,3 +53,5 @@ related: [docs/tech/00-README, docs/ops/00-README, docs/codeReview/未修复问�
 - 新成员 / 决策者：从 [`docs/tech/00-README.md`](tech/00-README.md) 开始，按其「阅读路线」走。
 - 后端开发者：读 `02-RUNTIME-FLOWS.md` → `03-MODULES.md` → `05-API-REFERENCE.md`。
 - 运维：从 `docs/ops/00-README.md` 索引进入。
+- **端侧（Android/端云协同）**：先读 [`RFC-端云协同-实施记录.md`](RFC-端云协同-实施记录.md) 开头的
+  「阶段总结与恢复指引」（当前进度 + 怎么接着干），再按需读设计 RFC 与接口契约。

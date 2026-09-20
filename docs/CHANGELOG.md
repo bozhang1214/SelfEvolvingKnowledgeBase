@@ -2,7 +2,1248 @@
 
 > 记录所有功能迭代与问题修复。按时间倒序，最新在前。
 > 维护约定：**每次功能开发或问题修复完成后，必须同步在本文件追加一条记录**，并更新文档头部「最后更新」日期。
-> 最后更新：2026-09-15
+> 最后更新：2026-09-20
+
+---
+
+## 2026-09-20（端侧嵌入 int8 量化）
+
+- **改动**：
+  - `scripts/fetch_embedding_model.sh --int8`：`quantize_dynamic`（QInt8）产出 **23.9MB**（fp32 94.9MB 的 1/4）。
+  - `scripts/eval_embedding_quantization.py`：fp32 vs int8 对比（体积 / 延迟 / **检索质量**），
+    直接解析端侧那份标注集，保证评测集只有一份；输出阈值标定曲线。
+  - 端侧：`OnnxBgeEmbedding` 支持指定**空间戳**，int8 用 `…-int8@512`；容器优先用 int8（存在即用）；
+    `scripts/android.sh push-model` 同时推两份；默认阈值 **0.4 → 0.5**。
+
+- **实测（设备 + 主机一致）**：int8 与 fp32 **排序完全一致**（Hit@1 26/30、Hit@3 30/30、MRR 0.928），
+  但**分数分布整体上移**：同一阈值 0.4 下误召回从 0/3 变 1–2/3，**0.5 才干净**（0/3）。
+  嵌入延迟 **19ms vs 33–38ms**（≈1.7×，且这是没有 i8mm 的模拟器）。
+  结论：**默认用 int8**（体积 1/4、排序不变、更快），代价是 int8 不能与云端向量融合
+  （空间戳不同 → `cloudCompatible=false`），而融合尚未实现，现阶段无实际损失。
+
+- **顺带端到端验证了"换空间 → 原地重算"**：自检 `rag_reembed` 显示
+  「空间从 `…@512` 变为 `…-int8@512`，原地重算 3 块（不丢文本）」。
+  这也是本轮的收尾：`sqlite` 索引换模型不删库、文本不丢。
+
+- **自检修正**：`rag_space_guard` 原先按"是不是 ONNX"判定能否与云端融合，改为按
+  **是否等于云端空间**判定（int8 与桩都不行，fp32 才行）。
+
+- **对比脚本自己踩的坑（已修并加断言）**：第一版用 `unicode_escape` 解码 Kotlin 字符串，
+  把中文变成乱码 → 主机算出 Hit@1 4/30（设备是 26/30）。现在脚本会断言解析出的是真中文。
+
+## 2026-09-20（端侧 PDF 导入：PdfBox-Android 文本层抽取）
+
+- **改动**（端侧仓库）：
+  - `ui/PdfExtractor.kt`：PdfBox-Android 2.0.27.0（Apache-2.0）抽**文本层**，
+    结果分四类——有文本 / **无文本层（扫描件）** / 加密 / 解析失败，每类都给可读原因
+    （端侧没有服务端兜底，界面必须说清"为什么失败"）。
+  - `ui/DocumentImporter.kt`：PDF 分支（**先判 `%PDF` 魔数再判二进制**，否则 PDF 会被当二进制拒掉）、
+    PDF 上限 20MB、抽取文本上限 40 万字符；判定逻辑做成可注入抽取器的纯函数，JVM 可测。
+  - 单测夹具：**手写最小 PDF**（有文本 / 无文本各一份，各 ~700B，含二进制流对象），
+    用 `pypdf` 交叉验证过；11 条纯逻辑测试覆盖分类与分支顺序。
+
+- **踩到的坑（写进代码注释与 RFC §18.2.1）**：PdfBox 资源在 aar 的 assets 里，
+  必须先 `PDFBoxResourceLoader.init(context)`；未初始化时抛 `ExceptionInInitializerError`
+  ——**是 Error 不是 Exception**，`catch (Exception)` 拦不住、线程直接死（自检当时没有汇总行即此因）。
+  已改为：启动时 init + 抽取器/自检包装捕获 **Throwable**。
+
+- **验证**：模拟器 E2E **PASS=26 FAIL=0**：真实 PdfBox 抽取 78 字符/1 页 →
+  入库 1 段 → 检索命中 `sekb-sample.pdf` 分 **0.538** → 删除后剩余切片 3。
+  端侧单测 **182 用例**全绿（实测口径）。
+
+## 2026-09-20（端侧 RAG 可用化：文档导入/列表/删除 + 检索来源展示）
+
+- **修一个数据丢失 bug**：`KnowledgeIndex.remove()` 早期用"清空整库"实现删除（接口没有单条删除能力
+  时调用方一定会用危险方式绕过去），删一份文档会把**整个索引**清掉，而切片里的文本是设备侧唯一副本。
+  现在 `VectorStore` 增加 `deleteBySource`（内存/SQLite 各一份实现），并补"删一篇不影响其他"的单测。
+
+- **改动**：
+  - `rag/DocumentRegistry.kt` + `SqliteVectorStore` 的 `documents` 表：文档元信息（名称/大小/切片数/
+    导入时间/device_only），支持列表与删除；**升级只补建新表，绝不 DROP chunks**（切片文本不可再生）。
+  - `ui/DocumentImporter.kt`：SAF 读取本机文件（纯文本、≤2MB），二进制/PDF/Word 如实拒绝并给原因
+    （脏索引比空索引更糟）；`looksBinary` 做成纯函数并单测（含"中文 UTF-8 不能被误判"）。
+  - `ui/RetrievalSources.kt`：把 `kb_search` 的结果解析成"来源 + 分数"，在回答气泡下显示——
+    端侧 RAG 的答对/答错必须可追溯。
+  - UI：本机文档面板（导入/刷新/列表/删除）+ 每条回答的检索来源；小文件用字节显示（不再显示 0KB）。
+  - 自检新增三项：`rag_import_file` / `rag_import_retrieve` / `rag_delete_file`；
+    `scripts/android.sh push-sample` 写样本文档进 App 内部目录。
+
+- **验证**：模拟器 E2E **PASS=23 FAIL=0**（导入 574B → 1 段、检索命中 0.503、删除后其余 3 篇完好）；
+  端侧单测 **172 用例**全绿（实测口径：`scripts/android.sh test` 的用例总数）；截图 `apps/android/docs/screenshots/m3-rag-docs-panel.png`。
+  **未验证**（如实记录）：全程脚本化"在 SAF 选择器里选中文件 → 列表刷新"这一步；
+  人工点两下即可确认，长期自动化方案记进 BACKLOG。
+
+- **顺带修两个脚本缺陷**：`push-model`/`push-sample` 在**没有设备**时仍打印"✅"（失败被后续 echo 掩盖）
+  → 加 `require_device` 检查；`emulator.sh` 的等待超时提示写错（实际 240s 却写 90s）。
+
+## 2026-09-19（端侧 RAG 评测：标注集 + 阈值标定）
+
+- **改动**：
+  - `eval/RetrievalEvalSet.kt`：12 篇主题互不重叠的短文档 + **33 条问题**（30 条有答案、
+    3 条"库里没有"用于测误召回）；提问尽量不复用文档原句，避免只测词面匹配。
+  - `eval/RetrievalEvalRunner.kt`：Hit@1 / Hit@3 / MRR / 误召回率 + 嵌入与检索延迟分开统计，
+    并输出**阈值标定曲线**（评测的价值在于回答"阈值定多少"，而不是给一个分数）。
+  - 入口 `--ez evalrag true`；报告 `apps/android/docs/RETRIEVAL-EVAL.md`。
+  - **默认阈值由评测定出：0.2 → 0.4**（0.2 时 3 条"库里没有答案"的问题全部被强行回答，
+    即 100% 误召回；0.4 时误召回归零而 Hit@1/Hit@3 一点没降）。
+  - 用桩的单测改为**显式**给阈值（阈值本是模型相关的，桩的分数量程不同）。
+
+- **实测（模拟器 + ONNX bge-small-zh）**：Hit@1 **87%**、Hit@3 **100%**、MRR **0.928**、
+  误召回 **0/3**；嵌入 38ms（p95 57ms）、检索 0.5ms。4 条"命中但不在第 1 位"里
+  3 条是语义上合理的混淆（向量空间↔量化、路由↔升级）。
+
+- **顺带修一个真 bug**：评测报告的字符串是拼接后再 `.format(...)`，Kotlin 里
+  `.format` 只作用于**最后一个字面量** → 参数错位（`f != java.lang.Integer`）。
+  评测器算错分比被测对象出错更糟，所以这条也被单测钉住了。
+
+## 2026-09-18（端侧 RAG：ONNX 嵌入接入 + 一次"空洞验证"的教训）
+
+- **改动**：
+  - `embed/BertWordPieceTokenizer.kt`：自实现 BERT WordPiece（对齐 `tokenizer.json`：
+    `lowercase=false`、CJK 逐字、`##` 续接、max 100 字符/词），用 **HuggingFace 金标准 token id**
+    做测试（词表 108KB 放 `src/test/resources`，CI 也能跑）。
+  - `embed/OnnxBgeEmbedding.kt`：ONNX Runtime 跑 bge-small-zh-v1.5（512 维、CLS pooling + L2），
+    空间戳 `BAAI/bge-small-zh-v1.5@512` → **与云端同空间，可与云端结果融合**。
+  - `SqliteVectorStore.reembed()` + `openOrReembed()`：换嵌入模型时**原地重算**（不删库）——
+    索引里的文本是设备侧唯一副本，RFC §4.5-F 的原话就是"重算"。
+  - `scripts/fetch_embedding_model.sh`（离线导出 + 验证）、`scripts/android.sh push-model`。
+  - 自检新增：提供者/模型路径/区分度/token 诊断/重嵌入等项，**PASS=20 FAIL=0**。
+
+- **重大排查（RFC §18.6）**：端侧检索出现"任何提问都命中同一篇、余弦恰好 1.000"。
+  追下来是我这台 Mac 的 HF 缓存 `model.safetensors` **退化**（`pytorch_model.bin` 正常，
+  0.243864，与云端 safetensors 完全一致；云端未受影响）。
+  **教训**：主机上"ONNX 与 sentence-transformers 余弦 1.000000"曾被我当成导出成功的证据，
+  其实是**空洞验证**——两边用了同一份坏权重。与参照实现一致 ≠ 正确；
+  验证必须包含**可被证伪的性质**（现已在导出脚本里加"区分度检查"）。
+
+- **环境约束**：ORT **1.30.0 在模拟器上 SIGILL**（缺 `i8mm`）→ 固定 **1.20.0**；
+  模型不能 `adb push` 到外部私有目录（属主 shell、App 读不到）→ 改 `run-as` 写入内部目录。
+
+## 2026-09-18（端侧 RAG：SQLite 向量存储）
+
+- **改动**：`rag/SqliteVectorStore.kt`（端点 ② 的持久化那一半）：
+  - 向量以 **float32 小端 BLOB** 存（512 维 2KB/块，1 万块 ≈ 20MB）；批量 upsert 走事务；
+  - 检索仍是 Kotlin 暴力余弦（sqlite-vec 在 Android 上不是开箱即用；升级触发条件写在类注释里）；
+  - **空间戳入库 + 打开时校验**：换嵌入模型后打开旧库**当场失败**并要求重建，
+    而不是拿两套向量混算余弦（RFC §18.1）；升级时直接丢弃重建（索引是派生数据）。
+  - 容器改用 SQLite 实现（索引必须跨 App 重启存活）。
+
+- **验证**：模拟器自检 **PASS=16 FAIL=0**，其中：
+  - `rag_ingest` 两次运行分别显示 `启动时已有=0` / `=3` → **跨进程重启持久化确认**
+    （自检每次都是新进程，跑前 force-stop）；
+  - `rag_sqlite_space_guard` PASS：用不同空间打开旧库抛错，原因明确。
+
+## 2026-09-18（端侧 RAG，M3 第一批）
+
+- **背景**：真机未到，先做端侧 RAG（业主指定）。设计见 RFC §18；本批落地纯逻辑核心并接入工具链。
+
+- **改动**（`apps/android/app/src/main/kotlin/com/sekb/ondevice/`）：
+  - `embed/EmbeddingProvider.kt`：可插拔嵌入。`EmbeddingSpace(id, dim)` 把维度与模型 id
+    绑成一个值；`DeterministicEmbedding`（测试/开发桩，**带符号哈希 + 中文单字双字 + 256 维**）；
+    `HostOllamaEmbedding`（宿主，`isOnDevice=false`）。
+  - `rag/Chunking.kt`（纯函数，段落优先 + 长段硬切 + 重叠）、`rag/VectorMath.kt`
+    （余弦 + 稳定 top-k，脏数据返回 0 而不是抛）、`rag/VectorStore.kt`
+    （接口 + 内存实现，**空间是构造期只读**，维不符直接拒绝写入）、
+    `rag/Retriever.kt`（三条硬规则的代码分支）、`rag/KnowledgeIndex.kt`（切片→嵌入→入库）。
+  - `tools/KbSearchTool.kt`：设备工具 `kb_search`，`deviceOnly` **构造期注入**（绝不从模型参数来）。
+  - 服务端 `DEFAULT_AVAILABLE_TOOLS` 同步加 `kb_search` + 1 条口径同步测试（否则云端会把
+    合法工具判成幻觉）。
+
+- **验证**：客户端单测 **137 用例全绿**（+41）；模拟器自检 **PASS=15 FAIL=0**，
+  含三个"拒绝"路径（空间不一致拒绝检索、设备专属拒绝非本机嵌入、桩空间标记不可与云端融合）。
+  详见端侧仓库 `docs/VERIFICATION.md` §1.6。
+
+- **真缺陷（构建期抓到）**：`DeviceTool.args` 同时充当"给模型的 schema"与"必填参数"，
+  导致 `kb_search` 的可选参数 `top_k` 让每次调用都报"缺少参数" → 拆出 `requiredArgs`。
+
+- **环境坑**：`scripts/emulator.sh` 改为等 `sys.boot_completed=1`（原先假就绪会让 install 失败）；
+  搬 `ANDROID_USER_HOME` 会换 debug 签名 → 需先 `adb uninstall`（一次性）。
+
+## 2026-09-18（内核 MCP 建连「同 task」尝试与回退：MCP teardown 会取消宿主 task）
+
+- **背景**：前一条（`bac6249`）修好了 CLI 退出时**泄漏** `stdio_client`（unraisable traceback 消失），
+  但部署实测还剩一条 caught warning：
+  `MCP 资源清理异常 → Attempted to exit cancel scope in a different task than it was entered in`。
+  继续追到**建连侧**：`JobCopilotMCP._ensure_client` 用
+  `asyncio.wait_for(client.connect(), ...)` 包住建连，而 `wait_for` 会把协程放进**新 task**
+  （A/B 实测：`wait_for` 里 `current_task()` ≠ 调用方；`asyncio.timeout` 则相同），
+  破坏了 MCPClient 内部 anyio cancel scope 的「进入/退出同一个 task」约束。
+
+- **尝试**：改为 `async with asyncio.timeout(...)`，并加回归测试
+  `test_connect_runs_in_caller_task`（假 MCPClient 记录 `current_task()`）。
+
+- **结果：更糟，已回退**（部署 `d81eda7` 后实测）——同 task 之后，anyio 的报错从
+  "different task" 变成 "isn't the current task's current cancel scope"，并且 MCP SDK 的
+  `stdio_client` task group 在退出时会**取消宿主 task**：抛出的 `CancelledError` 不是
+  `Exception` 子类，穿过了 `client.py::_cleanup` 与 `bootstrap.shutdown_app` 的
+  `except Exception`，CLI **退出码变成 1**，连「应用已关闭」都没打出来。
+  回退后恢复为：exit 0、无 traceback、仅一条 caught warning。
+
+- **改动**：`git revert d81eda7`（代码/测试/碎片一并回退）。
+  顺带把活数字对齐实测：`backend_unit_cases` 949→950（协作者同期新增了用例）。
+
+- **后续建议**（本轮未做：不在会话末动共享的 MCP 客户端）：
+  1. **首选**：让 CLI 不要预热内核 MCP——`news-backfill` 根本不需要它，没有建连就没有关闭，
+     问题从源头消失（需要给 `initialize_app` 一个跳过 warmup 的开关，并按命令决定）。
+  2. 若坚持同 task 建连，关闭路径必须同时兜住 `BaseExceptionGroup` / `CancelledError`
+     （仅限关闭阶段），否则退出码会被 teardown 的取消污染。
+  3. `MCPClient._cleanup` 的 `except Exception` 兜不住 anyio 的 `BaseExceptionGroup`，
+     这本身是个独立的隐患，值得单独修。
+
+## 2026-09-18（镜像运维加固：SSL 抖动重试 + "CI 跑在镜像上"的耦合）
+
+- **背景**：推送后 GitHub 镜像停在旧提交，查 `push_mirrors.last_error` 得到
+  `push failed: ... OpenSSL SSL_read: unexpected eof while reading` —— 服务器到 GitHub 的
+  **国际链路抖动**（与早先"国际路径不可用"是同一类问题）。同时 `gitea_mirror.py sync`
+  自己在这期间**抛 TimeoutError 崩了**，把网络抖动伪装成脚本 bug。
+
+- **改动**：
+  - `scripts/gitea_mirror.py`：`api()` 加超时（60→180s）与**退避重试**；
+    SSL/网络类错误单独识别为"可重试"；补充说明 **422 = 同步进行中（正常）**。
+  - `.github/workflows/android.yml` 头部与 `docs/ops/12-GITEA.md` 明确：
+    **CI 跑在 GitHub 镜像上 ⇒ 镜像滞后 = CI 滞后**；推送后没看到 CI，先在服务器
+    `python3 scripts/gitea_mirror.py sync` 重试。
+
+- **验证**：加固后重跑 `sync` → 第 1 次尝试即全部成功；GitHub API 复核 HEAD=本地 HEAD。
+
+## 2026-09-18（端侧 RAG 设计定稿，RFC §18）
+
+- **背景**：真机未到，业主指定先做端侧 RAG。端侧 RAG 是 §4.5-F「`embedding_space` 不一致
+  必须重算」这条规则第一次真正被用到，所以先把设计写死再动手。
+
+- **要点**：
+  - **向量空间一致性**：ONNX 版 `bge-small-zh-v1.5`（512 维）→ 空间戳
+    `BAAI/bge-small-zh-v1.5@512`，与云端**同空间**可混用；宿主 Ollama 的其它嵌入模型
+    （如 `bge-m3@1024`）维度与语义都不同 → **禁止混用**，只能本机检索；测试桩同理。
+    落地时这条要做成**代码分支**而不是注释。
+  - **分层**：`EmbeddingProvider`（可插拔，必须能离线）/ `Chunking`（纯函数）/
+    `VectorStore`（首批 SQLite + 暴力余弦，预留 sqlite-vec/HNSW）/ `Retriever` /
+    设备工具 `kb_search`（同时要同步服务端 `DEFAULT_AVAILABLE_TOOLS`，否则会被判工具幻觉）。
+  - **隐私与升级**：设备专属集合只在端侧嵌入与检索，检索为空就如实说"本机没有"，
+    **绝不**为了答得更好把原文送云端嵌入；非专属集合才允许升级到云端 RAG。
+  - **验收**：20–50 条标注集的命中率、嵌入/检索延迟分开测、空间一致性、
+    空检索升级与专属集合不升级各一条案例。
+
+## 2026-09-18（删除独立仓 `sekb-ondevice-agent`）
+
+- **背景**：端侧代码已并入主仓 `apps/android/`（RFC §17），独立仓没有存在意义，
+  留着反而制造"两个源码真相"。
+
+- **改动**：
+  - **Gitea 侧删除**：`DELETE /repos/bo/sekb-ondevice-agent` → 204，复核 404。
+  - **GitHub 侧归档**：`PATCH {"archived": true}` → 成功（复核 `archived=true`）。
+    ⚠️ 令牌缺 `delete_repo` 权限，**彻底删除需业主在 GitHub UI 操作**，或给令牌加该权限。
+  - `scripts/gitea_mirror.py` 的 `REPO_MAP` 去掉该条目（否则 `status` 会对不存在的仓库报 ❌）；
+    `docs/ops/12-GITEA.md` 当前状态改回**四个**仓库；`apps/android/README.md` 同步。
+
+- **验证**：Gitea 复核 404；GitHub 复核 `archived=true`；`gitea_mirror.py status` 四仓全绿。
+
+## 2026-09-18（CI：Android 独立 workflow（path 过滤）+ 端云协议三方一致守卫）
+
+- **背景**：端侧代码并入主仓后，服务端 CI 不该因为改 Android 而跑，反之亦然；
+  另外协议文档（`docs/ops/16-端云协同协议.md`）是三端共享契约，**它能以三种方式静默漂移**：
+  文档写了服务端不存在的端点、客户端调了文档未声明的端点、客户端调了已删除的端点。
+
+- **改动**：
+  - `.github/workflows/android.yml`：**独立 workflow + 原生 `paths` 过滤**
+    （`apps/android/**`、`scripts/android.sh` 变更才触发；不引第三方 paths-filter）。
+    单元测试 → 打 APK → 上传产物。SDK platform **先试 `android-36.1`、缺失退回 `android-36`**
+    （不赌 runner 上有哪个），并把选中的次版本用 `-PsekbCompileSdkMinor` 传给 Gradle。
+  - 构建支持覆盖：`apps/android/app/build.gradle.kts` 的 `compileSdkMinor` 可覆盖，
+    `scripts/android.sh` 尊重外部 `GRADLE_USER_HOME`（便于 CI 缓存）。
+  - `scripts/check_protocol_paths.py`：解析服务端真实路由（`APIRouter(prefix=)` + `@router.x`），
+    与文档声明、客户端调用三方比对；接进 `doc_guard.sh` 作为 **5/5**，CI 的 docs-guard 作业自动覆盖。
+
+- **验证**：`python3 scripts/check_protocol_paths.py` → 服务端 71 路由 / 文档 14 / 客户端 8，
+  三方一致；**反向验证**（往客户端注入 `/api/v1/secret/backdoor`）→ 精确报出 2 处不一致、
+  退出码 1，还原后恢复绿灯（证明守卫不是"永远绿灯"）。
+
+## 2026-09-18（协议文档指向端侧参考实现）
+
+- 端侧代码并入 `apps/android/` 后，协议文档（`docs/ops/16-端云协同协议.md`）补上参考实现位置与其他端的目录见
+`apps/README.md`，方便写第二、第三个端的人直接对着代码核对契约。
+
+## 2026-09-18（纠正：核对 GitHub 镜像不能用 `git ls-remote`）
+
+- **背景**：给新仓配好推送镜像后，我用
+  `git ls-remote https://github.com/bozhang1214/sekb-ondevice-agent.git` 作为"独立核对"，
+  并据此宣称"镜像真的推到了 GitHub"。
+
+- **发现**：本机全局 git 配置里有
+  `url.ssh://git@100.71.24.105:2222/bo/.insteadOf = https://github.com/bozhang1214/`，
+  它会把这类 URL **静默重写成 Gitea**。也就是说那次"核对 GitHub"实际核的是 Gitea，
+  **方法无效**——结论碰巧正确，但证据不成立。
+
+- **纠正**：核对 GitHub 一律走 API：
+  `curl -s https://api.github.com/repos/bozhang1214/<repo>/commits/main`
+  （或临时屏蔽 `insteadOf`）。据此重核：`sekb-ondevice-agent` 的 GitHub HEAD 与本地一致；
+  主仓 `SelfEvolvingKnowledgeBase` 起初落后两个提交，显式触发 `push_mirrors-sync` 后同步到最新。
+
+- **顺带实测**：`sync_on_commit` **不保证立刻同步**（推送后 3 分钟内 GitHub 仍是旧提交，
+  且 `push_mirrors.last_update` 停在推送之前、`last_error` 为空）。要立刻可用就显式触发。
+
+- **改动**：`docs/ops/12-GITEA.md` 补上三条（insteadOf 陷阱 / 不要依赖及时同步 / last_update 不可信）
+  与正确的核对命令；纠正本节变更碎片与 RFC §16.6 里基于错误方法的表述。
+
+## 2026-09-18（模拟器也收进仓库：`scripts/emulator.sh`，零授权跑通构建→装包→自检）
+
+- **背景**：构建状态收进 `.tooling/` 之后，构建已不需要授权；但模拟器仍往外写四处，
+  轻则连不上、重则直接崩。
+
+- **改动**：新增 `scripts/emulator.sh`，把模拟器的全部状态也收进仓库
+  （`HOME` / `TMPDIR` / `ANDROID_AVD_HOME` / `ANDROID_USER_HOME`），
+  并处理锁文件与 adb 密钥同源问题。文档（AGENTS.md §4.5 / apps/README.md / RFC §17.3）同步。
+
+- **四个实测坑**（缺一处就崩或连不上）：
+  1. `ANDROID_USER_HOME` 不设 → `assembleDebug` 写不了 `debug.keystore` 失败；
+  2. `ANDROID_PREFS_ROOT` 与 `ANDROID_USER_HOME` **同时**设 → AGP 9 直接崩；
+  3. 模拟器写 `$HOME/Library/Caches/TemporaryItems` 失败 → **Abort trap: 6**（不是降级）；
+  4. adb 密钥与 AVD 授权的不一致 → `unauthorized`；残留 `*.lock` → "Running multiple emulators"。
+
+- **验证**：`bash scripts/emulator.sh --background` → `emulator-5554 device`、`boot_completed=1`；
+  装 APK 后自检 **9/9 PASS**（TTFT 294ms、越权拦截率 50%、工具调用 JSON 合法）。
+  **全程零额外授权**——这就是这次重构要拿到的结果。
+
+## 2026-09-18（科技资讯：周报 cron 落到周一（APScheduler 0=周一））
+
+- **背景**：任务名、配置注释、文档全都写着「周报：每周一 08:00」，但生产实测的
+  `next_run_time` 三次都落在**周二**（09-15、09-22）。根因是 **APScheduler 的
+  `day_of_week` 是 `0=周一`**（不是 crontab 的 `0=周日`），所以 `"0 8 * * 1"` 是**周二**。
+  名字与实际不符，静默了半个月——周报从 09-03 起又一直是空转（另一处已修），
+  两者叠加导致没人发现。
+
+- **改动**（`0 8 * * 1` → `0 8 * * 0`，并在注释里写明这个坑以免再犯）：
+  - `backend/app/core/config.py`：`NewsConfig.weekly_cron` 默认值 + 注释。
+  - `backend/config.yaml` / `config.local.yaml` / `config.edge-cloud.yaml`：三份出厂配置同步。
+  - `docs/tech/.facts/T2-config.md`、`T7-async-schedule.md`：配置事实表里的值同步，
+    并注明「APScheduler 0=周一」。
+
+- **验证**：
+  - 用**真实配置**（`load_config("config.yaml")`）构造触发器实测下一个触发点：
+    `weekly 0 8 * * 0 → 2026-09-21 08:00 (Monday)`（起点取 09-19 周六）。
+  - 新增 2 个回归测试：①默认 `NewsConfig().weekly_cron` 的下一次触发必须是**周一**；
+    ②三份 `config*.yaml` 的 `weekly_cron` 都必须是 `0 8 * * 0`——**生产读的是 yaml
+    而不是默认值**，只改默认值会「测试全绿、线上照旧」。`pytest tests/unit` → 949 passed。
+
+## 2026-09-18（CLI 关闭期泄漏内核 MCP（stdio_client 跨 task 报错））
+
+- **背景**：`sekb news-backfill 2026-09-17` 回填成功、日志已经打完「应用已关闭」之后，
+  解释器退出时又抛出一段 traceback：
+
+  ```
+  an error occurred during closing of asynchronous generator <async_generator object stdio_client ...>
+  RuntimeError: Attempted to exit cancel scope in a different task than it was entered in
+  ```
+
+  根因：内核 MCP（招聘分析）共享客户端是 `initialize_app` 预热时建立的
+  （`_warmup_kernel_mcp`），而**关闭只写在 `app/api/server.py` 的 lifespan 里**——
+  服务端有，**CLI 没有**（chat / eval / rag-eval / news-backfill 都只调 `shutdown_app`，
+  全仓 `close_shared_kernel` 的调用点只有 server.py 与一个测试）。于是那个
+  `stdio_client` 异步生成器没人关，最终由**异步生成器终结器**在另一个 task 里收尾，
+  触发 anyio 的 cancel-scope 跨 task 报错，并可能遗留子进程（退出码仍是 0，
+  所以只污染输出、不影响结果——但作为运维命令不该这样）。
+
+- **改动**：`backend/app/core/bootstrap.py` 的 `shutdown_app()` 末尾补上与 server 侧
+  同样的守卫式关闭（`close_shared_kernel()`，失败只记 warning）。重复调用安全：
+  关完单例置回 `None`，所以服务端 lifespan 先关一次、`shutdown_app` 再关一次是 no-op。
+
+- **验证**：
+  - 新增 `tests/unit/test_bootstrap_shutdown.py`：①`shutdown_app` 必须调用
+    `close_shared_kernel`；②关闭失败不能影响整体退出（只记警告不抛）。`pytest tests/unit` → 949 passed。
+  - 待部署后在容器内实跑 `news-backfill --no-force`（跳过路径，秒级）确认 traceback 消失。
+
+## 2026-09-18（仓库形态：端侧并入 `apps/android`（monorepo）+ 构建摆脱仓库外写权限）
+
+- **背景**：业主提出"希望用户一次 clone 拿到全量代码，按需编译各端；后续还要上鸿蒙、iOS"。
+  原 D2（端侧独立成仓）会让"拉全量"变成需要说明书的操作，且协议文档与三端实现跨仓，
+  容易出现"文档说 A、代码做 B"。同时端侧代码在工作区外，每次构建/写文件都要单独授权。
+
+- **改动**：
+  - **并入**：`sekb-ondevice-agent` → `apps/android/`，用
+    `git merge -s ours --allow-unrelated-histories` + `git read-tree --prefix` 导入，
+    **原仓 6 个提交历史完整保留**（合并提交有两个父提交）。原独立仓冻结为只读。
+  - **多端目录**：新增 `apps/README.md`（分层与取舍）、`apps/ios/README.md`、
+    `apps/harmony/README.md`（含本机工具链实测与开工须知）。
+  - **构建摩擦**：构建状态统一收进仓库内 `.tooling/`（`GRADLE_USER_HOME`、
+    `ANDROID_USER_HOME`、`ANDROID_AVD_HOME`），统一入口 `scripts/android.sh`
+    （`test`/`assemble`/`install`）。**实测：无任何额外授权即可跑通测试与打包**。
+  - 文档：根 README 新增「多端应用（apps/）」；AGENTS.md 新增 §4.5（构建入口 + 两个坑）；
+    RFC 新增 §17（D2 修正的论证、导入方式与限制、工具链现状）。
+
+- **两个实测坑**（写进脚本注释与 AGENTS.md）：不设 `ANDROID_USER_HOME` →
+  `Unable to create debug keystore ... not writable`；**同时**设 `ANDROID_PREFS_ROOT`
+  （哪怕同一路径）→ AGP 9 崩在 `AndroidLocationsBuildService ... AndroidDirectoryCreator`。
+
+- **验证**：`bash scripts/android.sh test assemble` 零授权通过（96 单测 + APK）；
+  SEKB 后端测试/ruff/mypy/doc_guard 见本轮全量验证。
+
+## 2026-09-18（端云协同 M2：UI 验收 + 两个 UI 缺陷修复）
+
+- **背景**：端侧自检走的是"编排器直连"，**绕过界面**——界面本身从未被人点过。
+
+- **改动**（端侧仓库）：修 UI 验收抓到的两个真缺陷：
+  1. **密码框明文显示**：截图里密码白纸黑字可见（截图/投屏/旁人一瞥即泄漏）
+     → `PasswordVisualTransformation`；
+  2. **徽标漏报"客户端侧升级"**：客户端因 `edge_unavailable` 改道云端时，服务端回传的
+     `execution.escalated=0`（只统计服务端内部升级），界面显示成"云端完成"，
+     用户不知道端侧失败过 → 徽标同时看客户端结果 + 5 条 `BadgeTest`。
+  另：云端地址支持构建期覆盖（`-PsekbBaseUrl`），UI 联调免手打地址。
+
+- **验证**：真实点击走通「接入设备 → 发送 → 回答 + 执行位置徽标」，截图存端侧仓库
+  `docs/screenshots/m2-ui-e2e.png`；单测 96 用例全绿。
+  环境坑（Gboard 窗口遮挡点击、`input text` 空格要写 `%s`、焦点切换用 `KEYCODE_TAB`）
+  记在端侧仓库 `docs/VERIFICATION.md` §1.5。
+
+## 2026-09-18（Gitea 手册：`last_update` 不能用来判断"提交即同步"）
+
+- **背景**：给新仓 `sekb-ondevice-agent` 配好推送镜像后，为确认 `sync_on_commit` 生效，
+  去查 `push_mirrors` 的 `last_update` —— 却停在**上一次手动同步**的时间，看起来像没生效。
+
+- **实测结论**：`sync_on_commit` 触发的自动推送**不刷新** `last_update`。
+  真正的判据是去 GitHub 侧独立核对（`git ls-remote` 与本地 `git rev-parse HEAD` 比对）——
+  实测 GitHub 侧已是本地最新 commit。同理 `last_error` 为空只说明"上次同步没报错"，
+  不等于"这次已经同步"。
+
+- **改动**：`docs/ops/12-GITEA.md` 镜像章节补上这条陷阱与核对命令。
+
+## 2026-09-18（端云协同 M2：端侧宿主独立建仓 `sekb-ondevice-agent` + 推送镜像）
+
+- **背景**：M2 的 Android 宿主按 D2 决策要独立成仓（Gitea 主 + GitHub 辅镜像）。
+  代码此前已在本地完成 5 个提交，但本机没有 Gitea/GitHub API 令牌，建仓与配镜像做不了。
+
+- **改动**：
+  - 在 Gitea 建 `bo/sekb-ondevice-agent`（**私有**，与 `sekb` 一致）；
+    在 GitHub 建 `bozhang1214/sekb-ondevice-agent`（**公开**，与现有两个仓库一致）。
+  - 配置**推送镜像**（复用既有机制）：`interval: 8h` + `sync_on_commit: true`，
+    参数与 `sekb` 完全相同；`scripts/gitea_mirror.py` 的 `REPO_MAP` 增加一行
+    （**必须显式写死**：Gitea 名与 GitHub 名不同名会静默失效，这是该脚本头注释记着的坑）。
+  - 推送本地 5 个提交（91 单测 / 14 项模拟器 E2E）到 Gitea。
+
+- **验证**：镜像 `last_update=2026-09-18T14:31:33+08:00`、`last_error` 为空；
+  用 **GitHub API** 核对 `sekb-ondevice-agent` 的 `commits/main` → `8c76c08`，与本地 HEAD 一致。
+
+  ⚠️ **方法纠正（同日稍后发现）**：最初写的是"用 `git ls-remote https://github.com/...` 独立核对"，
+  但本机全局 git 配置有 `url.ssh://git@100.71.24.105:2222/bo/.insteadOf = https://github.com/bozhang1214/`，
+  会把该 URL **静默重写成 Gitea** —— 也就是说当时"核对 GitHub"其实核的是 Gitea，**方法无效**
+  （结论碰巧正确，但证据不成立）。核对 GitHub 必须走 API，或临时屏蔽 `insteadOf`。
+  另外实测 `sync_on_commit` **不保证立刻同步**：主仓一次推送后 3 分钟内 GitHub 仍是旧提交，
+  显式触发 `push_mirrors-sync` 后才到最新。两条都写进了 `docs/ops/12-GITEA.md`。
+
+- **待办**：服务器上 `python3 scripts/gitea_mirror.py status` 复核五仓（下次部署时顺带）。
+
+## 2026-09-18（端云协同 M2（三）：模拟器真机 E2E 14/14 + 工具调用合法率对照实验）
+
+- **背景**：M2 的验收要求是"模拟器上验功能与协议"。前面的 M2 批次只有 JVM 单测，
+  端侧真实链路（Ollama 流式、Keystore、权限、SSE、设备凭证）都还没在 Android 上跑过。
+
+- **改动**（独立 repo `sekb-ondevice-agent`，5 个提交）：
+  - Compose 界面（聊天 + **执行位置徽标** + 最近决策理由 + 权限审计面板 + 端云地址与设备接入）、
+    Android 装配、Keystore AES-GCM 凭证存储、HTTP 传输抽象、端侧 LLM 与 SEKB 两个客户端、
+    端云编排器（决策→端侧流式（前缀守卫）→改道云端+交接块→上报→单步工具轮）。
+  - `SelfTest`：可脚本化的自检入口（`adb am start --ez selftest true` + logcat），
+    14 项覆盖端侧链路与云端协议；`--ez eval true [--ez hard true]` 跑合法率对照实验。
+  - 修 `timeout` 升级信号是**死代码**（编排器从没把首字耗时喂给守卫）+ 端侧预热
+    （同一任务 **TTFT 1780ms → 83ms**，21 倍）。
+
+- **验证**：
+  - 模拟器 E2E **14/14 PASS**（真实 Ollama 流式、权限拦截率 50%、云端 SSE + `execution`、
+    设备上报事件在服务端 `by_role` 可见 = 落库确认）。
+  - 工具调用 JSON 合法率对照：40 次调用（2B/4B × 易档/难档 × 约束解码 ON/OFF）**全部 100%**、
+    零工具名幻觉，延迟差在噪声范围 → **推翻"小模型必须靠 grammar"的假设**，
+    建议先不为 grammar 付工程复杂度（局限已如实记录）。
+  - 单测 91 用例全绿；后端 949 通过、ruff 全绿、mypy 308≤310。
+
+- **E2E 抓到的两个真缺陷**：① 客户端 `login` 读 `access_token`，而服务端返回 `token`
+  （200 OK 却报登录失败）；② SEKB 流式路由事件缺 `model` → `execution.model` 为空，
+  已在 SEKB 侧修（`_resolved_model`）并补回归测试。
+
+- **未完成**：独立 repo 建仓 + Gitea→GitHub 镜像（需要服务器 SSH/令牌，见 RFC §16.6）；
+  UI 人工点击验收；断网可用性。
+
+## 2026-09-18（科技资讯：新增指定日期日报回填（sekb news-backfill））
+
+- **背景**：`refresh()` 的目标日期写死成「今天」，`expected_period("daily")` 与启动补跑
+  也都只认今天，于是**历史上缺失的日报永远补不回来**。2026-09-17 的日报就因为定时任务
+  空转 + 当天重启早于 08:00（补跑判定「没有缺失」）而**永久丢失**，只能眼看列表里一个空洞。
+  09-18 的可以靠「部署后启动补跑」补回，09-17 的没有任何代码路径能补。
+
+- **改动**（参考 `_period_window` 已支持 weekly/monthly 自然周期的做法，把 daily 补齐）：
+  - `backend/app/agents/news/service.py`
+    - 新增 `validate_day()`：校验回填日期（`YYYY-MM-DD`、写法规范、非未来）。
+      为什么前置校验：`POST /news/refresh` 是**后台任务**，参数错误发生在后台就只剩一行
+      日志，用户看不到 → 必须能返回 400。
+    - `refresh(force=False, day=None)`：传 `day` 即生成**指定日期**的日报；不传则行为
+      与原实现逐行等价（目标=今天）。
+    - `_period_window("daily", label, tz)` 返回该**自然日** `[00:00, 次日 00:00)`；
+      仅回填走这个窗口 —— **日常调度的滚动小时窗口不变**（否则 08:00 出报会丢掉前一天
+      傍晚的资讯，这是刻意保留的行为）。
+    - 回填与日常调度**共用 `daily` 文件锁**（两者都写 `index.json`，不能并发）。
+  - `backend/app/api/routes/news.py`：`POST /news/refresh` 接受 `{"date": "2026-09-17"}`，
+    非法/未来日期返回 **400**（而不是后台静默失败）。
+  - `backend/app/cli/main.py`：新增 `sekb news-backfill 2026-09-17 [更多日期...]`
+    （`--no-force` 可只补缺失的），供部署时在容器内直接回填。
+  - `backend/tests/unit/test_news_backfill.py`（新增 12 例）+ 更新
+    `test_news_period_window.py` 里「daily 返回 None」这条旧契约的断言。
+
+- **验证**：
+  - `pytest tests/unit -q` → **945 passed**（原 932 + 新增 13）。
+  - `ruff check app/ tests/` 全过；`mypy_gate.sh` → 308 ≤ 基线 310（无新增类型错误）。
+  - 三条契约各有测试钉住：①传 `day` → 标签与「同日 ~ 同日」窗口正确且真的落盘进索引；
+    ②不传 `day` → `time_span_override is None`（滚动窗口未被替换，**日常调度零行为变化**）；
+    ③`force=False` 时已存在日期跳过、不再烧 LLM。
+  - 活数字随实测对齐：`backend_unit_cases` 932→945（58→59 文件）、全量 948→961。
+
+## 2026-09-18（修复科技资讯日报定时任务空转（09-17/09-18 日报缺失））
+
+- **背景**：科技资讯日报 **09-17、09-18 连续两天没有生成**，而监控与日志里
+  定时任务却一直显示"执行成功"——典型的**静默失效**。生产日志（Loki）坐实了现场：
+
+  ```
+  09-16 08:00:00 Running job "科技资讯（每日）" (scheduled at 2026-09-16 08:00:00+08:00)
+  09-16 08:00:00 Job "科技资讯（每日）" executed successfully        ← 同一秒"成功"
+  09-16 08:00:00 RuntimeWarning: coroutine 'NewsScheduler._run_guarded' was never awaited
+  ```
+
+  对照 09-15（正常）：任务 08:00 起跑、08:05:09 才结束（真跑了 5 分钟抓取 + LLM）。
+  09-16 起变成**同一秒完成**——任务体从未执行。
+
+- **根因**：`AsyncIOScheduler.add_job` 只有在传入**协程函数**时才会 `await` 它。
+  代码写成了 `lambda: self._run_guarded(...)`：lambda 是**同步**函数，它只是
+  **创建**了协程对象就返回，APScheduler 拿到后既不 `await` 也不报错（只留一行
+  `RuntimeWarning: ... was never awaited`），并照样打 "executed successfully"。
+  于是"不再静默失败"的重试/状态落盘/飞书告警**全在 `_run_guarded` 里面**，
+  恰好被一起绕过——为防静默失败而写的修复，本身造成了静默失败。
+
+- **出现时间（含证据）**：
+  - **`7bb9aad`（2026-09-15 19:43:31）**：把日报从能正常工作的
+    `add_job(self._agent.refresh, ...)` 改写成 `lambda: self._run_guarded("daily", ...)`。
+  - **2026-09-15 19:44:45** 应用重启（`科技资讯调度已启动`）→ 缺陷代码上线。
+  - **2026-09-16 08:00** 第一次定时执行即空转；当天日报是 **11:26 启动补跑**
+    （`0fcbacd` 的 catch-up，因 11:07/11:17 重启且已过 08:00）兜底补出来的，
+    所以列表里"09-16 有、09-17 没有"。
+  - **09-17、09-18** 当天唯一重启都在 03:31（**早于 08:00**）→ 补跑判定
+    `启动补跑：没有缺失的报告`，08:00 的 cron 又空转 → 日报**永久缺失**。
+  - 附带发现：**周报/月报从 `f53a64c`（2026-09-03）起就已空转**（同样写法），
+    只是周一才触发，09-15 08:00 的 `coroutine 'NewsAgent.generate_periodic' was never
+    awaited` 即为现场——即周报已静默失败两周，无人发现。
+
+- **改动**：
+  - `backend/app/scheduler/scheduler.py`：三个任务改用 `functools.partial` 绑定参数，
+    注册的仍是**协程函数**（`partial(self._run_guarded, "daily", self._agent.refresh)`）；
+    并加注释写明"lambda 只创建协程、不会被 await"这个坑，避免再犯。
+  - `backend/tests/unit/test_news_scheduler_status.py`：新增回归测试
+    `test_registered_jobs_are_coroutine_functions`——断言三个 job 的
+    `inspect.iscoroutinefunction(job.func)` 为真（旧写法必红）；顺带修掉一处
+    6 字段的非法 cron（`"0 8 * 1 * *"`，一旦有测试真正调用 `start()` 就会暴露）。
+
+- **验证**：`./.venv/bin/pytest tests/unit/test_news_scheduler_status.py
+  tests/unit/test_news_period_window.py tests/unit/test_news.py -q` → **43 passed**。
+  另做了一次**行为级**验证（不只看类型断言）：把 `news_daily` 的 `next_run_time`
+  设为 200ms 后交给真实 APScheduler 执行，观测到 agent 被调用、`last_status.json`
+  正常落盘、日志出现 `资讯定时任务完成 ok=True`——修复前该任务只会空转。
+
+## 2026-09-17（端云协同 M2（二）：Android 宿主第一批——客户端决策内核 + 工具权限闸门）
+
+- **背景**：端侧宿主自己就能跑推理，那部分请求**根本不经过服务端**。如果决策只在服务端做，
+  "端侧完成率/升级率"这两个北极星指标就只统计了服务端看到的一半。所以客户端必须能独立决策
+  并如实上报；同时端侧 Agent 能读设备数据，必须有可审计的权限闸门。
+
+- **改动**（独立 repo `sekb-ondevice-agent`，Kotlin + Compose；SEKB 侧只新增本节记录）：
+  - `route/PlaneRouter.kt`：与服务端 `plane_router.py` **同口径**的决策——token 估算
+    （CJK 1 token/字）、档位→模型、输入/输出预算、6 类升级信号、退化判定（≥40 字符起判）。
+  - `route/StreamGuard.kt`：流式前缀守卫（先攒 60 字符再判，命中则丢弃前缀改道云端），
+    `json_invalid` 不参与前缀判定——半截 JSON 必然不合法，用它判会误杀所有 JSON 角色。
+  - `net/SseParser.kt`：对齐 `chat_stream` 的 thinking/token/done/error 与 `done.meta.execution`。
+  - `tools/`：设备工具三道闸门（未注册/缺参数/未授权）+ 权限审计（越权拦截率的唯一来源）
+    + 宽容的工具调用 JSON 解析（把"意图对"与"语法对"分开统计）。
+  - 构建基线 Gradle 9.2.1 + AGP 9.0.0 + Kotlin 2.2.10；三个坑（AGP 9 自带 Kotlin、
+    `kotlin{}` 位置、`compileSdkMinor`）写进新 repo README。
+
+- **验证**：`./gradlew :app:testDebugUnitTest` = **54 用例全绿**，`:app:assembleDebug` 产出 APK。
+  **构建期抓到的真缺陷**：端侧输出预算照抄服务端的 300，而 `chat` 角色预期 400 →
+  每一次聊天都被判去云端，"端侧优先"名存实亡；改为 512 并补回归测试钉住默认值组合。
+
+- **未完成**：新 repo 建仓与镜像（需要服务器 SSH/令牌，见 RFC §16.4）；UI 与模拟器联调。
+
+## 2026-09-17（端云协同 M2（一）：设备身份 S1 + 执行位置 S3 + 协议规范）
+
+- **背景**：M1 把"端云一致性内核"做在了 SEKB 内部，但端侧宿主还没有身份——设备拿不到
+  属于自己的长效凭证，用户也无法单独吊销某台设备（手机丢了只能改密码）。同时聊天响应里
+  看不到"这次是在设备上算的还是上云了"，用户无从判断数据出没出端。这两件是 M2 的前置。
+
+- **改动**：
+  - **S1 设备身份**（`storage/device_storage.py` + `api/routes/device.py`）：
+    enroll / refresh / heartbeat / list / revoke 五件套。设备 token 默认 30 天，
+    **可轮换**（旧 jti 立即失效，不是"到期才失效"）、**可单独吊销**、**不能吊销自己**
+    （被攻破的设备不能自杀灭迹）。注册表只存 jti，不存 token 原文。
+  - **生命周期咽喉点**（`core/auth.py::_claims_checked`）：设备吊销/轮换校验放在
+    `get_current_user` 与 `get_current_claims` 的共同入口，因此**任何**受保护路由都自动生效。
+  - **最小权限边界**（`require_user_account`，挂在 `upload`/`knowledge`/`share`）：
+    设备 token 不能读写知识资产，只能"替用户用"（聊天、会话同步、路由上报）。
+  - **S3 执行位置**（`plane_router.summarize_route_events` + `chat.ExecutionInfo`）：
+    聊天响应（含 SSE `done.meta`）带 `execution`（primary_plane/model/reason/escalated/
+    by_plane/versions/roles）——这是"可证明的隐私"的用户可见面。
+  - **请求级事件收集**用 contextvar（`collect_route_events`），而非工厂上的全局字典：
+    后者在并发请求下会让 A 请求读到 B 请求的角色。
+  - **协议规范** `docs/ops/16-端云协同协议.md`：端侧宿主↔SEKB 的完整契约
+    （凭证、SSE 事件、权限边界表、6 类升级信号、错误码、与代码的对应关系）。
+
+- **验证**：后端 **948 通过**（新增 `test_device_auth.py` 28 条 + 路由/S3/并发隔离 10 条）、
+  ruff 全绿、mypy **308 ≤ 310**、`doc_guard.sh` 全绿。**过程中修掉两个真问题**：
+  ① 第一版把吊销校验只挂在 `get_current_claims` 上，而聊天走的是不经过它的
+  `require_full_access → get_current_user`，导致"被吊销的设备照样能聊天"；
+  ② 多模态 chunk 的 `content` 可能是 `list`，旧流式出口会把它当字符串 yield，
+  SSE 会序列化出数组（纯文本模型下从未暴露）。
+
+## 2026-09-17（端云协同 M1（三）：流式前缀守卫 + 隐私硬边界修复）
+
+- **背景**：聊天走 SSE，token 一旦吐给用户就收不回——M1 前两轮的路由只覆盖非流式路径，
+  流式路径"只决策不升级"，端侧答烂了也没法补救。另外自查时发现一个真漏子：
+  `device_only_roles` 只影响平面选择、**不影响升级判定**，端侧输出不达标时仍会把
+  "永不出端"的数据发给云端——而这是端侧方案唯一的硬约束。
+
+- **改动**：
+  - **流式前缀守卫**（`LLMFactory._astream_guarded` + `PlaneRouter.stream_guard`）：
+    端侧流式先攒 `stream_guard_chars`（默认 60）再判定；命中信号则丢弃该前缀、
+    改走云端并注入交接摘要——改道发生在用户看到任何字符之前，因此**不需要**
+    "已输出多少字符"的续写协议。`json_invalid` 刻意不参与前缀判定（半截 JSON 必然不合法）。
+  - **隐私硬边界**（`Decision.device_only` + `PlaneRouter.escalation_allowed`）：
+    DEVICE_ONLY 数据任何情况下不上云，宁可承认失败并留痕 `escalation_blocked:device_only`。
+  - **6 类升级信号补齐**：`json_invalid`/`empty`/`degenerate`/`timeout`/`low_confidence`/
+    `tool_hallucination` + `context_overflow` 事前改判；升级时**自动生成并注入**交接摘要
+    （`HandoffFacts`/`HandoffBuilder`），调用方无需知道 handoff 存在。
+  - 生成的端云配置档补齐 6 类信号与 `stream_guard_chars`（此前只列 4 类，与代码默认值不一致，
+    运维照着改会调出差异行为）；`backup_kb.sh` 注明端云路由日志必须随卷备份的原因。
+
+- **验证**：后端 **910 通过**（`tests/unit/test_plane_router.py` 58→69 条，覆盖 0 字符外泄、
+  隐私边界矩阵、partial 评估）；ruff 全绿；mypy 309（基线 310，无新增）；前端 68 通过 + `tsc` 干净；
+  `doc_guard.sh` 4/4 全绿（活数字 `backend_unit_cases` 825→894，与实测对齐）；
+  双平面配置档 `--check` 同步；真机冒烟（真实 Ollama + DeepSeek）通过：短任务端侧 119ms、
+  长输出云端、流式 `edge_preferred|stream_guard` 首字 224ms。
+
+## 2026-09-17（M1（二）：路由接进主链路（零调用点改动）+ 端侧关思考（25×）+ 预热）
+
+- **背景**：M1（一）交付了路由**机制**，但它是独立门面——聊天主链路仍走单平面，
+  等于"机制存在、产品没用上"。本轮把它接进主链路，并把 M0 验证过的两项优化
+  （关思考、预热）真正落到产品路径上。
+
+- **改动**：
+  - **`LLMFactory.attach_router(store)`：一处挂载、全链路生效。** 项目里所有 LLM 调用
+    都走 `ainvoke_with_stats` / `astream_with_stats`（agents / graph / tools / memory
+    共十余处），挂在工厂意味着**零调用点改动**即具备端云路由与自动升级。
+    未配 `llm.planes` 时 `attach_router` 返回 False，行为与改造前完全一致。
+  - **`ainvoke_with_stats` 支持自动路由**：`plane=None` 且已挂载 → 决策 → 调用 → 评估 →
+    必要时同一请求内升级到云，并把路由事件存进 `last_route_event`（供上层展示"这次走哪边、为什么"）。
+  - **`astream_with_stats` 只决策不升级**：token 一旦吐给用户就收不回，升级需要
+    "已输出多少字符"的续写协议（属后续项）；原因里显式标注 `|stream_no_escalate`，不假装支持。
+  - **`warmup_edge()`**：走 Ollama `/api/generate` 空调起 + `keep_alive=30m`，消除 ~6.5s 冷启动；
+    `bootstrap.py` 装配路由后自动预热，失败不阻塞启动。
+  - **端侧平面默认关思考**（`disable_thinking: true`）：注入 `reasoning_effort="none"`。
+    实测同一意图分类任务 **2283ms/236token → 89ms/7token（25 倍差，答案等价）**。
+    注意 `think=false` 会被 OpenAI 客户端判为非法参数，必须用这个字段。
+  - 路由日志落到 `config.storage.data_dir/edge/routes.jsonl`（随数据卷）。
+  - 删掉 `_create_llm` 里一个**从未生效的假分支**：`from langchain_deepseek import ChatDeepseek`
+    类名拼错（实际 `ChatDeepSeek`），生产一直用的是 `ChatOpenAI`（行为正确，但注释在骗人）。
+  - 新增 9 条测试（主链路接入 6 + 关思考 2 + 绕过映射防护 1），共 **889 passed**。
+
+- **本轮又抓到两个真问题（测试当场抓住）**：
+  1. **M0 的"关思考"没接进产品路径**：主链路首次 1898ms，而基准 222ms——
+     一查是端侧平面没关思考。修正后 **128ms**。
+     教训：**"bench 里验证过"≠"产品路径生效"**，必须两端分别验。
+  2. **`_create_llm(plane="edge")` 能绕过档位映射**（直接调用又变回"把云端模型名发给 Ollama"）：
+     把解析下沉进 `_create_llm`，让绕过在结构上不可能。
+
+- **验证**：后端 **889 passed** + ruff clean + **mypy 306 ≤ 310**；前端 68 passed；
+  `doc_guard` 四项全绿；两份派生档 `--check` 通过；
+  E2E 冒烟通过——主链路（**普通** `ainvoke_with_stats`，不带 plane）自动落端侧 qwen3.5-2b、
+  **128ms**，长输出落云端，端侧完成率/升级率与版本戳齐全。
+
+## 2026-09-17（M1（一）：端云平面路由 + 升级 + 路由可观测（含两个北极星指标））
+
+- **背景**：M0 已证明端侧通路可用（2B 档 intent 222ms vs 云端 1230ms）。M1 要把
+  「端云协同最难的部分——一致性」落成可运行代码：**每次请求用哪个平面、什么时候升级到云、
+  切换后上下文不丢、以及可观测**（RFC §4/§4.5）。
+
+- **落点说明**：M1 的机制两端都要理解（升级载荷由服务端收、交接摘要要进服务端 prompt、
+  版本戳必须两边一致），所以实现落在 SEKB 内；**独立 repo（D2）推迟到 M2** 写 Android 宿主时创建。
+
+- **改动**：
+  - **`backend/app/core/plane_router.py`（新增）**：`PlaneRouter.decide()` 按
+    「数据分级 > 输入预算 > 输出预算 > prefer」决策并**写明理由**；`evaluate()` 判定
+    4 类可自动化的升级信号（empty / json_invalid / degenerate / timeout——含 ```json 围栏容忍
+    与循环重复检测）；`versions()` 产出四类版本戳（含 `embedding_space=bge-small-zh-v1.5@512`
+    与内核 commit 作为 `tool_schema`）。`RoutedLLM` 门面：决策 → 调用 → 评估 → **同一请求内升级到云**
+    → 记路由事件；`handoff_note()` 把交接摘要包成「已建立背景」（放前缀还能命中 prompt 缓存）。
+  - **`backend/app/core/config.py`**：新增 `PlaneEndpointConfig` / `RoutingConfig` / `PlanesConfig`
+    （`llm.planes.edge` + `llm.planes.routing`，含实测阈值与 `expected_output` 覆盖表）。
+    **不配即单平面，行为与改造前完全一致**。
+  - **`backend/app/core/llm_factory.py`**：支持 `get(role, plane)` 与
+    `ainvoke_with_stats(..., plane=...)`；记账按平面分开（避免同角色在两个平面互相覆盖）；
+    新增 `_edge_model_for()`（角色→档位→`planes.edge.models`）。**不传 plane 时保持原调用形态**，
+    既有打桩与 841 条测试零改动。
+  - **`backend/app/storage/edge_route_storage.py`（新增）**：append-only JSONL + 幂等键 +
+    行数裁剪（原子替换）+ 坏行容错；产出**两个北极星指标**（端侧完成率 / 升级率）。
+  - **`backend/app/api/routes/edge.py`（新增）**：`GET /api/v1/edge/routes/stats`、
+    `GET /routes`、`POST /route-events`（供 M2 的 Android 上报，幂等）；已注册进 server
+    （并补上此前遗漏的 `profile` 路由日志项）。
+  - **`scripts/make_local_profile.py`** 现在生成**两份派生档**：`config.local.yaml`（全本地）与
+    **`config.edge-cloud.yaml`（端云双平面）**，`--check` 同时校验；**`scripts/edge_m1_smoke.py`**
+    为端到端验收脚本。
+
+- **首轮抓出的两个真问题（测试/冒烟当场抓住，都已修）**：
+  1. **拿「允许上限」当「预期输出」判预算** → `supervisor.max_tokens=500 > 端侧预算 300`，
+     把最该端侧跑的意图分类判去了云端。修正：`DEFAULT_EXPECTED_OUTPUT` 表
+     （supervisor 32 / planner 600 / news_report 6000）+ 配置覆盖 + 调用方显式传参。
+  2. **端侧平面没接档位→模型映射**，把 `deepseek-flash` 发给 Ollama → `model not found`。
+     单元测试（假工厂）盖不到，**端到端冒烟一跑就现形**。修正 `_edge_model_for()` + 两条接线回归测试。
+  - 另记录：端侧**冷启动 ~6.5s**（2B 首次加载），同一任务预热后 222ms → 已作为规则写入 RFC §2.4。
+
+- **验证**：端到端冒烟通过（supervisor→端侧 qwen3.5-2b 返回合法 JSON；planner→云端
+  `output_over_edge_budget(600>300)`；端侧完成率 100% / 升级率 0%；交接摘要与版本戳齐全）；
+  后端 **880 passed**（新增 39 条）+ ruff clean + **mypy 308 ≤ 基线 310**；
+  `doc_guard.sh` 四项全绿；`make_local_profile.py --check` ✅。
+
+## 2026-09-17（M0 完成：Qwen3.5 三档本地就绪（改走 ModelScope）+ 关思考带来 20× 延迟改善）
+
+- **背景**：`ollama pull` 卡死。诊断结论是**国际链路不可用**而非慢：`registry.ollama.ai` 的 blob
+  请求 **307 重定向后 0 字节**（`-4`/`-6` 均 0 B/s）、HuggingFace 官方 0 B/s、GitHub raw 仅 27 KB/s；
+  同机国内链路 6.3 MB/s、**ModelScope 16.8–20 MB/s**。另外 `-mlx` 档在 Ollama 上是 **625 个小 blob**，
+  对不稳链路是最坏形态（GGUF 档只有 3 层）。
+
+- **改动**：
+  - **`scripts/edge_m0_setup.sh`（新增）**：从 **ModelScope 的 `unsloth/Qwen3.5-*-GGUF`** 下载
+    Q4_K_M（2B 1.2GB / 4B 2.6GB / 9B 5.4GB，合计 9.2GB）→ `ollama create` 导入并设 `num_ctx 8192`；
+    脚本头部记录了上述网络事实，避免下次再踩。GGUF 同时是 Android(llama.cpp) 要用的格式。
+  - **`scripts/edge_bench.py`**：新增 `--think`（**默认关思考**）。实测同一意图分类任务：
+    开思考 **190 token / 1926ms**、关思考 **6 token / 96ms**，答案完全相同（**20× 延迟差**）——
+    端侧短任务必须关思考，否则白烧 10–30 倍算力。
+  - `scripts/make_local_profile.py` 的模型名改为本地导入名（`qwen3.5-2b/4b/9b`），本地档已重新生成。
+  - `docs/RFC-端云协同与端侧Agent.md`：§2.4 增「思考模式」规则；§4.1 路由阈值**改用实测数字**
+    （≤300 token 走端侧 2B；>500 token 且要求质量才上云）；§14 重写为最终实测表与结论。
+
+- **M0 最终实测（M5 Pro，端侧已关思考）**：
+  | 任务 | 端侧 2B | 云端 flash | 结论 |
+  |---|---|---|---|
+  | intent 总时长 | **222ms** | 1230ms | 端侧快 **5.5×** |
+  | TTFT | **111ms** | 845ms | 端侧快 **7.6×** |
+  | decode | 115.9 tok/s | 163.7 tok/s | 差距仅 **1.4×**（7B 档是 3.5–5×） |
+  | 生成 500tok 预计 | 4.3s | 3.1s | 长输出也接近平价 |
+  | 923 token 输入 TTFT | 427ms（prefill 2160 tok/s） | 1306ms | 长输入端侧可接受 |
+  → **"选小一档"比"端侧优先"这个口号更关键**；4B(54 tok/s)/9B(34 tok/s) 定位为"质量优先、输出不长"。
+
+- **验证**：SEKB 用**真实本地档、不改模型名**跑通 `supervisor`（返回合法 JSON、记账 cost=$0）；
+  `doc_guard.sh` 四项全绿（99 个 Markdown / 1340 引用，错误 0）；后端 **841 passed** + ruff clean；
+  前端 **68 passed**；`make_local_profile.py --check` ✅。M0 剩余：全链路 SSE 延迟与 9B 长输出质量抽查（属 M1）。
+
+## 2026-09-17（M0 端侧通路打通：本地 Ollama 档（生成式）+ 端云对照实测 + 待跟踪项）
+
+- **背景**：owner 确认 D1–D11 并授权直接 pull 模型（2b/4b/9b-mlx）、用默认缓存目录；
+  Android 先只用模拟器验功能，其余挂待跟踪。本轮执行 **M0**（Mac 端侧通路 + 真实数字）。
+
+- **改动**：
+  - **`scripts/make_local_profile.py`（新增）**：从 `config.yaml` **生成**
+    `backend/config.local.yaml`（llm 段 provider/api_key/base_url + 逐角色 model 按三档映射）。
+    为什么生成而非手抄：SEKB 是单文件配置，本地档必然是副本，手抄必漂移 →
+    按「主配置唯一权威 + 派生产物 + `--check` 校验」处理（与文档防漂移同一原则）。
+    档位：short=`qwen3.5:2b-mlx`（supervisor/critic/chat_simple/rerank/ragas）、
+    default=`qwen3.5:4b-mlx`、quality=`qwen3.5:9b-mlx`（news_report）。
+  - **`scripts/edge_bench.py`（新增）**：端云同题基准，**prefill / decode 分开计时**。
+    Ollama 走原生 `/api/chat` 取精确计时；云端走 OpenAI 兼容流式取 TTFT。
+  - **`backend/config.local.yaml`（新增，生成物）**、`.github/workflows/ci.yml` 的 lint job
+    增加 `make_local_profile.py --check`（防派生档漂移）。
+  - `docs/RFC-端云协同与端侧Agent.md`：新增 **§13 待跟踪项**（T1–T10：真机性能、NPU、鸿蒙、
+    车机、S5、CRDT、微调、macOS 宿主 App、端侧 embedding、模型分发）与
+    **§14 M0 实施记录**（机制、脚本、测量陷阱、集成冒烟、端云对照表、待补项）。
+
+- **关键发现**：
+  1. **本地档不需要改代码** —— `backend/app/api/server.py:129` 已支持 `SEKB_CONFIG_PATH`
+     （`backend/.env.example:65` 有登记）；
+  2. `LLMConfig.base_url` 是全局单点，但 `LLMRoleConfig.model` 是逐角色的 →
+     **端侧按角色分档现在就能用**，不必等 S5；
+  3. **集成冒烟通过**（用已就绪的 7B 代跑真实 `LLMFactory`）：`executor` 901ms、
+     **`supervisor`（`response_format: json`）160ms** 均返回合法 JSON，用量记账正常（cost=$0）
+     → 端侧通路（base_url / JSON 约束 / 记账）全部验证；
+  4. **量得准的两个陷阱（已修并写进脚本注释）**：Ollama **前缀缓存**导致同一 prompt 复跑时
+     prefill 被算成 42844 tok/s（加一次性 nonce 破坏前缀复用）；thinking 类模型的文本在
+     `reasoning_content` 里，漏掉会出现「输出 64 token 但 TTFT=0」的自相矛盾行。
+
+- **端云对照实测（M5 Pro）**：本地 7B decode **43–45 tok/s**（带宽受限、极稳定）、
+  TTFT 95–893ms；云端 flash decode **157–238 tok/s**、TTFT 372–718ms。
+  结论：① 长输出云端快 3.5–5 倍（等长折算 500 token：端 11s vs 云 3s）→ 长输出走云；
+  ② 短输出端侧赢（intent 总时长 342ms vs 997ms）；③ 长输入 prefill 云端更强（1038 token TTFT 893 vs 718ms）。
+
+- **验证**：`doc_guard.sh` 四项全绿（98 个 Markdown / 1332 引用，错误 0）；
+  后端 **841 passed** + ruff clean；前端 **68 passed**；`make_local_profile.py --check` ✅。
+  模型下载仍在后台（~1–2 MB/s，16GB，预计 1–2 小时），完成后复测并回填路由阈值。
+
+## 2026-09-17（端云协同方案 v0.2.0：D1–D11 确认 + 一致性模型 + Mac 模型清单 + 无真机验证策略）
+
+- **背景**：owner 拍板 D1–D8（鸿蒙本期不做 / 独立 repo / 云端走 SEKB REST+SSE / 设备级 token /
+  端侧 RAG 直接上向量 / 2B 档起步 / 暂不改 SEKB LLM 层 / 自建 20–50 条评测集），并补充三条新约束：
+  没有 Android 真机、手机是鸿蒙、**同时要支持 Mac 端侧**（可先预留）；另要求把「端云协同最难的问题」做透。
+
+- **改动（`docs/RFC-端云协同与端侧Agent.md` → v0.2.0，status: confirmed）**：
+  - **§0.0 已确认决策表**（D1–D8 打勾）+ 新增 D9（**Mac 端侧提前到第一阶段**）、
+    D10（无真机：模拟器验功能 / 真机测性能）、D11（Ollama 缓存目录）。
+  - **§1.1 为什么 Mac 提前**：核实 `llm_factory.py:500` **已经在下发 `base_url`**，
+    且 `tools/image_processor.py` 已有「OpenAI 兼容自定义端点」先例 →
+    **接 Ollama 是配置级改动**（`base_url=http://127.0.0.1:11434/v1`），不是重构；
+    并给出"全本地 profile / 端云对照"两种用法。
+  - **§2.5 Mac 模型清单（逐个 tag 已在 ollama.com 核对）**：`qwen3.5:2b-mlx` 3.1GB、
+    `4b-mlx` 4.0GB、`9b-mlx` 8.9GB 起步三档（~16GB），可选 `35b-mlx` 22GB；
+    ⚠️ 明确**不要用 Ollama 做端侧 embedding**（qwen3-embedding 是 1024/2560/4096 维，
+    与云端 bge-small-zh 的 512 维不同空间）→ 端侧 embedding 走 ONNX 版 bge-small-zh 以保持同空间。
+  - **§4.5 端云协同最难的问题：状态一致性**（新增，10 小节）：SSOT 权威源划分、
+    outbox 离线写入、**升级的结构化交接协议**（不重放工具调用 / `already_streamed_chars`
+    续写 / handoff summary）、降级提前暴露、交接摘要与 prefix cache 的关系、
+    版本戳对齐、**隐私边界的可证明性**（代码闸门 + 出站断言 + CI 测试）、跨端成本记账、
+    多端并发用「按 (user,device) 分片」删掉最难的一类冲突、设备 token 生命周期。
+    核心洞察：**对话是 append-only → 不需要 CRDT**，只有可覆盖字段才要版本号 + LWW。
+  - **§9 里程碑重排**：M0 = Mac 端侧（唯一能立刻拿真实数字的端侧）→ M1 = 一致性（题眼最难点，
+    与平台无关）→ M2 = Android 模拟器验功能 → M3 = 端侧 RAG + 评测 + 真机。
+  - **§9.1 无真机验证策略**：明确划分「模拟器能验（功能/权限/路由/离线）」与
+    「必须真机（tok/s、TTFT、内存带宽、GPU/NPU、热与电）」；三层做法 + 按带宽比例保守外推；
+    并指出 llama.cpp 在 Android 别指望 GPU/NPU（社区实测 Vulkan 在 ARM iGPU 上表现不佳）。
+
+- **验证**：`doc_guard.sh` 四项全绿（97 个 Markdown / 134 链接 / 1326 引用，错误 0）；
+  活数字 11 项一致。本轮**未改任何业务代码**（M0 开工前先确认模型清单与缓存目录）。
+
+## 2026-09-17（端云协同与端侧 Agent 实现方案（RFC，待确认）+ 守卫覆盖 docs 根目录）
+
+- **背景**：owner 要把 SEKB 改造成端云协同应用（端侧优先本地推理），并已确认优先级为
+  **延迟 > 省成本 > 隐私 > 离线**、离线非硬要求、隐私只对"云端拿不到的数据"构成边界、
+  端侧范围含 Android（鸿蒙待定）。本轮先出**可确认的实现方案**，不改业务代码。
+
+- **改动**：
+  - 新增 `docs/RFC-端云协同与端侧Agent.md`（draft，待确认）。相对本地讨论区前一版的**7 处关键修正**：
+    1. 端侧支点从"隐私"改为"**设备独有数据 + 延迟**"（隐私降为数据分级边界）；
+    2. 云端**两条协议**：MCP 只承载工具（实测 7 个），对话/多智能体走 SEKB 的
+       `POST /api/v1/chat` + `/stream`(SSE)——内核 MCP 没有对话入口，硬塞是自找麻烦；
+    3. 新增**端侧性能预算**（prefill 算力 bound / decode 带宽 bound、KV cache 数学、
+       2–4K 上下文预算、**prefix cache 必做**、NPU 不进 M0–M2）；
+    4. `DEVICE_ONLY / SENSITIVE / NORMAL` **数据分级**（把"只有简历不能出网"落成可编码规则）；
+    5. **设备级 token**：共享 `JOBCOPILOT_HTTP_TOKEN` 与 LLM Key **绝不进 APK**（安全红线）；
+    6. 端侧 RAG **直接上向量**（bge-small-zh INT8 + sqlite-vec），且**与云端同向量空间**
+       （512 维）→ 端侧粗检索 + 云端精排；不做 BM25 过渡；
+    7. 里程碑重排：**端云协同提前到 M2**，端侧 RAG 移到 M3（题眼是路由不是 RAG）。
+  - 方案含：路由决策矩阵（7 个可编码信号）、**6 类升级信号**、升级后一致性设计、
+    路由日志与两个核心指标（端侧完成率/升级率）、6 组评测数字、8 条待确认决策、
+    SEKB 侧改动清单（S1–S5）与量级。
+  - 记录本轮核实到的 **3 个 SEKB 硬约束**（做"云端内部模型分级"前必须知道）：
+    `LLMConfig` 只有全局 provider/base_url、`llm_factory.py` 硬编码 `ChatDeepseek`、
+    降级链按模型名匹配 "reasoner" 而全角色已是 flash → **降级链根本不会触发**。
+  - 修守卫自身覆盖漏洞：`is_living` 此前只认固定前缀，`docs/` 根目录的设计文档
+    （含前一天新增的 RFC）**不在校验范围内**；改为「`docs/` 下除存档外均为活文档 + 仓库根 Markdown」。
+
+- **验证**：`doc_guard.sh` 四项全绿（95 个 Markdown / 131 链接 / 1309 引用，错误 0；
+  活数字 11 项一致）；后端 **841 passed**；前端 **68 passed**。
+- **未做**：任何业务代码改动（等 owner 确认 §11 的 8 条决策后再动手）。
+
+## 2026-09-16（职位报告：历史报告正文补回 GFM 渲染 —— 表格显示成竖线）
+
+- **背景（根因在哪里）**：`docs/tmp/职位投递指导-统一版-20260916.md` 这类表格密集的报告，在
+  「历史报告」弹框里显示成一堆 `|` 竖线。**根因不在文档**——该文件 Markdown 结构本身是干净的
+  （8 张表列数一致、20 条链接语法正确、无未闭合强调、无缩进误判代码块、正文 0 处多行段落误合并）。
+  真实根因是**渲染层漏了 GFM 插件**：`frontend/src/pages/Job.tsx` 用
+  `<ReactMarkdown>{reportDetail.markdown}</ReactMarkdown>` 渲染报告正文，**没传
+  `remarkPlugins={[remarkGfm]}`**；而其余 4 个 Markdown 展示面（`News.tsx` / `Chat.tsx` /
+  `SharedKnowledge.tsx` / `SharedChat.tsx`）都传了。没有 GFM，表格在 mdast 里根本不会成为
+  `table` 节点，只能当普通段落输出。
+
+- **改动（1 个 import + 1 行）**：
+  - `frontend/src/pages/Job.tsx`：`import remarkGfm from 'remark-gfm'`，并把历史报告正文渲染改为
+    `<ReactMarkdown remarkPlugins={[remarkGfm]}>`，与其余 4 个展示面口径一致。
+
+- **验证（拿受影响的真实文档实测）**：
+  - **mdast 层**：同一份文档，`remark-parse` 下 `table` 节点 **0 → 8**（加 `remarkGfm` 后），
+    `tableRow` 0 → 50、`tableCell` 0 → 168；而 `list` 18/18、`blockquote` 9/9、`strong` 99/99
+    **完全不变** → 只有表格受影响，其他结构没被动到。
+  - **组件层**（`react-dom/server` 渲染同一份文档）：修复前 `<table>` **0**；
+    修复后 `<table>` **8** / `<tr>` 50 / `<td|th>` 176，`<li>` 两侧都是 **53** → **列表零回归**。
+  - `tsc --noEmit -p frontend/tsconfig.json` 通过；`eslint` 该文件 **0 error**
+    （20 条 `no-explicit-any` 是存量告警，与本次无关）。
+  - **影响面**：应用自己产出的批量报告 `_batch_to_md()` 用的是 `- name × count` **列表**而非表格，
+    因此既有报告**显示无变化**；本次修的是「含表格的报告」不再退化成竖线。
+
+- **备注**：`docs/tmp/` 已在 `.gitignore` 内，那份报告本身不进版本库，仅作本次问题的复现素材。
+
+## 2026-09-16（文档防漂移：单一守卫入口 + 引用校验 + 活数字一致性 + CI/pre-commit 阻断）
+
+- **背景（复盘根因，不是「以后注意点」）**：技术文档能静默漂移 200+ 个提交，是因为
+  1. **RC-1 没有强制点**：三个校验脚本**一个都没在必经之路上**——
+     `check-links.sh` 只扫 `docs/tech/0*.md`（其余目录的「✅」是假绿）、
+     `check-freshness.sh` 从未接入 pre-commit/CI、`check-doc-sync.sh` 默认 `exit 0`；
+  2. **RC-2 证据格式本身脆**：`file:line` 只要上方增删一行就全错，且**没有任何检查**——
+     复核实测到 `state.py:498-519`（该文件只有 244 行）、`upload.py:494-1006`（只有 653 行）
+     这类**引用根本不在文件内**的错误；
+  3. **RC-3 手工快照冒充 SSOT**：`.facts/*` 靠人手维护、没人重生成；
+  4. **RC-4 同一数字抄在多处**：覆盖率 43%/44%、指标数 4/3、死配置 49/29、工具数 6/7、
+     JWT 有效期三处不同——**不会有任何测试失败**，只会让人按错的数做事；
+  5. **RC-5 无触发无责任人**：文档写于某次分析，之后没有任何「何时必须重看」的机制。
+
+- **改动（对着每条根因给机制）**：
+  - **RC-1 → 单一入口 + 阻断**：新增 `docs/tech/.validation/doc_guard.sh`，
+    串起「链接/引用 + 孤儿 + 新鲜度 + 活数字」四项；接入 **CI 新 job `docs-guard`**
+    与 **pre-commit 钩子 `docs-guard`**（改到 `.md/.py/.ts/.yaml/.sh` 时跑，阻断）。
+    CI 本身已有每周一定时任务，因此这层还会**每周自动复检**。
+  - **RC-2 → 新增 `check-docs.py`（全仓）**：校验相对链接 + 三种代码引用写法
+    （`file` / `file:line[-line]` / `file::symbol`），**行号越界、文件不存在、符号找不到**都报错。
+    两类文档宽严不同：**活文档**（`docs/tech`、`docs/ops`、`README.md`、`AGENTS.md`、
+    `prompt/` 等）出错即失败；**存档文档**（`CHANGELOG`、`changelog.d`、`codeReview`）
+    只提示——它们是某时点的记录，强迫其与今天一致反而破坏价值。
+    刻意引用历史错例时用行级标记 `<!-- check-docs:ignore -->`。
+    顺手修掉旧 `check-links.sh` 缺 `../*/*.md` 分支导致的**正确链接被误报断链**。
+  - **RC-3 → 过期横幅 + 口径**：`.facts/*` 统一加横幅，声明「以代码 + `docs/tech` 为准，
+    不要把行号当断言」；`DOC-TEMPLATE` 的 DoD 同步。
+  - **RC-4 → 新增 `check-facts.py` + 事实标记**：活数字写 `<!-- fact:NAME=VALUE -->`，
+    同一 `fact:NAME` 多处**取值矛盾即失败**；重复出现给 WARN 提示收敛到一处。
+    已为 11 项活数字建标记（覆盖率 54 / mypy 300 / 端点 75 / 内核工具 7 / 指标 23 /
+    告警 12 / 死键 29 / 角色 11 / RSS 源 38 / 前后端用例 825、68）。
+    > 这四项正是本次复核时**手工逮到**的分叉，现在改成机器抓。
+  - **RC-5 → 规矩写进模板**：`DOC-TEMPLATE.md` §3 重写「引用写法优先级
+    （首选 `file::symbol`，因为符号名不会因行号漂移失效）」「活数字单一权威」
+    「历史错例忽略标记」；DoD 增加「提交前必跑 `doc_guard.sh`」。
+
+- **验证**：
+  - **用今天真实发生过的错做回归**：注入 `state.py:498-519`、`chat.py:698-835`、
+    不存在的符号、断链 → 4 项全部被抓出且退出码 1；正常引用不误报；
+  - 注入 `fact:api_endpoints=99`（与 05 的 75 矛盾）→ 立即报矛盾并退出码 1；
+  - 全仓现状扫描：92 个 Markdown、130 个相对链接、930 个代码引用 → **错误 0**；
+    活数字 11 项**一致**；
+  - `doc_guard.sh` 四项全绿；后端 **841 passed** + ruff clean；前端 **68 passed**；
+  - `ci.yml` / `.pre-commit-config.yaml` 均通过 YAML 解析，新条目已就位
+    （CI jobs：lint / **docs-guard** / security-scan / …）。
+  - 说明：本次只做「防漂移机制」，未改业务代码；`docs-guard` 的 CI 首次真实运行
+    需要推到远端后由 GitHub Actions 执行（本地已等价跑通）。
+
+### 守卫首跑就抓出的真实问题（已一并修掉）
+
+新校验器一上线就在**干净克隆**（服务器）上红了 5 处，且全是**此前已被审查报告点名、
+但一直没修**的死引用——正好证明「没有强制点」才是它们的存活原因：
+
+| 位置 | 问题 | 处置 |
+|---|---|---|
+| `docs/ops/14` | 链接 `../tmp/自迭代闭环设计RFC.md`：**目标在 gitignore 目录里**，干净克隆没有 | **把 RFC 提升进版本库** → `docs/RFC-自迭代闭环设计.md`；`ops/12`/`ops/14`/`docs/README.md` 同步 |
+| `docs/ops/15` | 引用 `docs/tmp/verify_public_mcp.py`（同上） | **脚本提升** → `scripts/verify_public_mcp.py`，并从新位置实测跑通（7 工具 + SSE） |
+| `docs/BACKLOG.md` | 引用 `docs/tmp/REFACTORING-PLAN.md`（本地讨论稿） | 改为明确「**未进版本库，仅本机可见**」并加行级忽略标记（个人讨论稿按 owner 决定留在 tmp） |
+| `docs/ops/09` | 链接 `docs/job-sources.md`——**该文件不存在**（真实是 `docs/ops/10-JOB-SOURCES.md`） | 路径修正（2 处） |
+
+顺带修掉自己的两个校验盲区：
+1. `CODE_EXT` 漏了 `md` → 「反引号里写的 .md 路径」既不被链接检查也不被引用检查；
+2. 判定用 `os.path.isfile`（磁盘存在即可）→ **本地绿、干净克隆红**。改为**只认版本库跟踪的文件**
+   （父仓 + 子模块 `ls-files`），本地与 CI 口径完全一致。
+
+## 2026-09-16（技术文档复核：docs/tech 00–11 逐篇对照代码修正（W1））
+
+- **背景**：`docs/tech/00–11` 共 12 篇的 `based-on-commit` 全部停在 **2026-09-09**，
+  落后 HEAD 190–203 个提交，其中 `01-ARCHITECTURE` / `02-RUNTIME-FLOWS` 已越过
+  `check-freshness.sh` 的 `LOG_DEPTH=200` 告警线。按 owner 指示单列任务（`docs/BACKLOG.md` **W1**）
+  并**当场执行**：逐篇把「模块名/路径/`file:line` 引用/端点/配置键/指标名/测试命令」与代码核对。
+
+- **改动（复核基准 `44dfed1`，14 篇文档元信息已推进到该 commit）**：
+  - **01-ARCHITECTURE**：LLM 口径改为 **11 角色全 `deepseek-flash`**（原写 chat/reasoner 分级）；
+    RSS 源 15→**38**；容器表**补 `jobcopilot-mcp`** + 「JD 分析委托内核」关系；redis 由「预留」→**已启用**；
+    分享路径改 `/sekb/share/*`；JWT 90 天→7 天；bootstrap/json_storage/builder/compose 行号重锚。
+  - **02-RUNTIME-FLOWS**：`chat.py` 全篇行号失效（旧文按 ~835 行，实际 675）→ 逐条重锚；
+    修正 `on_token` 走 **token sink contextvar**（非 create_task 参数）；删掉不存在的 `state.py:498-519`；
+    补遗漏的 `rewrite` 重写分支；反思策略改为「实际只有 always」；TTFT 标注为 reasoner 时期待重测。
+  - **04-DATA-MODEL**：`KnowledgeEntry` 补 `topic`、metadata 16→**17** 键；资讯清理改「md+json 同删」；
+    招聘缓存纠正为**已原子写**并补 `_MAX_ENTRIES=200`；分享默认 30→**7 天** + 访问统计；
+    `users.json` 字段口径与原子写纠正；l2_session 由「未启用」→ 已启用 Redis。
+  - **05-API-REFERENCE**：实测 **75 个端点**（原文按 65）→ **补 9 个缺失端点**；
+    `share.expires_days` 30→**7**；批量缓存 7→**14 天**；conversations/knowledge 契约修正；
+    §15 两条安全结论纠正；全表 evidence 行号重定位。
+  - **06-CONFIG-REFERENCE**：`${VAR:-default}` 由「不支持」→**支持**（实测）；`rate_limit.*` / `l2_session` /
+    `security`（4/5）由「死配置」→**已接线**；`llm.roles` 9→**11**；`token_expire_hours` 2160→**168**；
+    **死键重算 29 个**；大量 evidence 行号校正。
+  - **07 / 10**：策略目录由 always/adaptive/sampling → **仅 always**；`chat.py` 规模 `828→538` → **675**；
+    单测 528→**841**；后端用例 `528（29 文件）`→**825（55 文件）**；前端 64→**68**；
+    CI 触发「main+定时」→**仅 push 到 main**；可观测性「4 指标未埋点」→**3**（列出名字）。
+  - **08-GLOSSARY**：图谱/状态/事件行号重锚；L2 由「未启用」→已启用 Redis；MCP 条目改为
+    **内核 stdio 7 工具**（web_search 走博查 HTTP）；JWT 条补有效期。
+  - **09 / 11**：删「health 30s 独立抓取」；`llm_call_latency` 由「从未写入」→**现役**；
+    trace 的 `LocalTraceCollector` 已删（缺口关闭）；TD-05/06/08/09 状态更新，TD-08「无 jti 黑名单」→**已实现**。
+  - **跨篇矛盾一并收口**：指标未埋点数（07 说 4 / 09 说 3）→ **3**；死配置数（07 说 49 / 06 算 29）→ **29**；
+    覆盖率（10 说 43% / `ci.yml` 说 44%）→ **实测 54%**；
+    JWT 三处不一致（`config.yaml` 168h / `config.py` 默认 2160 / 前端注释 90 天）→ 后两处改为 7 天。
+  - **附带修一处真实隐患**：`config.py` 的 `token_expire_hours` 默认值 **2160→168**。
+    默认值停在 90 天意味着「yaml 漏配或键名写错」时安全收紧被静默绕过。
+  - **`config.yaml` RSS 源注释**「15 个」→ 38 条（代码里已是 38，注释过期）。
+  - **事实表加统一过期横幅**：`.facts/T1/T2/T8` 复核确认已过期（T1 记 65 条 vs 实测 75），
+    9 个 `.facts/*` 顶部加横幅，声明「以代码 + docs/tech 为准，不要把行号当断言」（见漂移清单 DOC-11）。
+
+- **验证**：
+  - `check-links.sh` ✅、`check-freshness.sh` ✅（**从 2 篇告警 → 全绿**）、`check-doc-sync.sh` exit 0；
+    自写全仓断链检查仍为 2（均在 `CHANGELOG.md` 历史条目，按约定不改）；
+  - 后端 **841 passed** + ruff clean + **mypy 300 ≤ 基线 310**（实测比复核前少 6）；
+  - 前端 **68 passed** + `tsc --noEmit` clean；
+  - 复核记录（含每篇清单与跨篇一致性收口）落盘在 `docs/tech/漂移清单.md`；
+    任务登记在 `docs/BACKLOG.md` **W1**。
+  - 未复核/留待人工：`12-三平台MCP接入调研`（调研类文档、未列入 00–11）、
+    `.facts/*` 逐表重跑、TTFT 耗时实测（reasoner 时期数字，已显式标注待重测）、
+    前端 `no-explicit-any` 告警数与覆盖率之外的量化门禁。
+
+## 2026-09-16（清理 skill 模式残留说明 + 补 SEKB↔JobCopilot 接入技术文档）
+
+- **背景**：owner 确认「skill 模式不需要保留」。核查发现**代码早已删干净**
+  （前端技能按钮 `c9d948a`、后端分支 `daa76bd`，`ChatRequest` 已无 `skill` 字段、
+  `chat.py` 0 处引用），但**文档与注释仍按旧结构描述**：
+  `05-API-REFERENCE` 还说 `ChatRequest` 有 `skill` 字段（会误导接口调用方）、
+  `02-RUNTIME-FLOWS` 说「后端偏好抽取分支存留（待清理）」、
+  `11-EVOLUTION` 的 TD-14 仍挂「死代码」未关闭。
+  同时发现 `docs/tech/*` 里 **`jobcopilot` 零命中** —— 项目最重要的架构关系
+  （分析能力全在内核）在技术文档里没有任何说明。
+
+- **改动**：
+  - **skill 残留说明清理**：`02-RUNTIME-FLOWS`（该行改为现役的「`<PREF>` 内联回流」并注明
+    方案 B 已无调用方）、`05-API-REFERENCE`（删 `skill` 字段说明）、
+    `08-GLOSSARY`（标注已整体移除）、`11-EVOLUTION`（TD-14 **关闭**）；
+    `models/profile.py` / `routes/profile.py` 的模块 docstring 不再把两种 skill 写成主要用途。
+  - **新增 `docs/tech/03-MODULES.md` §11.5「JobCopilot 内核接入（招聘分析链路）」**：
+    架构图 + 13 个关注点的 file:line 对照表（传输选择/单职位/批量/连接复用/超时/
+    错误语义/提示词热改与优先级/BYOK/用量可见性/版本可见性/画像隔离/云端入口）+
+    三条必须知道的行为（缺 Key 不致命、`prompt_source` 是热改信号、`source_path` 默认可用
+    但公网端点禁用）+ 排查坑；文末「相关文档」补内核手册与云端端点手册链接。
+    元信息更新为 `last-updated: 2026-09-16 / based-on-commit: d7dae46`。
+  - **修 `check-links.sh` 的解析 bug**：它没有 `../*/*.md` 分支，导致
+    `docs/tech/ → ../ops/xxx.md` 这类**正确链接被误报断链**（被兜成 `docs/<basename>`）。
+    新增该分支后按「去掉 `../` 拼到 `docs/`」解析。
+  - **修正行号漂移**：`models/profile.py` 的 docstring 增行后 `UserProfile` 从 33-42 变 35-44，
+    4 处引用（`.facts/T1`、`.facts/T6`、`04-DATA-MODEL`、`05-API-REFERENCE`）同步。
+
+- **验证**：
+  - 全仓 skill 复查：仅剩画像字段（`skills`/`skill_stack`）、招聘报告字段
+    （`skill_threshold`/`skill_order`）、历史说明与 HiAgent 自身产品名「Skill」，无功能残留；
+  - 后端 **841 passed** + ruff clean；前端 **68 passed** + tsc clean；
+  - `check-links.sh` ✅（修 bug 后仍通过）；自写全仓断链检查仍为 2（均在 CHANGELOG 历史条目）。
+  - ⚠️ 记录 `check-freshness.sh` 的两条既有告警（非本次引入）：
+    `01-ARCHITECTURE.md`（落后 202 commits）、`02-RUNTIME-FLOWS.md`（落后 201 commits）
+    超过 `LOG_DEPTH=200` 阈值。该脚本未接入 pre-commit，属信息性告警；
+    但按项目自己的规则这两篇需要一次逐段复核 —— **建议单列一个「技术文档复核」任务**，
+    不以改 `based-on-commit` 的方式掩盖。
+
+## 2026-09-16（MCP 接入：逐平台配置验证清单 + 内核文档工具数修正）
+
+- **背景**：owner 要开始「逐个平台配置验证」。平台侧手册已在
+  `jobcopilot/docs/integrations/`（5 云端 + 本地 DSH + 宿主 SEKB），
+  但缺一份「填什么值 / 绿了长什么样 / 红了先查哪」的**验证 runbook**；
+  且内核加入 `self_check` 后工具数已是 **7 个**，手册里的「6 个」会对不上数。
+
+- **改动**：
+  - `docs/ops/15-MCP-ENDPOINT.md` 新增 **§6.5 逐平台配置与验证清单**：
+    生产端点要填的值（URL / 令牌取法 / BYOK 头 / 7 个工具 / Host 白名单 / 内核 commit）、
+    **服务端 5 条实测基线**、每平台「先调 `self_check`」的诊断法、
+    5 平台的填写要点表（含「红了先查」）、以及会拦路的 3 条硬限制。
+  - 内核子模块（`jobcopilot`，commit `7a6f8a7`，同提交更新指针）：
+    `coze.md` / `bailian.md` / `dsh.md` 的「6 个工具」改为 **7 个**并按名列出；
+    `dsh.md` 工具表补 `self_check` 一行；`README.md` 平台对照表补 DSH/SEKB 两行
+    （使 7 份手册与索引一一对应）＋「调研 2026-02」更正为 `2026-09-15`。
+
+- **验证**：
+  - 生产端点实测（2026-09-16）：无令牌 **401**；带令牌无会话 **400 Missing session ID**；
+    SSE 的 `event: endpoint` 前缀为 `/jobcopilot`；`?token=<正确>` **200** / `?token=bogus` **401**；
+  - 官方客户端全链路（streamable HTTP 与 SSE 各一次）：工具 **7 个**、
+    `list_prompt_packs` 通、无 BYOK 时返回可操作错误、带 BYOK 时 `analyze_job` **7/7 段**、
+    用量回报 `calls=7 prompt=9188 completion=8567`；
+  - `/api/v1/health/` 运行内核 `e7592f7f15`，`prompt_source: local`（宿主提示词热改生效）；
+  - `check-links.sh` 通过；全仓断链仍为 2（都在 CHANGELOG 历史条目）。
+
+- **另记一条待决策（不在本次改动内）**：千帆只支持把令牌放查询串，因此
+  `docker logs sekb-jobcopilot-mcp` 的 access log 会**明文记录令牌**
+  （实测可见 `GET /jobcopilot/sse?token=…`）。目前该容器虽打了 `sekb-logs` 标签，
+  但 promtail 只配了 `backend`/`frontend` 两个 job，**日志未进 Loki**，
+  所以暴露面限于服务器本地 `docker logs`。若要收口，可在内核侧改 access-log 格式，
+  或给 promtail 加 `replace` 阶段脱敏 —— 需另开一轮（会动内核指针）。
+
+## 2026-09-16（修复监控绑 Tailscale 后的连带问题（脚本默认值/提示语/运维文档））
+
+- **背景**：把监控栈从 `0.0.0.0` 改绑到 `100.71.24.105` 之后，凡是「假设回环可访问」的地方
+  都失效了 —— 这类连带影响如果不一起收掉，就会变成「功能正常但文档和工具全在骗人」：
+  1. `deploy/canary_monitor.sh` 默认 `PROMETHEUS_URL=http://localhost:9091` →
+     灰度监控会**静默查不到数据**，进而误判「无异常」，比报错更危险；
+  2. `deploy.sh` 阶段 7 与 `restart.sh` 的收尾提示写着 `http://localhost:3001` → 打不开；
+  3. `docs/ops/` 里 40 处主机侧 `curl http://localhost:<监控端口>`、地址表、
+     SSH 隧道目标（`-L 3001:localhost:3001` 的**目标侧**现在没有进程监听）全部失效；
+  4. 文档里的 Grafana 口令仍写 `admin / admin`，而实际口令已由阶段 0.5 自动生成。
+
+- **改动**：
+  - `deploy/canary_monitor.sh`：`PROMETHEUS_URL` 默认值改为「读 `.env.prod` 的
+    `MONITOR_BIND_IP` + `:9091`」，`0.0.0.0/空` 归一为 `localhost`，仍可被环境变量显式覆盖。
+  - `deploy/deploy.sh`（阶段 7 提示）与 `deploy/restart.sh`：访问地址按同一规则动态输出，
+    Grafana 口令提示改为「见 `.env.prod` 的 `GRAFANA_ADMIN_PASSWORD`」。
+  - `docs/ops/`：**项目自身的运维文档**（01/02/06/07/11）里 40 处主机侧地址改为
+    `100.71.24.105`；`11-MONITORING.md` 顶部新增「监听地址（先读）」小节，
+    说明 `MONITOR_BIND_IP` 语义、`localhost` 为何失效、Tailscale 直连与隧道两种访问方式、
+    以及自检命令 `sudo ss -ltnp | grep -E ':(9091|3001|3101|9093)\b'`。
+  - `docs/ops/03`、`04`（**新服务器通用部署手册**）：**保持 `localhost`**
+    （新装默认 `MONITOR_BIND_IP=0.0.0.0`，localhost 才是对的），仅加一行指向
+    `11-MONITORING.md` 的生产绑定说明 —— 避免把「本项目生产的一种配置」误写成所有部署的通用事实。
+  - 4 处 Grafana 口令说明由 `admin / admin` 改为 `.env.prod` 的 `GRAFANA_ADMIN_PASSWORD`。
+  - `docs/tech/.facts/T7/T8`：`canary_monitor.sh` 的默认地址与新行号同步。
+
+- **验证**：
+  - `bash -n` 三个脚本均通过；`MONITOR_BIND_IP` 解析实测：
+    `100.71.24.105` → 不变，`0.0.0.0` → 归一为 `localhost`；
+  - 复核 `docs/ops` 剩余 `localhost:<监控端口>`：仅存在于 03/04 通用手册（有意保留）、
+    解释性注释与历史审查报告；项目自身手册已全部改为 Tailscale 地址；
+  - `check-links.sh` / `check-freshness.sh` 通过；后端 841 passed + ruff；前端 68 passed + tsc。
+
+## 2026-09-16（文档工程：合并审查目录 + 删除被取代/孤立文档 + 修正断链）
+
+- **背景**：按「文档工程再检视一遍，不必要的文档就删掉」做全仓盘点。用三种证据判断
+  「不必要」：① 内容相似度（找出真重复）；② 入链分析（找出孤立文档）；
+  ③ 代码引用检查（避免删掉运行时要读的文件）。**③ 救回了 `prompt/`**：
+  `prompt/job/*.md` 与内核 `prompts/base/*.md` 逐字节相同，看似冗余，
+  实则是**运营可热改的 bind mount 覆盖层**（`JOBCOPILOT_PROMPTS_DIR=/app/prompt/job`），
+  删了会改运行时行为 —— 据此保留。
+
+- **改动**：
+  - **合并审查目录**：`docs/codeReview/20260915/{CodeBuddy,Qoder}` → `docs/codeReview/2026-09-15/`，
+    消除同批审查两套日期命名的割裂（原 DOC20）；同步修正 2 处路径引用。
+  - **删除被取代的中间产物**（内容已完整并入 `07-全问题总表.md` + `09-修复状态确认清单.md`）：
+    `DSH-Agent/05-待确认问题清单.md`、`06-修复分类清单.md`、`08-暂缓事项处理范围建议.md`；
+    跟踪表中指向 08 的引用改为指向 09。
+  - **删除根目录孤立文档** `RAG常见问题汇总.md`（通用 RAG FAQ、无 SEKB 特有信息、
+    无任何入链、无 front-matter；原 DOC21）。保留在 git 历史中。
+  - **修正 9 处真实断链**（均非本次改动引入）：`docs/ops/06`（1 处）、
+    `docs/ops/07`（6 处）把 `../deploy/...` 写成了 `docs/deploy/...`；
+    `Qoder/02-文档审查.md`（2 处）相对深度少一层。
+  - **`docs/README.md` 重写**：补 front-matter（原 DOC17：唯一无元信息的导航入口）；
+    地图补齐 `codeReview/2026-09-15/`、`tech/12`、`research/`、`docs/tmp`、
+    根 README/AGENTS；新增两条约定（原始报告只作证据留存、日期目录统一 `YYYY-MM-DD`）。
+  - **`docs/tmp/` 瘦身 9.5MB → 364KB**：删除生成物与副本
+    （`_jc_backup/`、`_jc-prompts/`、`_jc-dsh/`、`_p0old/`，删前已确认无入链、
+    无未推送提交、无独有 commit）与 7 个一次性探针脚本（结论已记入 CHANGELOG）。
+    **保留**被跟踪文档引用的文件（`自迭代闭环设计RFC.md`、`REFACTORING-PLAN.md`、
+    `简历补强与SEKB增强待办.md`、`verify_public_mcp.py`）、可复用的回归脚本
+    与个人资料（职业规划/学习/售前）。
+
+- **验证**：
+  - 自写全仓链接检查：87 个 md、128 个相对链接，断链 **12 → 2**
+    （剩余 2 处都在 `CHANGELOG.md` 的历史条目里，AGENTS.md 规定 CHANGELOG 不直接改）；
+  - `check-links.sh` ✅、`check-freshness.sh` ✅、`check-doc-sync.sh` exit 0；
+  - 记录一条已知局限：`check-links.sh` 只扫 `docs/tech/0*.md`（原 DOC13），
+    所以它的「✅」不覆盖本次改动的区域 —— 上面那条自写全仓检查才是真验证；
+    扩检属于 SCH-10（范围 3，按你的决定暂不实施）。
+
+## 2026-09-16（监控端口只监听 Tailscale（摆脱安全组单点）+ 忽略含密钥的 env 备份）
+
+- **背景**：上一轮实测确认：Docker 发布的端口走 iptables **FORWARD** 链，
+  而 `ufw` 的规则在 INPUT 链 —— 所以 9091/3001/3101/9093「公网不可达」
+  实际**只靠腾讯云安全组**这一道防线（`DOCKER-USER` 链当时为空）。
+  安全组一旦被放开（或换机器重建时忘记收紧），Prometheus/Loki/Alertmanager
+  无任何认证、Grafana 可读全部指标与日志，等于直接泄露。
+  另发现：`deploy.sh` 把 `*.bak` 备份写在仓库内，而 `.gitignore` 只忽略 `.env.prod`
+  **不含** `.env.prod.bak.*` —— 一个含 `JWT_SECRET` 的备份文件处于「未被忽略」状态，
+  任何一次 `git add -A` 都可能把它提交上去。
+
+- **改动**：
+  - 生产 `.env.prod`：`MONITOR_BIND_IP=100.71.24.105`，重建监控栈。
+    Prometheus/Grafana/Loki/Alertmanager 由 `0.0.0.0` 改为**只监听 Tailscale 网卡**。
+    Gitea（3000/2222）**故意不动**：其远端地址是 `http://localhost:3000`，须保持回环可达。
+  - 生产上把 `.env.prod.bak.*` 移出仓库到 `/opt/self-evolving-kb/env-backups/`。
+  - `.gitignore`：新增 `.env.prod.bak*` 与 `*.pre-deploy-*.bak`
+    （部署脚本生成的备份既含密钥又污染 `git status`，一律忽略）。
+  - `deploy/.env.prod.example`、确认清单第 2 项、跟踪表「已定决策」同步更新。
+
+- **验证**：
+  - `ss -ltnp`：9091/3001/3101/9093 仅 `100.71.24.105`；5001 仅 `127.0.0.1`；
+  - 从本机公网探测 4 个端口 → **全部 000（不可达）**；Tailscale → 302/302/404/200（可达）；
+  - 服务器本机 `localhost:3001` → 000（符合预期：回环不再监听）；
+  - `deploy.sh` 阶段 6 探针逻辑模拟（按 `.env.prod` 解析 `MONITOR_HOST`）：
+    prometheus/grafana/alertmanager/feishu **4/4 → 200**，不会误报部署失败；
+  - Grafana 新口令 `/api/user` → 200，`admin:admin` → **401**；
+  - Prometheus 抓取目标：`backend up`、`prometheus up`（内网抓取不受影响）；
+  - `git check-ignore` 实测两类 `*.bak` 均已被忽略。
+
+## 2026-09-16（监控：新增 MONITOR_BIND_IP（摆脱「安全组是唯一防线」））
+
+- **背景（实测得出，不是推测）**：
+  - 从公网探测 `49.232.42.91` 的 9091/3001/3101/9093/3000/5001 → **全部超时**；
+    同一时刻 80/443 → 301（正常）。即「探针本身没问题，确实是被挡了」。
+  - 从 Tailscale `100.71.24.105` 探测 → 9091/3001 302、3101 404、9093 200、3000 200（**全部可达**）。
+  - 服务器上 `ufw status` 只放行 22/80/443/41641，`DOCKER-USER` 链为空，
+    但 `filter DOCKER` 链里**有** 3000/5001/9091… 的 ACCEPT 规则 ——
+    说明 Docker 发布的端口走的是 **FORWARD** 链，ufw 的 INPUT 规则根本管不到。
+  - **结论**：这些监控端口公网不可达，靠的是**腾讯云安全组**，不是 ufw。
+    安全组一旦被放开（或换机器重建时忘记收紧），Prometheus/Grafana/Loki/Alertmanager
+    会直接暴露在公网 —— 而 Grafana 此前是 admin/admin，等于泄露全部指标与日志。
+
+- **改动**：
+  - `docker-compose.monitoring.yml`：Prometheus/Grafana/Loki/Alertmanager 的端口映射
+    由 `${PORT}:port` 改为 `${MONITOR_BIND_IP:-0.0.0.0}:${PORT}:port`，
+    默认值不变（不改变现网行为），并在文件内写明上述 FORWARD 链的原因。
+  - `deploy/deploy.sh`：阶段 6 的监控探针改为读取 `.env.prod` 的 `MONITOR_BIND_IP`
+    （`0.0.0.0`/空 归一为 `localhost`）。绑到具体网卡后 127.0.0.1 不再监听，
+    探针不跟着改会把「部署成功」误报成失败。feishu-webhook 仍固定 `localhost`（绑 127.0.0.1）。
+  - `deploy/.env.prod.example`：新增 `MONITOR_BIND_IP` 段落，写明实测结论、
+    改成 `100.71.24.105` 的用法与代价，以及**为什么 Gitea 不受此项影响**
+    （其远端地址是 `http://localhost:3000`，必须保持回环可达）。
+
+- **验证**：
+  - `bash -n deploy/deploy.sh` 通过；两个 compose 文件 `yaml.safe_load` 通过；
+  - 公网/Tailscale 双向探测结果如上（改动前基线）；
+  - 应用到生产后的复测见同日部署记录（公网仍不可达、Tailscale 可达、探针通过）。
+
+## 2026-09-16（部署：browser 服务纳入 deploy.sh（阶段 3.6））
+
+- **背景**：`deploy.sh` 此前**完全不管 `browser` 容器** —— 它由人手 `up -d` 起过一次
+  之后就再没随部署更新过（现网 `sekb-browser` 已 Up 12 天）。后果是
+  `browser-service/app.py` 的任何改动**永远上不了线**：本轮 S12 的内部鉴权
+  改了代码却不会被部署，等于白改。这是个「脚本不覆盖的服务」盲区。
+
+- **改动**：
+  - `deploy/deploy.sh`：新增 **阶段 3.6/7：启动浏览器服务**，紧跟 JobCopilot MCP 之后、
+    前端之前，执行 `docker compose -f docker-compose.prod.yml --env-file .env.prod
+    up -d --build browser`（Playwright 基础层有缓存，通常只重建 app.py 层）。
+    - 启动后检查容器状态；若 `BROWSER_INTERNAL_TOKEN` 为空则**显式警告「= 不鉴权」**
+      并给出修复命令（避免又回到「忘了配 = 没防护」）；
+    - 构建/启动失败**不阻塞主流程**（只影响采集，资讯/对话不受影响）；
+    - 新增 `--skip-browser` 开关：只改后端时跳过，省时间。
+
+- **验证**：
+  - `bash -n deploy/deploy.sh` 通过；`--help` 正确列出 `--skip-browser`；
+  - 在隔离目录 dry-run 定位到新阶段行号，确认分支不会被 `docker-compose.prod.yml`
+    中 `browser:` 服务的 `grep -q "^  browser:"` 误判跳过；
+  - 实机部署时该阶段首次执行（见同日部署记录）。
+
+## 2026-09-16（部署：密钥自举（BROWSER_INTERNAL_TOKEN / Grafana 口令缺失即生成））
+
+- **背景**：S12 给 browser-service 加了内部鉴权 token，但它的实现是
+  `if _INTERNAL_TOKEN:` —— **token 为空时直接放行**。也就是说「忘了在 .env.prod 里配」
+  等于「没有防护」，而同 Docker 网络内任意容器都能读写 BOSS 登录 Cookie。
+  Grafana 同理：`GRAFANA_ADMIN_PASSWORD` 不配就是默认 `admin/admin`。
+  靠「记得配」来保证安全是不可靠的，改为让安全成为默认值。
+
+- **改动**：
+  - `deploy/deploy.sh`：新增**阶段 0.5/7：密钥自举**（在构建/启动之前）。
+    `bootstrap_secret()` 对 `BROWSER_INTERNAL_TOKEN`（`openssl rand -hex 24`）与
+    `GRAFANA_ADMIN_PASSWORD`（`openssl rand -base64 24`）：
+    已配置且非空 → 保持不变；存在但为空 → 原地 `sed` 替换；完全缺失 → 追加到 `.env.prod`。
+    幂等，重复部署不会换值；DRY-RUN 下只打印不写文件。
+  - `deploy/.env.prod.example`：两处注释更正为「留空 = 不鉴权」的红字警告 + 自动生成说明。
+
+- **验证**：
+  - `bash -n deploy/deploy.sh` 通过；
+  - 隔离目录内模拟两次调用：第 1 次生成并原地替换空值（不破坏其它行顺序），
+    第 2 次输出「已配置，保持不变」→ 幂等成立；
+  - 后端 841 passed / ruff clean；前端 68 passed / tsc clean。
+
+## 2026-09-16（全量代码与文档审查：50 条代码问题 + 30 条文档建议 + 20 条使用建议）
+
+新增全量审查报告，位于 `docs/codeReview/2026-09-15/CodeBuddy/`：
+
+- `01-代码问题审查.md` —— 50 条，分级为严重 7 / 高 17 / 中 18 / 低 8；
+  另归纳 4 类系统性缺陷：异常原文回传客户端（S1）、存储无锁非原子写（S2）、
+  数据目录硬编码（S3）、配置与代码不同步（S4）。
+- `02-文档优化建议.md` —— 30 条，分 A（一致性）/ B（编目）/ C（内容质量）/ D（维护机制）四类。
+- `03-使用者视角功能优化建议.md` —— 20 条，聚焦首用引导、错误可读性、状态可见性、
+  招聘分析可信度与日常交互容错。
+
+本次为**只读审查**，未改动任何业务代码。最优先修复项：
+`--forwarded-allow-ips "*"` 导致限流可被绕过、全局异常处理器缺失、
+`user_storage` 非原子写、README 三大过期项（结构树/启动命令/API 清单）、
+补建 `docs/user/` 用户手册。
 
 ---
 

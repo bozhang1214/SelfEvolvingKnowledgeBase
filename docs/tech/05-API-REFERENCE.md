@@ -4,7 +4,7 @@ layer: 参考层
 owner: SEKB Team
 status: active
 version: v1.0.0
-last-updated: 2026-09-16
+last-updated: 2026-09-20
 based-on-commit: 44dfed1
 related: [02-RUNTIME-FLOWS, 08-GLOSSARY]
 ---
@@ -16,7 +16,7 @@ related: [02-RUNTIME-FLOWS, 08-GLOSSARY]
 > **读完能做什么**：能对着任意端点写出 curl；理解 SSE 事件协议与 CLI 命令；定位错误处理。
 
 > **完整证据**：端点的逐字段表见事实表 [.facts/T1-routes.md](./.facts/T1-routes.md)（带 file:line）。本文为可读手册，正文引用 T1 深表。
-> ⚠️ 现状：实际 `@router` 端点共 **75 个**<!-- fact:api_endpoints=75 -->（auth 8 / chat 3 / chat_share 3 / conversations 7 / health 3 / job 20 / knowledge 6 / metrics 1 / monitoring 1 / news 6 / profile 2 / share 7 / upload 8）。T1 事实表仍按 65 个统计，未含 `/chat/usage`、`/news/status`、job 搜索历史与投递计划等新增端点，待同步（本文正文已逐条核对代码）。
+> ⚠️ 现状：实际 `@router` 端点共 **83 个**<!-- fact:api_endpoints=83 -->（auth 8 / chat 3 / chat_share 3 / conversations 7 / **device 5** / **edge 3** / health 3 / job 20 / knowledge 6 / metrics 1 / monitoring 1 / news 6 / profile 2 / share 7 / upload 8；device 与 edge 是端云协同 S1/S2 新增的，2026-09-20 对齐实测）。T1 事实表仍按 65 个统计，未含 `/chat/usage`、`/news/status`、job 搜索历史与投递计划等新增端点，待同步（本文正文已逐条核对代码）。
 
 ---
 
