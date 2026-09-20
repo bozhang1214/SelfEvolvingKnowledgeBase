@@ -43,10 +43,17 @@ class Retriever(
     /**
      * 相似度阈值：低于它的命中直接丢弃。
      *
-     * ⚠️ **默认值只是保守起点，必须用标注集校准**（RFC §18.4）：不同嵌入模型的余弦可比区间
-     * 完全不同（真实 bge 上"相关"常在 0.4–0.7，确定性桩则在 0.2–0.6）。
+     * **0.4 是标定出来的，不是拍的**（`--ez evalrag` 跑 33 条标注集 × ONNX bge-small-zh）：
+     *
+     * | 阈值 | Hit@1 | Hit@3 | 误召回（3 条"库里没有"） |
+     * |---|---|---|---|
+     * | 0.2 | 87% | 100% | **3/3（100%）** ← 全部强行回答，幻觉源 |
+     * | 0.4 | 87% | 100% | **0/3** ← 命中率不降，误召回归零 |
+     * | 0.6 | 80% | 80% | 0/3 ← 开始伤召回 |
+     *
+     * 换嵌入模型必须**重新标定**：不同模型的余弦可比区间完全不同（确定性桩在 0.2–0.6）。
      */
-    private val minScore: Double = 0.2,
+    private val minScore: Double = 0.4,
     /** 云端向量空间（用于判断能否跨端融合；默认取服务端口径） */
     private val cloudSpace: EmbeddingSpace = EmbeddingSpace.SERVER,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },

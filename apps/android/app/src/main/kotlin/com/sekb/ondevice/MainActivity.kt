@@ -25,6 +25,11 @@ class MainActivity : ComponentActivity() {
         if (intent?.getBooleanExtra("eval", false) == true) {
             runToolCallEval()
         }
+        // 端侧检索评测（命中率 + 延迟 + 阈值标定）
+        //   adb shell am start -n com.sekb.ondevice/.MainActivity --ez evalrag true
+        if (intent?.getBooleanExtra("evalrag", false) == true) {
+            runRetrievalEval()
+        }
 
         setContent {
             MaterialTheme {
@@ -81,6 +86,25 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 Log.i("SEKB_EVAL", "[FAIL] eval_crashed — ${e.message}")
+            }
+        }.start()
+    }
+
+    private fun runRetrievalEval() {
+        val container = (application as SekbApp).container
+        Thread {
+            try {
+                val runner = com.sekb.ondevice.eval.RetrievalEvalRunner(container.embeddingProvider)
+                val (index, store) = runner.buildIndex()
+                val reports = runner.calibrate(index, store)
+                val desc = if (container.onnxModelAvailable) {
+                    "ONNX ${container.embeddingProvider.space.id}"
+                } else {
+                    "确定性桩 ${container.embeddingProvider.space.id}（未找到 ONNX 模型）"
+                }
+                for (line in runner.format(reports, desc).lines()) Log.i("SEKB_RAG_EVAL", line)
+            } catch (e: Exception) {
+                Log.i("SEKB_RAG_EVAL", "[FAIL] retrieval_eval_crashed — ${e.message}")
             }
         }.start()
     }

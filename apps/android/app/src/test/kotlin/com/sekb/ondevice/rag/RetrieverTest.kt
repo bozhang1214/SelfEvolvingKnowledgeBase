@@ -22,7 +22,9 @@ class RetrieverTest {
         index.ingest("doc-diet", "端侧推理省电的原因：没有网络传输，也没有云端排队等待。")
         index.ingest("doc-weather", "北京今天多云转晴，最高气温 26 度，适合骑行。")
         index.ingest("doc-rag", "端侧 RAG 把知识索引放在设备上，检索不出网，隐私更好。")
-        return Retriever(provider, store) to store
+        // ⚠️ 显式给桩一个阈值：`Retriever` 的默认 0.4 是用**真实 ONNX 模型**标定出来的，
+        // 而确定性桩的余弦落在更低区间（0.2–0.6）。阈值本来就是模型相关的，测试要把它写出来。
+        return Retriever(provider, store, minScore = 0.2) to store
     }
 
     @Test

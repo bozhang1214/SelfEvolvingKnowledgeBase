@@ -24,7 +24,8 @@ class KbSearchToolTest {
                 "doc-rag", "端侧 RAG 把知识索引放在设备上，检索不出网，隐私更好。",
             )
         }
-        val retriever = Retriever(provider, store)
+        // 同 RetrieverTest：桩用 0.2，真实模型用标定出来的 0.4
+        val retriever = Retriever(provider, store, minScore = 0.2)
         return ToolRegistry(
             tools = listOf(KbSearchTool.create(retriever, deviceOnly = deviceOnlyCollection)),
             checker = PermissionChecker { true },

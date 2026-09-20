@@ -130,6 +130,8 @@ rag_sqlite_space_guard  PASS  索引的空间是 stub-hash@256，当前嵌入模
 | 工具 | `kb_search` 返回 doc-rag 0.642 |
 | 隐私闸门 | 同空间但 `isOnDevice=false` → 拒绝，原因 `device_only_requires_on_device_embedding` |
 | 自检汇总 | **PASS=20 FAIL=0 SKIP=1** |
+| 检索评测（33 条标注集） | Hit@1 **87%**、Hit@3 **100%**、MRR **0.928**、误召回 **0/3**；嵌入 38ms（p95 57ms）、检索 0.5ms —— 见 [`RETRIEVAL-EVAL.md`](RETRIEVAL-EVAL.md) |
+| 阈值标定 | 由评测定出 **0.4**（0.2 时 3 条"库里没有"的问题全被强行回答） |
 
 **两个环境约束**（都写进了脚本）：
 
