@@ -28,7 +28,8 @@ object SelfTestContextHolder {
 
 object SelfTest {
 
-    private const val TAG = "SEKB_SELFTEST"
+    /** 本机文档 E2E 用的样本文件名（放在 App 内部 filesDir 下）。 */
+    const val SAMPLE_FILE = "sekb-sample.md"
 
     data class Item(val name: String, val status: String, val detail: String)
 
@@ -218,6 +219,42 @@ object SelfTest {
         )
         record("rag_tool_search", toolRes.ok && toolRes.output.contains("doc-rag"),
             "ok=${toolRes.ok} 输出=${toolRes.output.take(50)}")
+
+        // ---------- 本机文档：导入 → 检索 → 删除（M3 第二批） ----------
+        // 样本文件由 scripts/android.sh push-sample 写进 App 内部目录（避免存储权限问题）；
+        // 没有文件时如实 SKIP，而不是硬失败。
+        val appCtx = SelfTestContextHolder.appContext
+        val sample = appCtx?.let { java.io.File(it.filesDir, SAMPLE_FILE) }
+        if (sample == null || !sample.isFile) {
+            record("rag_import_file", null,
+                "未找到样本文件（先跑：bash scripts/android.sh push-sample）")
+        } else {
+            val name = sample.name
+            val before = container.knowledgeIndex.documents().size
+            val text = sample.readText()
+            val report = container.knowledgeIndex.ingest(
+                sourceId = name, text = text, name = name,
+                sizeBytes = sample.length(), deviceOnly = true,
+            )
+            val docs = container.knowledgeIndex.documents()
+            record("rag_import_file", report.chunks >= 1 && docs.any { it.id == name },
+                "「$name」${report.chunks} 段/${sample.length()}B 文档数 $before→${docs.size}" +
+                    " 空间=${report.space}")
+
+            // 导入的内容必须真能被检索到（否则"导入成功"只是自我安慰）
+            val hit = container.retriever.retrieve("删除文档会不会影响其他文档？", topK = 1)
+            record("rag_import_retrieve", hit.hits.firstOrNull()?.sourceId == name,
+                "命中=${hit.hits.firstOrNull()?.sourceId} 分=${hit.hits.firstOrNull()?.let { "%.3f".format(it.score) }}")
+
+            // 删除该文档：只删它的切片，其他文档不受影响（回归那个"清空整库"的 bug）
+            val others = docs.count { it.id != name }
+            val removed = container.knowledgeIndex.remove(name)
+            val after = container.knowledgeIndex.documents()
+            record("rag_delete_file", removed >= 1 && after.none { it.id == name } &&
+                after.size == others && container.vectorStore.size() >= 1,
+                "删除 $removed 段，文档数 ${docs.size}→${after.size}（应保留 $others），" +
+                    "剩余切片=${container.vectorStore.size()}")
+        }
 
         // ---------- 云端四项（协议 E2E：登录 → 接入 → 聊天 → 上报） ----------
         if (cloud == null) {

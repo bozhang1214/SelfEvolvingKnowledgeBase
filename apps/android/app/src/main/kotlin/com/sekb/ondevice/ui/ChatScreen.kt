@@ -1,5 +1,7 @@
 package com.sekb.ondevice.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -7,12 +9,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -54,6 +58,11 @@ import com.sekb.ondevice.model.Plane
 fun ChatScreen(viewModel: ChatViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
+
+    // 本机文档导入：SAF 多选。MIME 过滤只给纯文本类——PDF/Word 不在本期（见 DocumentImporter）。
+    val pickDocuments = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris -> uris.forEach { viewModel.importUri(it) } }
 
     LaunchedEffect(Unit) { viewModel.probeEdge() }
     LaunchedEffect(state.bubbles.size) {
@@ -124,6 +133,9 @@ fun ChatScreen(viewModel: ChatViewModel) {
             }
 
             HorizontalDivider()
+            DocumentsPanel(viewModel, state) {
+                pickDocuments.launch(arrayOf("text/*", "application/json", "text/markdown", "text/csv"))
+            }
             StatusPanel(viewModel, state)
         }
     }
@@ -141,6 +153,15 @@ private fun BubbleRow(bubble: Bubble) {
             Column(modifier = Modifier.background(bg).padding(10.dp)) {
                 Text(bubble.text, fontSize = 14.sp)
                 val badge = ChatViewModel.badgeOf(bubble.execution, bubble.escalated)
+                // 端侧 RAG 的可追溯性：答对答错都能看出引用的是哪几段本机资料
+                if (bubble.sources.isNotEmpty()) {
+                    Text(
+                        RetrievalSources.summary(bubble.sources),
+                        fontSize = 10.sp,
+                        color = Color(0xFF1B5E20),
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
                 if (badge.isNotEmpty()) {
                     val isEdge = bubble.execution?.primaryPlane == Plane.EDGE.wire
                     Text(
@@ -151,6 +172,42 @@ private fun BubbleRow(bubble: Bubble) {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 本机文档面板（端侧 RAG 的输入）。
+ *
+ * 只列最近 3 份：这个面板在聊天页底部，空间有限；完整管理界面（搜索、批量删除）
+ * 等真机上出现真实用量再做（见 BACKLOG）。
+ */
+@Composable
+private fun DocumentsPanel(viewModel: ChatViewModel, state: ChatUiState, onPick: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("本机文档", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            TextButton(onClick = onPick, enabled = !state.importing) {
+                Text(if (state.importing) "导入中…" else "导入文件", fontSize = 12.sp)
+            }
+            TextButton(onClick = { viewModel.refreshDocuments() }) { Text("刷新", fontSize = 11.sp) }
+            Text(state.documentSummary, fontSize = 11.sp)
+        }
+        state.documents.take(3).forEach { doc ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 小文件用字节显示：整数 KB 会把它们显示成 "0KB"（看着像坏了）
+                val sizeText = if (doc.sizeBytes < 1024) "${doc.sizeBytes}B" else "${doc.sizeBytes / 1024}KB"
+                Text(
+                    "· ${doc.name}（${doc.chunks} 段，$sizeText）",
+                    fontSize = 11.sp, modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { viewModel.deleteDocument(doc.id) }) {
+                    Icon(Icons.Filled.Delete, contentDescription = "删除 ${doc.name}", modifier = Modifier.size(16.dp))
+                }
+            }
+        }
+        if (state.documents.size > 3) {
+            Text("…另有 ${state.documents.size - 3} 份（完整列表见后续版本）", fontSize = 10.sp)
         }
     }
 }

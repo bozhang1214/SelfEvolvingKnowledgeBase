@@ -28,7 +28,7 @@ class SqliteVectorStore(
     dbName: String = "sekb_rag.db",
     /** false = 容忍"库里记的空间与当前模型不一致"地打开（用于**原地重嵌入**，见 [reembed]） */
     strictSpace: Boolean = true,
-) : VectorStore {
+) : VectorStore, DocumentRegistry {
 
     private val helper = object : SQLiteOpenHelper(context.applicationContext, dbName, null, DB_VERSION) {
         override fun onCreate(db: SQLiteDatabase) {
@@ -47,6 +47,7 @@ class SqliteVectorStore(
                 """.trimIndent(),
             )
             db.execSQL("CREATE INDEX idx_chunks_source ON chunks(source_id)")
+            createDocumentsTable(db)
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -165,6 +166,9 @@ class SqliteVectorStore(
         }
     }
 
+    override fun deleteBySource(sourceId: String): Int =
+        helper.writableDatabase.delete("chunks", "source_id = ?", arrayOf(sourceId))
+
     override fun search(query: FloatArray, topK: Int): List<VectorHit> {
         if (query.size != space.dim) return emptyList()
         // 全量读一次再算余弦：语料上万块前都够用（见类注释第 2 点）。
@@ -179,8 +183,22 @@ class SqliteVectorStore(
     override fun size(): Int = helper.readableDatabase
         .rawQuery("SELECT COUNT(*) FROM chunks", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
 
+    /**
+     * 清空索引：**切片与文档元信息一起清**。
+     *
+     * `VectorStore.clear()` 与 `DocumentRegistry.clear()` 是同一个签名，所以只能有一份实现；
+     * 语义上合成"清空索引"也更合理——留下一个指向已删切片的文档列表只会误导用户。
+     */
     override fun clear() {
-        helper.writableDatabase.execSQL("DELETE FROM chunks")
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            db.execSQL("DELETE FROM chunks")
+            db.execSQL("DELETE FROM documents")
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     override fun all(): List<VectorRecord> {
@@ -198,8 +216,64 @@ class SqliteVectorStore(
     /** 立即释放句柄（测试/自检里模拟"App 重启"）。 */
     fun close() = helper.close()
 
+    // ---------- DocumentRegistry ----------
+
+    override fun upsert(info: DocumentInfo) {
+        helper.writableDatabase.insertWithOnConflict(
+            "documents", null,
+            ContentValues().apply {
+                put("id", info.id)
+                put("name", info.name)
+                put("size_bytes", info.sizeBytes)
+                put("chunks", info.chunks)
+                put("added_at", info.addedAtMillis)
+                put("device_only", if (info.deviceOnly) 1 else 0)
+            },
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
+    override fun list(): List<DocumentInfo> {
+        val out = mutableListOf<DocumentInfo>()
+        helper.readableDatabase.rawQuery(
+            "SELECT id, name, size_bytes, chunks, added_at, device_only FROM documents ORDER BY added_at DESC",
+            null,
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(
+                    DocumentInfo(
+                        id = c.getString(0), name = c.getString(1), sizeBytes = c.getLong(2),
+                        chunks = c.getInt(3), addedAtMillis = c.getLong(4), deviceOnly = c.getInt(5) == 1,
+                    ),
+                )
+            }
+        }
+        return out
+    }
+
+    override fun get(id: String): DocumentInfo? = list().firstOrNull { it.id == id }
+
+    override fun delete(id: String): Boolean =
+        helper.writableDatabase.delete("documents", "id = ?", arrayOf(id)) > 0
+
     companion object {
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
+
+        /** 文档元信息表（升级时用 `IF NOT EXISTS` 补建，保证不动已有切片）。 */
+        fun createDocumentsTable(db: SQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS documents (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    chunks INTEGER NOT NULL,
+                    added_at INTEGER NOT NULL,
+                    device_only INTEGER NOT NULL
+                )
+                """.trimIndent(),
+            )
+        }
 
         /** 打开结果：是否发生了重嵌入、旧空间是什么。 */
         data class OpenResult(val store: SqliteVectorStore, val reembedded: Int, val previousSpace: String?)

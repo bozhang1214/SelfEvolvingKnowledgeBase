@@ -161,6 +161,40 @@ rag_sqlite_space_guard  PASS  索引的空间是 stub-hash@256，当前嵌入模
    （`INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`）→ 先 `adb uninstall` 一次即可。
    这是一次性代价，之后签名稳定。
 
+### 1.7 本机文档导入 / 列表 / 删除（M3 第二批，2026-09-20）
+
+**自检 E2E（模拟器 + ONNX 嵌入）PASS=23 FAIL=0**，其中文档三步：
+
+```
+rag_import_file      PASS  「sekb-sample.md」1 段/574B 文档数 3→4 空间=BAAI/bge-small-zh-v1.5@512
+rag_import_retrieve  PASS  命中=sekb-sample.md 分=0.503   ← 导入的内容真能被检索到
+rag_delete_file      PASS  删除 1 段，文档数 4→3（应保留 3），剩余切片=3
+```
+
+`rag_delete_file` 那条是**回归验证**：早期 `KnowledgeIndex.remove()` 用"清空整库"实现删除，
+删一份文档会把整个索引清掉（其余文档的文本是设备侧唯一副本）。现在存储层有
+`deleteBySource`，且单测钉住"删一篇不影响其他"。
+
+UI（截图 `docs/screenshots/m3-rag-docs-panel.png`）：
+
+```
+本机文档  导入文件  刷新  已导入 3 份，共 3 段
+· doc-rag（1 段，574B）      🗑
+· doc-weather（1 段，…)      🗑
+· doc-diet（1 段，…)         🗑
+```
+
+| 验证到什么程度 | 说明 |
+|---|---|
+| ✅ 导入按钮**确实唤起系统 SAF 选择器** | 实测点"导入文件"后出现 DocumentsUI 的 "Recent files" 界面 |
+| ✅ 导入→入库→检索→删除的**逻辑** | 自检用真实文件跑通（含删除回归） |
+| ✅ 面板渲染（列表、段数、文件大小、删除按钮） | dump + 截图 |
+| ⚠️ **未验证**：全程脚本化"在选择器里选中文件→看到列表刷新" | adb 推送的文件不在选择器 Recent 列表（需媒体扫描），该 AVD 的 DocumentsUI 根目录抽屉对点击/滑动无响应。人工在模拟器上点两下即可确认（导入成功后计数应 3→4） |
+
+**只支持纯文本**（txt/md/json/csv；≤2MB）：二进制/PDF/Word 会被拒绝并给出可读原因，
+不把乱码灌进索引（脏索引比空索引更糟——检索会命中乱码，用户以为"AI 乱答"）。
+PDF/Word 解析列为后续（见 BACKLOG）。
+
 ### 1.5 UI 人工路径验收（2026-09-18）
 
 自检（§1.3）走的是"编排器直连"，**绕过了界面**；这一节补的是界面本身：真实点击、"设备接入"、

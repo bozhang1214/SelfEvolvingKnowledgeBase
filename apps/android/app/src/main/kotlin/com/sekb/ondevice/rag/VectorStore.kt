@@ -30,6 +30,15 @@ interface VectorStore {
 
     fun upsert(records: List<VectorRecord>)
 
+    /**
+     * 删除某份文档的全部切片，返回删除条数。
+     *
+     * ⚠️ 接口里必须有这个方法。第一版没有它，`KnowledgeIndex.remove()` 用"清空整库"来凑，
+     * 结果删一篇文档会把**整个索引**清掉（其余文档的文本是设备侧唯一副本，等于数据丢失）。
+     * 教训：接口缺一个"删除"能力时，调用方一定会用一种危险的方式绕过去。
+     */
+    fun deleteBySource(sourceId: String): Int
+
     fun search(query: FloatArray, topK: Int): List<VectorHit>
 
     fun size(): Int
@@ -57,6 +66,12 @@ class InMemoryVectorStore(override val space: EmbeddingSpace) : VectorStore {
             }
             this.records[r.id] = r
         }
+    }
+
+    override fun deleteBySource(sourceId: String): Int {
+        val doomed = records.values.filter { it.sourceId == sourceId }.map { it.id }
+        doomed.forEach { records.remove(it) }
+        return doomed.size
     }
 
     override fun search(query: FloatArray, topK: Int): List<VectorHit> {

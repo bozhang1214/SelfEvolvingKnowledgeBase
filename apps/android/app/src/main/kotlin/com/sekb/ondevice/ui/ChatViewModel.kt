@@ -10,6 +10,7 @@ import com.sekb.ondevice.model.DeviceCredentials
 import com.sekb.ondevice.model.ExecutionInfo
 import com.sekb.ondevice.model.Plane
 import com.sekb.ondevice.model.RouteEventPayload
+import com.sekb.ondevice.rag.DocumentInfo
 import com.sekb.ondevice.tools.PermissionAudit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +27,8 @@ data class Bubble(
     val execution: ExecutionInfo? = null,
     /** **客户端侧**是否发生过升级（与服务端回传的 execution.escalated 是两件事） */
     val escalated: Boolean = false,
+    /** 这次回答引用到的本机检索来源（端侧 RAG 的可追溯性：答对答错都要能看出处） */
+    val sources: List<RetrievalSources.Source> = emptyList(),
 )
 
 /** UI 状态（单一数据源，避免散在各处的 mutable 字段）。 */
@@ -46,7 +49,14 @@ data class ChatUiState(
     val audit: PermissionAudit.Stats = PermissionAudit.Stats(0, 0, 0, 0.0),
     val toolEvalSummary: String = "工具调用：暂无尝试",
     val lastReason: String = "",
+    /** 已导入的本机文档（UI 列表用） */
+    val documents: List<com.sekb.ondevice.rag.DocumentInfo> = emptyList(),
+    val importing: Boolean = false,
 ) {
+    val documentSummary: String get() =
+        if (documents.isEmpty()) "还没有导入本机文档" else
+            "已导入 ${documents.size} 份，共 ${documents.sumOf { it.chunks }} 段"
+
     val deniedRateText: String get() = "${(audit.deniedRate * 100).toInt()}%"
 }
 
@@ -78,6 +88,72 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         refreshAudit()
+        refreshDocuments()
+    }
+
+    // ---------- 本机文档（端侧 RAG 的输入） ----------
+
+    /**
+     * 导入一份本机文档。
+     *
+     * 文档 id 用**文件名**：同名文件重复导入视为更新（切片 id 是 `源#序号`，天然覆盖）。
+     * 这是个有意的取舍——用内容哈希能区分同名不同内容的文件，但用户会看到两份同名条目，
+     * 反而困惑；等真机上出现真实用例再改（见 BACKLOG）。
+     */
+    fun importUri(uri: android.net.Uri) {
+        viewModelScope.launch {
+            _state.update { it.copy(importing = true, error = "", notice = "") }
+            val app = getApplication<android.app.Application>()
+            val result = withContext(Dispatchers.IO) { DocumentImporter.read(app, uri) }
+            when (result) {
+                is DocumentImporter.Result.Rejected ->
+                    _state.update { it.copy(importing = false, error = "「${result.name}」未导入：${result.reason}") }
+
+                is DocumentImporter.Result.Ok -> {
+                    val started = System.currentTimeMillis()
+                    val report = withContext(Dispatchers.IO) {
+                        runCatching {
+                            container.knowledgeIndex.ingest(
+                                sourceId = result.name, text = result.text,
+                                name = result.name, sizeBytes = result.sizeBytes, deviceOnly = true,
+                            )
+                        }
+                    }
+                    val docs = withContext(Dispatchers.IO) { container.knowledgeIndex.documents() }
+                    report.onSuccess { r ->
+                        val ms = System.currentTimeMillis() - started
+                        _state.update {
+                            it.copy(
+                                importing = false, documents = docs,
+                                notice = "已导入「${result.name}」：${r.chunks} 段，嵌入耗时 ${ms}ms" +
+                                    if (r.chunks == 0) "（内容为空，未入库）" else "",
+                            )
+                        }
+                    }.onFailure { e ->
+                        _state.update { it.copy(importing = false, error = "导入失败：${e.message}") }
+                    }
+                }
+            }
+        }
+    }
+
+    fun deleteDocument(id: String) {
+        viewModelScope.launch {
+            val removed = withContext(Dispatchers.IO) { container.knowledgeIndex.remove(id) }
+            val docs = withContext(Dispatchers.IO) { container.knowledgeIndex.documents() }
+            _state.update {
+                it.copy(documents = docs, notice = "已删除「$id」的 $removed 段索引")
+            }
+        }
+    }
+
+    fun refreshDocuments() {
+        viewModelScope.launch {
+            val docs = withContext(Dispatchers.IO) {
+                runCatching { container.knowledgeIndex.documents() }.getOrDefault(emptyList())
+            }
+            _state.update { it.copy(documents = docs) }
+        }
     }
 
     fun onInputChange(value: String) = _state.update { it.copy(input = value) }
@@ -199,12 +275,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val stats = container.audit.stats()
                 _state.update { st ->
                     val last = st.bubbles.lastOrNull()
+                    val sources = RetrievalSources.parse(result.toolResults)
                     val patched = if (last != null && !last.fromUser) {
                         st.bubbles.dropLast(1) +
                             last.copy(text = result.text, execution = result.execution,
-                                escalated = result.escalated)
+                                escalated = result.escalated, sources = sources)
                     } else {
-                        st.bubbles + Bubble(false, result.text, result.execution, result.escalated)
+                        st.bubbles + Bubble(false, result.text, result.execution, result.escalated, sources)
                     }
                     st.copy(
                         busy = false, thinking = "", bubbles = patched, audit = stats,

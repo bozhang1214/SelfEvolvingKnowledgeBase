@@ -79,7 +79,10 @@ class AppContainer(context: Context) {
     val vectorStore: VectorStore = openResult.store
     val reembeddedChunks: Int = openResult.reembedded
     val previousIndexSpace: String? = openResult.previousSpace
-    val knowledgeIndex = KnowledgeIndex(embeddingProvider, vectorStore)
+    // SqliteVectorStore 同时实现 VectorStore 与 DocumentRegistry（同一张库）
+    val knowledgeIndex = KnowledgeIndex(
+        embeddingProvider, vectorStore, registry = openResult.store,
+    )
     val retriever = Retriever(embeddingProvider, vectorStore)
 
     /** 端侧工具（含权限闸门所需的真实权限检查）。 */
