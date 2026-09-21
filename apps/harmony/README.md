@@ -45,3 +45,23 @@ iOS 能通过 Kotlin Multiplatform 共用纯逻辑，**鸿蒙不能**。所以�
 **建议**：先按 A 起步（鸿蒙端的本地推理本来就排在 Android/iOS 之后），
 等三端都要做时再评估 B。**无论哪条路线，落地的第一步都是先把契约测试抄过去**——
 没有测试的"重写一份"等于制造第二套事实。
+
+## M6 spike 前置调研（2026-09-21 实测，文档来自 AtomGit `CPF-KMP-CMP/docs`）
+
+已把官方文档 clone 到 `.tooling/ohos-spike/docs`（`git clone --depth 1 https://atomgit.com/CPF-KMP-CMP/docs.git`，**AtomGit 可达**）。
+从文档里读出的四条硬事实（每条都能在 `zh-cn/入门/*.md` 里查到）：
+
+| # | 事实 | 对 spike 的影响 |
+|---|---|---|
+| 1 | **工具链是 IDE 插件**（"KMP OHOS Support-1.0.0.zip"，离线安装方式；下载源是第三方 nexus `maven.eazytec-cloud.com`，实测 **HTTP 200 可达**） | 官方路径是 Android Studio / IDEA 装插件；**纯命令行路径文档未承诺**——spike 第 1 条要自己趟 |
+| 2 | **鸿蒙应用必须签名才能装到真机/模拟器**，签名需在 **DevEco Studio** 里完成，要求**注册并登录华为开发者账号** | **spike 第 4 条（HAP 能装能起）需要 owner 的华为开发者账号** —— 这是只有你能提供的前置条件 |
+| 3 | `ohosArm64` = **真机**（arm64-v8a）；**模拟器 / x86_64 开发机需额外启用 `ohosX64`** | 本机模拟器是 x86_64 → 必须同时启用 `ohosX64`，否则产物装不进模拟器 |
+| 4 | 版本门槛：JDK 17+、Gradle 8+、DevEco Studio **6.0.0+**、HarmonyOS SDK **API 17+** | 本机：SDK **API 22**（6.0.2.130）✅、OHOS NDK ✅、DevEco tools（hvigor/llvm/node）✅、JDK 有 21 与 JBR（17+ ✅） |
+
+**另外两处网络现实**（与 M5 端口③ 同类）：spike 第 3 条要自建 ONNX Runtime，而 ORT 源码在 **GitHub（本机不可达，实测 HTTP 000）**——
+可能的绕行是社区在 AtomGit/GitCode 上的 OHOS 移植镜像（如 `code.ruyicommunity.cn` 的 onnxruntime 移植分支），**待验证**。
+
+**结论**：spike 第 1/2 条（KMP 产物 + kotlinx 库在 ohos 上可解析）**可以试**；
+第 3 条受 ORT 源码获取影响（需先找镜像）；
+**第 4 条需要 owner 的华为开发者账号**（DevEco 模拟器登录 + 应用签名）。
+按方案 §4 D2 的规矩：**四条全通才进 M7，任一不过就退路线 B（ArkTS 重写 + 契约夹具）**。
