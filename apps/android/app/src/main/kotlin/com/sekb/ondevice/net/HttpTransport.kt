@@ -1,10 +1,5 @@
 package com.sekb.ondevice.net
 
-import java.util.concurrent.TimeUnit
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 
 /** 一次 HTTP 响应（只保留端侧用得到的两个字段）。 */
 data class HttpResponse(val code: Int, val body: String) {
@@ -40,80 +35,4 @@ interface HttpTransport {
         timeoutSeconds: Long = 300,
         onLine: (String) -> Unit,
     ): Int
-}
-
-/** OkHttp 实现（唯一的真实实现；测试用假传输）。 */
-class OkHttpTransport(private val client: OkHttpClient = defaultClient()) : HttpTransport {
-
-    override fun postJson(url: String, headers: Map<String, String>, body: String, timeoutSeconds: Long): HttpResponse {
-        val request = Request.Builder()
-            .url(url)
-            .apply { headers.forEach { (k, v) -> header(k, v) } }
-            .post(body.toRequestBody(JSON))
-            .build()
-        client.newBuilder().readTimeout(timeoutSeconds, TimeUnit.SECONDS).build()
-            .newCall(request).execute().use { resp ->
-                return HttpResponse(resp.code, resp.body?.string().orEmpty())
-            }
-    }
-
-    override fun get(url: String, headers: Map<String, String>, timeoutSeconds: Long): HttpResponse {
-        val request = Request.Builder()
-            .url(url)
-            .apply { headers.forEach { (k, v) -> header(k, v) } }
-            .get()
-            .build()
-        client.newBuilder().readTimeout(timeoutSeconds, TimeUnit.SECONDS).build()
-            .newCall(request).execute().use { resp ->
-                return HttpResponse(resp.code, resp.body?.string().orEmpty())
-            }
-    }
-
-    override fun postJsonStream(
-        url: String,
-        headers: Map<String, String>,
-        body: String,
-        timeoutSeconds: Long,
-        onLine: (String) -> Unit,
-    ): Int {
-        val request = Request.Builder()
-            .url(url)
-            .apply {
-                headers.forEach { (k, v) -> header(k, v) }
-                // SSE 必须显式声明 Accept，否则某些网关会缓冲整个响应
-                header("Accept", "text/event-stream")
-            }
-            .post(body.toRequestBody(JSON))
-            .build()
-        // readTimeout 对 SSE 要放大：两个 token 之间可能间隔很久（长回答/云端排队）
-        val streaming = client.newBuilder()
-            .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
-            .build()
-        streaming.newCall(request).execute().use { resp ->
-            val source = resp.body?.source()
-            if (source != null) {
-                while (true) {
-                    val line = source.readUtf8Line() ?: break
-                    onLine(line)
-                }
-            }
-            return resp.code
-        }
-    }
-
-    companion object {
-        private val JSON = "application/json; charset=utf-8".toMediaType()
-
-        /**
-         * 默认客户端。
-         *
-         * `retryOnConnectionFailure(true)`：端侧网络（尤其切网时）抖动很常见，
-         * 但**只重试连接失败**，不重试已发出的流式请求——那会重复消费 token。
-         */
-        fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            .build()
-    }
 }
