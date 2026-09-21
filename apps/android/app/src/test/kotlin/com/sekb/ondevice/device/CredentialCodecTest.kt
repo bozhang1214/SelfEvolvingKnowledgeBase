@@ -6,6 +6,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.sekb.shared.device.CredentialCodec
+import com.sekb.shared.device.InMemoryCredentialStore
 
 /** 凭证编解码与轮换时机（纯逻辑；Keystore 那层只能在真机/模拟器上验）。 */
 class CredentialCodecTest {

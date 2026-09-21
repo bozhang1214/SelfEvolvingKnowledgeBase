@@ -63,6 +63,15 @@ build_app() {
         -o "$APP_BUNDLE/$APP_NAME" \
         $ROOT/apps/ios/App/*.swift || return 1
     cp "$ROOT/apps/ios/App/Info.plist" "$APP_BUNDLE/Info.plist"
+    # ⚠️ **故意不做 ad-hoc 签名**（2026-09-21 实测结论）：
+    #   · 手搓未签名的 .app 调 Keychain → `SecItemAdd` 返回 **-34018 (errSecMissingEntitlement)**；
+    #   · 但一旦 `codesign -s - --entitlements ...`（哪怕只带 `application-identifier`，
+    #     或带 `keychain-access-groups`），模拟器 SpringBoard 就直接**拒绝启动**
+    #     （`FBSOpenApplicationServiceErrorDomain code=1, denied by service delegate`）。
+    # 所以两条路互斥：要么"能启动但 Keychain 不可用"，要么"Keychain 可用但起不来"。
+    # 当前选择保住"能启动"（其余自检项都依赖它），Keychain 往返**如实记为未验**，
+    # 待接入真实 Xcode 工程 + 签名身份（或真机）时补验。entitlements 文件留在
+    # `apps/ios/App/Sekb.entitlements` 备用。
     # 自检用的样本文档（与 Android 侧共用同一批 test resources，避免"两端各造一份样本"）
     for f in "$ROOT"/apps/android/app/src/test/resources/*.pdf; do
         [ -f "$f" ] && cp "$f" "$APP_BUNDLE/"

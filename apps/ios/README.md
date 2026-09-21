@@ -18,7 +18,7 @@
 | **Swift 互操作冒烟** | ✅ | `bash scripts/ios.sh smoke` → **SMOKE OK（5/5）**：Apple 侧 HMAC/SHA256 对齐公知向量、canonical JSON 与 Python 一致、`ToolCallJson.parse` 的 sealed 类导出可用、`Fmt` 与 Android 逐字符一致 |
 | **iOS App 骨架（SwiftUI）** | ✅ | `bash scripts/ios_app.sh run` → 装到 iPhone 17 Pro 模拟器并启动，日志抓到 **`SEKB_IOS_SELFTEST PASS=8 FAIL=0`**：HMAC 向量、规范化 JSON、路由决策、**R10 本机/远端两条对照**、**流式守卫零外泄**、工具调用解析、检索阈值默认值 |
 | **iOS 端口①：传输（NSURLSession）** | ✅ | `apps/ios/App/UrlSessionTransport.swift`：实现共享层 `HttpTransport`（同步语义用信号量、SSE 用 `URLSessionDataDelegate` 逐行回调）。自检实测：`transport_get_host_ollama — code=200 bytes=3474`、`transport_stream_lines — code=200 行数=9`；**iOS 自检 10 PASS / 0 FAIL** |
-| iOS 端口②：凭证（Keychain） | ⏳ | |
+| **iOS 端口②：凭证（Keychain）** | ⚠️ 实现完成 / 往返未验 | `apps/ios/App/KeychainCredentialStore.swift` 实现共享层 `CredentialStore`（接口与 `CredentialCodec` 本轮**一起搬进共享层**，两端同一格式）。自检：空库→nil ✅、清理→nil ✅、轮换规则（共享层 `needsRotation`）✅；**往返 SKIP 且原因明确**：手搓未签名 `.app` 调 Keychain 返回 **-34018 errSecMissingEntitlement**，而 ad-hoc 签名（带任何 entitlements）会让模拟器 SpringBoard **拒绝启动**——两条路互斥。需真实 Xcode 工程 + 签名身份或真机时补验；entitlements 文件已备好在 `apps/ios/App/Sekb.entitlements` |
 | iOS 端口③：嵌入（ONNX/CoreML） | ⏳ | |
 | **iOS 端口④：PDF（PDFKit）** | ✅ | `apps/ios/App/PdfExtractor.swift`：与 Android 同一套**四类结果**（有文本 / 无文本层 / 加密 / 解析失败）+ 先判 `%PDF` 魔数 + 40 万字符上限。自检实测：`pdf_extract_text_layer — 页数=1 字符=78`（**与 Android 端同一份样本的 78 字符/1 页完全一致**）、`pdf_extract_no_text_layer`、`pdf_extract_rejects_non_pdf`；**iOS 自检 13 PASS / 0 FAIL** |
 | iOS 真机性能 | ⏳ 等硬件 | 模拟器只验功能 |
@@ -82,6 +82,12 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
    60s 超时前流不结束，`statusCode` 拿不到（表现为 `code=-1` 而"行数"上万）——
    测的是传输，不该被模型行为影响。`URLSession` 的 delegate 与完成回调**跨队列**，
    状态码要在 `didReceive response` 里加锁记录，不能只在 `didCompleteWithError` 读。
+
+**端口②的一个硬结论（2026-09-21 实测）**：模拟器上"手搓 `.app`"与"Keychain 可用"**互斥**——
+未签名 → `SecItemAdd` 报 `-34018`；`codesign -s - --entitlements ...`（哪怕只带
+`application-identifier`）→ SpringBoard 拒绝启动（`FBSOpenApplicationServiceErrorDomain code=1`）。
+当前选择保住"能启动"（其余自检都依赖它），因此 iOS 自检采用**三态**（PASS/FAIL/**SKIP**，
+与 Android 侧自检同口径）："没验"既不算过、也不算失败，原因写进详情。
 
 ## 与 SEKB 的契约
 

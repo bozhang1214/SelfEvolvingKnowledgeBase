@@ -16,10 +16,13 @@ import SharedCore
 @discardableResult
 func runAndReportSelfTest() -> [CheckResult] {
     let results = runSharedSelfTest()
-    let pass = results.filter { $0.ok }.count
-    report("SEKB_IOS_SELFTEST PASS=\(pass) FAIL=\(results.count - pass)")
+    let pass = results.filter { $0.ok == true }.count
+    let fail = results.filter { $0.ok == false }.count
+    let skip = results.filter { $0.ok == nil }.count
+    report("SEKB_IOS_SELFTEST PASS=\(pass) FAIL=\(fail) SKIP=\(skip)")
     for r in results {
-        report("SEKB_IOS_SELFTEST [\(r.ok ? "PASS" : "FAIL")] \(r.name) — \(r.detail)")
+        let tag = r.ok == nil ? "SKIP" : (r.ok! ? "PASS" : "FAIL")
+        report("SEKB_IOS_SELFTEST [\(tag)] \(r.name) — \(r.detail)")
     }
     return results
 }
@@ -56,7 +59,9 @@ func report(_ line: String) {
 struct CheckResult: Identifiable {
     let id = UUID()
     let name: String
-    let ok: Bool
+    /// 三态：`true` 通过 / `false` 失败 / `nil` **未验（原因写在 detail 里）**。
+    /// 与 Android 侧自检的 PASS/FAIL/SKIP 同口径——"没验"不该被算成"过"。
+    let ok: Bool?
     let detail: String
 }
 
@@ -150,6 +155,42 @@ func runSharedSelfTest() -> [CheckResult] {
 
     // 7) 知识检索的阈值必须来自策略（没有策略时用默认 0.5）
     out.append(.init(name: "retriever_default_threshold", ok: true, detail: "0.5（策略未接入）"))
+
+    // 7.2) **凭证端口（Keychain）**：与 Android 的 CredentialStore 同接口、同编解码格式。
+    //      用独立的 service 名，**不碰真实凭证**（无人值守自检不能有副作用）。
+    let store = KeychainCredentialStore(service: "tech.bos-studio.sekb.credentials.selftest")
+    store.clear()
+    let missing = store.load()
+    out.append(.init(name: "keychain_empty_is_nil", ok: missing == nil, detail: missing == nil ? "空库返回 nil" : "意外有值"))
+
+    let creds = DeviceCredentials(
+        deviceId: "dev-ios-selftest",
+        deviceToken: "tok.abc-123_XYZ",
+        issuedAtMillis: 1_700_000_000_000,
+        expiresAtMillis: 1_700_086_400_000)
+    store.save(credentials: creds)
+    let loaded = store.load()
+    let roundtripOK = loaded?.deviceId == creds.deviceId
+        && loaded?.deviceToken == creds.deviceToken
+        && loaded?.expiresAtMillis == creds.expiresAtMillis
+    if !roundtripOK && store.lastStatus == -34018 {
+        // -34018 = errSecMissingEntitlement：手搓未签名的 .app 在模拟器上拿不到 Keychain。
+        // 这是**环境限制**而不是实现缺陷（ad-hoc 签名会让 SpringBoard 拒绝启动，见 scripts/ios_app.sh），
+        // 所以如实播报"未验 + 原因"，不伪装成 FAIL 也不伪装成 PASS。
+        out.append(.init(name: "keychain_roundtrip", ok: nil,
+                         detail: "未验：OSStatus=-34018（手搓未签名包无 Keychain entitlement；需 Xcode 工程+签名身份）"))
+    } else {
+        out.append(.init(name: "keychain_roundtrip", ok: roundtripOK,
+                         detail: "读回 deviceId=\(loaded?.deviceId ?? "-") OSStatus=\(store.lastStatus)"))
+    }
+    // 轮换判定也在共享层：剩余不足 1/3 就该换证
+    let rotating = DeviceCredentials(deviceId: "d", deviceToken: "t",
+                                     issuedAtMillis: 0, expiresAtMillis: 3000)
+    out.append(.init(name: "credential_rotation_rule",
+                     ok: rotating.needsRotation(nowMillis: 2500) && !rotating.needsRotation(nowMillis: 1000),
+                     detail: "剩余 1/6 需轮换=true；剩余 2/3 需轮换=false"))
+    store.clear()
+    out.append(.init(name: "keychain_clear", ok: store.load() == nil, detail: "清理后为空"))
 
     // 7.5) **PDF 端口（PDFKit）**：与 Android 侧同一套四类结果语义。
     //      样本直接复用 Android 的 test resources（拷进 .app 包），避免两端各造一份样本。
@@ -245,8 +286,9 @@ struct ContentView: View {
 
                 List(results) { r in
                     HStack {
-                        Image(systemName: r.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundStyle(r.ok ? .green : .red)
+                        Image(systemName: r.ok == nil ? "questionmark.circle"
+                                      : (r.ok! ? "checkmark.circle.fill" : "xmark.circle.fill"))
+                            .foregroundStyle(r.ok == nil ? .orange : (r.ok! ? .green : .red))
                         VStack(alignment: .leading) {
                             Text(r.name).font(.subheadline).monospaced()
                             Text(r.detail).font(.caption).foregroundStyle(.secondary)
