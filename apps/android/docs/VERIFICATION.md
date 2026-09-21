@@ -25,6 +25,30 @@ bash scripts/android.sh test        # 191 tests, 0 failed（功能 187 + 契约 
 | **编排器层面真的不发** | `ChatOrchestratorTest.device only data is not sent at all when edge endpoint is remote`：端侧 0 次调用、云端 0 次调用、`text=""`、`error` 里有可读原因 |
 | **普通数据不受影响** | 同一批测试里 `non device-only traffic is unaffected by endpoint locality`：普通数据打远端端点仍是 `edge_preferred`（R10 不误伤端云协同） |
 
+### 1.0.3 KMP 共享模块（M4 第 5 步，2026-09-21）
+
+```bash
+bash scripts/android.sh test        # 202 tests, 0 failed（单测现在测的是 :shared 里的代码）
+bash scripts/android.sh assemble    # app-arm64-v8a-debug.apk（45.4 MB）
+bash scripts/emulator.sh --background && bash scripts/android.sh install
+adb shell am start -n com.sekb.ondevice/.MainActivity --ez selftest true   # PASS=27 FAIL=0
+```
+
+| 项 | 结果 |
+|---|---|
+| 模块划分 | `apps/shared/src/commonMain` = **26 个文件 / 3,395 行纯逻辑**；`apps/android/app` 剩 **14 个文件**（Compose UI、OkHttp、Keystore、SQLite、ONNX、设备工具、装配、自检） |
+| 依赖方向 | `:app` → `:shared`（app 的 202 个单测直接测共享层代码，无需复制） |
+| 平台泄漏 | `shared` 里没有任何 `android.*` / `java.*` / okhttp / onnxruntime import（这是能编译到 iOS 的前提） |
+
+**踩到并解决的三个环境坑**（记下来，否则下一个人会重踩）：
+1. **AGP 9 禁止 `com.android.library` + KMP**（报 "not compatible ... since AGP 9.0"），必须用 `com.android.kotlin.multiplatform.library`；
+2. 该插件**没有 `compileSdkMinor`**，而本机只有 `platforms/android-36.1` → 在仓库内 `.tooling/android-sdk` 造了
+   `platforms/android-36`（软链 + 改写 `source.properties`/`package.xml`），`sdk.dir` 指向它（`local.properties` 不入库）；系统 SDK 未改动；
+3. Kotlin/Native 要写 `~/.konan`（工作区外）→ 加 `KONAN_DATA_DIR=$ROOT/.tooling/konan`。
+
+**native target（iOS/Mac）默认关闭**：`-PsekbNativeTargets=true` 打开——一打开，配置阶段就会准备
+Kotlin/Native 工具链（数百 MB），把日常 Android 构建拖成分钟级。
+
 ### 1.0.2 依赖去平台化（M4 第 2 步，2026-09-21）
 
 ```bash

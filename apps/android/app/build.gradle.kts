@@ -122,6 +122,8 @@ kotlin {
 }
 
 dependencies {
+    // 端侧共享层（纯逻辑）：路由/守卫/编排/检索/协议/JSON 门面
+    implementation(project(":shared"))
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.activity:activity-compose:1.8.2")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
@@ -137,6 +139,9 @@ dependencies {
 
     // 网络：SSE（流式）必须用 OkHttp 的流式 body，不能用一次性请求
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // JSON 门面底层（core/Json.kt）：选它是因为 **JVM 与 iOS/HarmonyOS 都有产物**，
+    // 这样抽 KMP shared 时 JSON 层能进 commonMain（org.json 做不到，它只在 JVM/Android 有）。
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     // 端侧嵌入：ONNX Runtime（跑 bge-small-zh-v1.5，与云端同空间，见 embed/OnnxBgeEmbedding.kt）
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     // PDF 文本抽取（Apache-2.0）。只抽文本层，不做 OCR——见 ui/PdfExtractor.kt 的说明。

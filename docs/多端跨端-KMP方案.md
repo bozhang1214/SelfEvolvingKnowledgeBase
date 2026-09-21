@@ -347,7 +347,7 @@ for await chunk in orchestrator.send(text) { /* 更新 SwiftUI 状态 */ }
 |---|---|---|
 | 1 | **契约夹具先行**：协议/字段、6 类升级信号、隐私边界用例固化成 `apps/contract/*.json`；Android 接上 runner | ✅ **已完成**：186 测试全绿；改夹具立刻红（Gradle 输入已接线） |
 | 2 | **依赖去平台化（不建 KMP 模块）**：`org.json` 全量收敛到 `JsonX`；`HttpTransport` 拆接口/实现；`File/UUID/concurrent` 换多平台 API | Android 行为零变化（自检 27/27、检索数字不变） |
-| 3 | 建 `shared/`，**先只加 androidTarget + jvmTarget**，把 28 个可移植文件搬进来 | Android 编译通过；原 182 用例中可共享部分在 **JVM** 上跑绿 |
+| 3 | 建 `apps/shared`（KMP），把 26 个纯逻辑文件搬进 `commonMain` | ✅ **已完成（2026-09-21）**：**202 单测全绿**（app 模块单测直接测共享层代码）+ 模拟器自检 **27/27**；平台实现仍留在 app 模块，shared 零平台依赖。实测坑：AGP 9 禁止 `com.android.library`+KMP（须用 `com.android.kotlin.multiplatform.library`）；该插件无 `compileSdkMinor`（本机只有 android-36.1 → 仓库内 `.tooling/android-sdk` 自造 `platforms/android-36`）；native target 做成 `-PsekbNativeTargets=true` 开关 |
 | 4 | 加 `iosArm64` / `iosSimulatorArm64`，补齐 `iosMain` 端口（NSURLSession/Keychain/SQLite/ONNX/PDFKit） | `:shared:linkDebugFrameworkIosSimulatorArm64` 通过；P1/P3 出数 |
 | 5 | Kotlin 升到 ≥2.2.21（owner 已同意）+ AGP 9 对齐；**单独提交 + 回滚 tag** | Android 全量验证复跑：182 测试 + 自检 27/27 + 检索评测 |
 | 6 | iOS SwiftUI 端成形（原生 UI） | 自检项与 Android 等价；P2/P4 出数 |

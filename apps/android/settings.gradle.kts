@@ -24,3 +24,9 @@ dependencyResolutionManagement {
 
 rootProject.name = "sekb-ondevice-agent"
 include(":app")
+
+// 端侧共享层（KMP）：源码在 apps/shared，但挂在 Android 构建里（wrapper 与 CI 都不用动）。
+// 为什么不上移 wrapper：那样要同时改 scripts/android.sh 与 .github/workflows/android.yml 的缓存键，
+// 属于"能少动就少动"的基建改动；等 iOS 侧真的需要独立构建时再评估（记录在 KMP 方案文档）。
+include(":shared")
+project(":shared").projectDir = file("../shared")

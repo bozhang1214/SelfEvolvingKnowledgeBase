@@ -8,4 +8,6 @@ plugins {
     id("com.android.application") version "9.0.0" apply false
     id("org.jetbrains.kotlin.android") version "2.2.10" apply false
     id("org.jetbrains.kotlin.plugin.compose") version "2.2.10" apply false
+    // 端侧共享层（apps/shared）：KMP 插件。版本与 Kotlin 对齐（2.2.10）。
+    id("org.jetbrains.kotlin.multiplatform") version "2.2.10" apply false
 }

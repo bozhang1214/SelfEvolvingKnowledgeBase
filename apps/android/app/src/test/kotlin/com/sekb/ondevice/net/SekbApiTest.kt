@@ -127,8 +127,10 @@ class SekbApiTest {
 
         assertEquals(listOf("端", "侧"), tokens)
         assertEquals(listOf("正在检索"), thinking)
-        assertEquals("edge", result.execution!!.primaryPlane)
-        assertEquals("qwen3.5-4b", result.execution.model)
+        // 注意：execution 现在来自 `:shared` 模块，跨模块无法 smart cast → 先取局部变量（!!）
+        val exec = result.execution!!
+        assertEquals("edge", exec.primaryPlane)
+        assertEquals("qwen3.5-4b", exec.model)
         assertEquals("c-1", result.conversationId)      // 会话 ID 必须回流
         assertEquals("Bearer dtok", t.lastCall().headers["Authorization"])
         assertTrue(t.lastCall().headers["Accept"].isNullOrEmpty().not() ||

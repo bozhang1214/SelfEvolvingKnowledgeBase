@@ -40,6 +40,10 @@ export ANDROID_USER_HOME="$ROOT/.tooling/android-home"
 # ⚠️ 不要再设 ANDROID_PREFS_ROOT（哪怕设成同一个路径）：AGP 9 会因此直接崩在
 #    "AndroidLocationsBuildService ... AndroidDirectoryCreator" 上（实测）。
 export ANDROID_AVD_HOME="$ROOT/.tooling/android-avd"
+# KOTLIN/NATIVE（KMP 的 iOS/Mac target）默认把工具链下载到 ~/.konan —— 又是"工作区外写"，
+# 在受限沙箱里直接失败（实测：FileNotFoundException .../kotlin-native-prebuilt-.../.lock）。
+# 与 GRADLE_USER_HOME/ANDROID_USER_HOME 同一处理：收进仓库内 .tooling/。
+export KONAN_DATA_DIR="${KONAN_DATA_DIR:-$ROOT/.tooling/konan}"
 mkdir -p "$GRADLE_USER_HOME" "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME"
 
 # 3) Android SDK：优先 apps/android/local.properties 里的 sdk.dir

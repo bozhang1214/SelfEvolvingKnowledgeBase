@@ -59,7 +59,7 @@ related: [docs/多端跨端-KMP方案, docs/多端跨端-CMP方案评估, docs/�
 
 | 事实 | 数字 | 出处 |
 |---|---|---|
-| Android 端 main 代码 | 5,673 行 = **3,723 行（66%）纯 Kotlin（无任何 JVM/platform import）** + 1,950 行平台/端口代码 | `apps/android/app/src/main` |
+| Android 端 main 代码 | 拆成两块：**`apps/shared/commonMain` 26 文件 / 3,395 行纯逻辑**（零平台 import）+ `apps/android/app` 14 文件（Compose UI/OkHttp/Keystore/SQLite/ONNX/设备工具/装配/自检） | `apps/shared`、`apps/android/app/src/main` |
 | 单测可共享比例 | **≈173 / 202（86%）**（功能 158 + 契约夹具 4 + JSON 门面 11；当前总量 **202**，`scripts/android.sh test` 全绿） | `apps/android/app/src/test` |
 | 端口接口**已经存在** | 5 个：`HttpTransport`/`EmbeddingProvider`/`VectorStore`/`DocumentRegistry`/`CredentialStore` | `apps/android/.../net`、`embed`、`rag`、`device` |
 | 共享逻辑单次开销（JVM 实测） | `PlaneRouter.decide` **1.135 μs**、`ToolCallJson.parse` **0.923 μs**、`Chunking.split(2KB)` **9.040 μs** | 2026-09-21 微基准（临时测试，已删） |
@@ -230,7 +230,7 @@ apps/
 | 1 | **契约夹具先行**（协议/字段/升级信号/隐私用例/评测集 JSON 化）+ Android runner | ✅ **已完成（2026-09-21）**：186 测试全绿（含契约 4），且可证伪（改夹具即红） |
 | 2 | **依赖去平台化**：`org.json` → `JsonX` 门面；`HttpTransport` 拆接口/实现；`File/UUID` 变端口 | ✅ **已完成（2026-09-21）**：**202 测试全绿**、自检 27/27、检索数字不变 |
 | 4 | ✅ **P0 包体瘦身（已完成 2026-09-21）**：ABI 只发 arm64-v8a + 排除 BouncyCastle PQC 参数 | **debug APK 102 MB → 41.6 MB**；自检 **27/27** 不回归（R8 留待签名的 release + E2E 轮次） |
-| 3 | 建 `shared/`，先加 `androidTarget` + `jvmTarget`，搬 3,723 行 | Android 编译通过；158 个可共享用例在 JVM 上跑绿 |
+| 3 | 建 `apps/shared`（KMP），搬 26 个纯逻辑文件（3,395 行）进 `commonMain` | ✅ **已完成（2026-09-21）**：**202 测试全绿** + 自检 **27/27**；平台实现留在 app 模块，shared 保持零平台依赖 |
 | 4 | 加 `iosArm64`/`iosSimulatorArm64`/`macosArm64` + 补 `iosMain` 端口 | `linkDebugFrameworkIosSimulatorArm64` 通过；微基准与体积出数 |
 | 5 | Kotlin 2.2.10 → **≥2.2.21**（**单独提交 + 回滚 tag**） | Android 全量复跑：202 测试 + 自检 27/27 + 检索评测 |
 | 6 | iOS（SwiftUI）成形 | 见 §7 M5 验收 |
