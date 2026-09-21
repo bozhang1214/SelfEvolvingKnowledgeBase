@@ -108,35 +108,35 @@ class PlaneRouter(val config: EdgeRuntimeConfig) {
     fun describe(decision: RouteDecision): String =
         "${decision.plane.wire}:${decision.reason}:${decision.tier}"
 
-    /**
-     * 这个端点是否指向**本机**（R10 的判据）。
-     *
-     * 为什么按"地址"而不是按"配置项名"判断：端侧端点是可配置的（模拟器 `10.0.2.2`、
-     * 真机局域网 IP、桌面宿主 Tailscale IP 都合法），**只有回环地址才等价于"这台设备自己"**。
-     * 判据故意保守：拿不准（域名、0.0.0.0、解析失败）一律当**非本机**——
-     * 宁可拒绝执行，也不把 DEVICE_ONLY 数据发出去。
-     */
-    fun isLocalEndpoint(url: String): Boolean {
-        val host = hostOf(url) ?: return false
-        val h = host.removePrefix("[").removeSuffix("]").lowercase()
-        return h == "127.0.0.1" || h == "localhost" || h == "::1" ||
-            h == "0:0:0:0:0:0:0:1" || h == "localhost.localdomain"
-    }
-
-    /** 从 URL 里取 host（不引 java.net.URI：要为 KMP 铺路，纯字符串解析更省事）。 */
-    fun hostOf(url: String): String? {
-        val afterScheme = url.substringAfter("://", missingDelimiterValue = "")
-        if (afterScheme.isEmpty()) return null
-        val authority = afterScheme.substringBefore('/').substringBefore('?')
-        if (authority.isEmpty() || authority.startsWith("@")) return null
-        val hostPart = authority.substringAfter('@')          // 去掉 user:pass@
-        return when {
-            hostPart.startsWith("[") -> hostPart.substringBefore(']').removePrefix("[")  // IPv6
-            else -> hostPart.substringBefore(':').ifEmpty { null }
-        }
-    }
-
     companion object {
+        /**
+         * 这个端点是否指向**本机**（R10 的判据）。
+         *
+         * 为什么按"地址"而不是按"配置项名"判断：端侧端点是可配置的（模拟器 `10.0.2.2`、
+         * 真机局域网 IP、桌面宿主 Tailscale IP 都合法），**只有回环地址才等价于"这台设备自己"**。
+         * 判据故意保守：拿不准（域名、0.0.0.0、解析失败）一律当**非本机**——
+         * 宁可拒绝执行，也不把 DEVICE_ONLY 数据发出去。
+         */
+        fun isLocalEndpoint(url: String): Boolean {
+            val host = hostOf(url) ?: return false
+            val h = host.removePrefix("[").removeSuffix("]").lowercase()
+            return h == "127.0.0.1" || h == "localhost" || h == "::1" ||
+                h == "0:0:0:0:0:0:0:1" || h == "localhost.localdomain"
+        }
+
+        /** 从 URL 里取 host（不引 java.net.URI：要为 KMP 铺路，纯字符串解析更省事）。 */
+        fun hostOf(url: String): String? {
+            val afterScheme = url.substringAfter("://", missingDelimiterValue = "")
+            if (afterScheme.isEmpty()) return null
+            val authority = afterScheme.substringBefore('/').substringBefore('?')
+            if (authority.isEmpty() || authority.startsWith("@")) return null
+            val hostPart = authority.substringAfter('@')          // 去掉 user:pass@
+            return when {
+                hostPart.startsWith("[") -> hostPart.substringBefore(']').removePrefix("[")  // IPv6
+                else -> hostPart.substringBefore(':').ifEmpty { null }
+            }
+        }
+
         const val REASON_DEVICE_ONLY = "device_only_data"
         /**
          * DEVICE_ONLY 数据 + **非本机**端侧端点 → 拒绝执行（R10）。

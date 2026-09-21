@@ -346,10 +346,10 @@ for await chunk in orchestrator.send(text) { /* 更新 SwiftUI 状态 */ }
 | 步 | 动作 | 验收 |
 |---|---|---|
 | 1 | **契约夹具先行**：协议/字段、6 类升级信号、隐私边界用例固化成 `apps/contract/*.json`；Android 接上 runner | ✅ **已完成**：186 测试全绿；改夹具立刻红（Gradle 输入已接线） |
-| 2 | **依赖去平台化（不建 KMP 模块）**：`org.json` 全量收敛到 `JsonX`；`HttpTransport` 拆接口/实现；`File/UUID/concurrent` 换多平台 API | Android 行为零变化（自检 26/26、检索数字不变） |
+| 2 | **依赖去平台化（不建 KMP 模块）**：`org.json` 全量收敛到 `JsonX`；`HttpTransport` 拆接口/实现；`File/UUID/concurrent` 换多平台 API | Android 行为零变化（自检 27/27、检索数字不变） |
 | 3 | 建 `shared/`，**先只加 androidTarget + jvmTarget**，把 28 个可移植文件搬进来 | Android 编译通过；原 182 用例中可共享部分在 **JVM** 上跑绿 |
 | 4 | 加 `iosArm64` / `iosSimulatorArm64`，补齐 `iosMain` 端口（NSURLSession/Keychain/SQLite/ONNX/PDFKit） | `:shared:linkDebugFrameworkIosSimulatorArm64` 通过；P1/P3 出数 |
-| 5 | Kotlin 升到 ≥2.2.21（owner 已同意）+ AGP 9 对齐；**单独提交 + 回滚 tag** | Android 全量验证复跑：182 测试 + 自检 26/26 + 检索评测 |
+| 5 | Kotlin 升到 ≥2.2.21（owner 已同意）+ AGP 9 对齐；**单独提交 + 回滚 tag** | Android 全量验证复跑：182 测试 + 自检 27/27 + 检索评测 |
 | 6 | iOS SwiftUI 端成形（原生 UI） | 自检项与 Android 等价；P2/P4 出数 |
 | 7 | 鸿蒙 spike（3 天，四条验收见 RFC §4 D2） | 通过 → 走 ArkUI 原生 UI；不通过 → ArkTS 重写逻辑 + 契约夹具 |
 | 8 | 桌面（headless 宿主优先，GUI 见桌面审计文档） | 手机端能连上桌面宿主并跑通端侧推理，路由日志出现 `edge` 记录 |

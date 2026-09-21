@@ -25,6 +25,28 @@ bash scripts/android.sh test        # 191 tests, 0 failed（功能 187 + 契约 
 | **编排器层面真的不发** | `ChatOrchestratorTest.device only data is not sent at all when edge endpoint is remote`：端侧 0 次调用、云端 0 次调用、`text=""`、`error` 里有可读原因 |
 | **普通数据不受影响** | 同一批测试里 `non device-only traffic is unaffected by endpoint locality`：普通数据打远端端点仍是 `edge_preferred`（R10 不误伤端云协同） |
 
+### 1.0.1 P0 包体瘦身 + 自检 27/27（M4 第 4 步，2026-09-21）
+
+```bash
+bash scripts/android.sh assemble     # → app-arm64-v8a-debug.apk
+bash scripts/android.sh install && adb shell am start -n com.sekb.ondevice/.MainActivity --ez selftest true
+```
+
+| 项 | 改前 | 改后 | 证据 |
+|---|---|---|---|
+| debug APK 体积 | **101,945,162 B（≈102 MB）** | **41,595,392 B（≈41.6 MB）** | `ls -la app/build/outputs/apk/debug/` |
+| APK 内 ABI | 4 个（x86_64/x86/arm64-v8a/armeabi-v7a） | **仅 arm64-v8a** | `unzip -l` → `lib/arm64-v8a/` |
+| ONNX Runtime 原生库 | 70.4 MB（4 ABI） | **17.6 MB（1 ABI）** | `unzip -l` 明细 |
+| BouncyCastle PQC 参数文件 | ≈**6.7 MB** | **0**（`unzip -l \| grep -c pqc` = 0） | PDFBox 只用文本层，这些文件永不被读 |
+| 模拟器自检 | PASS=26 | **PASS=27 FAIL=0 SKIP=1** | 新增 `privacy_device_only_local_gate` 也 PASS |
+
+> 做法：`splits.abi { include("arm64-v8a") }` + `packaging.resources.excludes += "org/bouncycastle/pqc/**"`。
+> **未做**：release 开 R8（dex 仍 ~66 MB，是下一个大头）——它需要签名的 release 包 + 一轮 E2E 验证，
+> 留到能跑完整验收的轮次再做，避免"体积好看了但运行时崩"。
+
+> 新增自检项实测输出：`[PASS] privacy_device_only_local_gate — edgeBaseUrl=http://10.0.2.2:11434/v1
+> 本机=false 端侧调用=0 原因=escalation_blocked:device_only_requires_local_runtime 输出长度=0`。
+
 > ⚠️ **这会改变模拟器上的产品行为**：模拟器的 `edgeBaseUrl` 是 `10.0.2.2`（开发机）→
 > **DEVICE_ONLY 请求会被明确拒绝**（不再发给开发机上的 Ollama）。这是隐私边界的正确语义
 > （"本机"≠"局域网里的另一台机器"）；真机接入本地运行时后才会有可用的 DEVICE_ONLY 端侧推理。

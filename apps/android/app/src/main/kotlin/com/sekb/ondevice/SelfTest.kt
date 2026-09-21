@@ -97,6 +97,48 @@ object SelfTest {
                     "text=${out.text.take(40)}")
         }
 
+        // 3.5 R10（M4）：DEVICE_ONLY + 非本机端点 → 一个请求都不许发。
+        // 模拟器里 edgeBaseUrl=10.0.2.2（开发机）正是"非本机"，所以这条自检应当看到**拒绝**；
+        // 若哪天它变成"照发"，就是隐私硬边界被破坏——这比"功能不可用"严重得多。
+        val blockedEdge = object : com.sekb.ondevice.edge.EdgeLlm {
+            var calls = 0
+            override fun streamChat(
+                model: String, messages: List<ChatMessage>, maxTokens: Int,
+                jsonMode: Boolean, onToken: (String) -> Unit,
+            ): com.sekb.ondevice.edge.EdgeCompletion {
+                calls++
+                return com.sekb.ondevice.edge.EdgeCompletion("不该出现", 0.0, 0.0, true, "")
+            }
+            override fun complete(
+                model: String, messages: List<ChatMessage>, maxTokens: Int, jsonMode: Boolean,
+            ): com.sekb.ondevice.edge.EdgeCompletion {
+                calls++
+                return com.sekb.ondevice.edge.EdgeCompletion("不该出现", 0.0, 0.0, true, "")
+            }
+        }
+        val blockedOrch = ChatOrchestrator(
+            config = cfg, router = router, edgeLlm = blockedEdge, cloud = edgeOnlyCloud,
+            tools = container.tools,
+        )
+        val blockedOut = runCatching {
+            blockedOrch.send("我的联系人里有谁", deviceData = true)
+        }.getOrNull()
+        val edgeIsLocal = PlaneRouter.isLocalEndpoint(cfg.edgeBaseUrl)
+        val refuseReason = "escalation_blocked:${PlaneRouter.REASON_DEVICE_ONLY_NOT_LOCAL}"
+        val gateOk = blockedOut != null && blockedEdge.calls == 0 &&
+            if (edgeIsLocal) {
+                // 本机端点：允许执行（但仍不许升级）
+                blockedOut.escalateReason != refuseReason
+            } else {
+                // 非本机端点（模拟器就是这种）：必须拒绝，且不能吐出任何内容
+                blockedOut.escalateReason == refuseReason && blockedOut.text.isEmpty()
+            }
+        record(
+            "privacy_device_only_local_gate", gateOk,
+            "edgeBaseUrl=${cfg.edgeBaseUrl} 本机=$edgeIsLocal 端侧调用=${blockedEdge.calls} " +
+                "原因=${blockedOut?.escalateReason} 输出长度=${blockedOut?.text?.length}",
+        )
+
         // 4. 工具闸门：联系人工具**未授权**必须被拦下（越权拦截率的来源）
         val contactsCall = ToolCall("device_contacts_search", mapOf("query" to "张"))
         val denied = container.tools.execute(contactsCall)

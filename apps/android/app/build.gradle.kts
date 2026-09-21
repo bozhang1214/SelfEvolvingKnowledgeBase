@@ -71,7 +71,29 @@ android {
     }
 
     packaging {
-        resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}")
+        // P0 瘦身（M4 第 4 步，2026-09-21）：实测 debug APK 里 PDFBox 的传递依赖
+        // BouncyCastle 带了一堆后量子密码（PQC）参数文件（picnic/sike），约 6.7 MB，
+        // 而端侧只用 PDFBox 抽文本层——这些参数文件永远不会被读到。排除它们。
+        resources.excludes += setOf(
+            "/META-INF/{AL2.0,LGPL2.1}",
+            "org/bouncycastle/pqc/**",
+            "META-INF/versions/**/org/bouncycastle/pqc/**",
+        )
+    }
+
+    // P0 瘦身之二：只发 arm64-v8a。
+    // 实测 onnxruntime-android 的 AAR 默认带 4 个 ABI，共 70.4 MB（占 debug APK 的 69%）：
+    //   x86_64 20.3 MB / x86 20.3 MB / arm64-v8a 17.6 MB / armeabi-v7a 12.3 MB
+    // 去掉三个用不到的 ABI ≈ −53 MB。
+    // 为什么现在就能这么干：本项目唯一在用的模拟器镜像是 arm64-v8a（见 docs/VERIFICATION.md 环境节），
+    // 真机也全是 arm64；等真需要 x86 模拟器时再加回来（改这一行即可）。
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a")
+            isUniversalApk = false
+        }
     }
 }
 
