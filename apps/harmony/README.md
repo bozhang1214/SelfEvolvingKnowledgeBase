@@ -79,7 +79,27 @@ iOS 能通过 Kotlin Multiplatform 共用纯逻辑，**鸿蒙不能**。所以�
 （"依赖供给"是这条路线最大的风险——现在它从"担心"变成了"已验证"。
 注意版本线有两套：文档 三方库表用 `-1.0.0`，官方 sample 用 `-0.3.0-04`。）
 
-**spike 第 1 条（KMP 产物 + HAP 通过 NAPI 调用）：🟡 配方已拿全，尚未实际编译。**
+**spike 第 1 条（KMP 产物 + HAP 通过 NAPI 调用）：🟢 编译半段已完成（2026-09-21 实测）**
+
+在**独立 Gradle 构建**（`apps/harmony/spike/`，故意不并进 `apps/android` 的 AGP 9 构建）里实编通过：
+
+```bash
+cd apps/harmony/spike && ./gradlew :knspike:linkDebugSharedOhosArm64 :knspike:linkDebugSharedOhosX64
+# BUILD SUCCESSFUL
+```
+
+| 证据 | 实测 |
+|---|---|
+| 产物 | `knspike/build/bin/ohosArm64/debugShared/libkn.so`（**ELF 64-bit LSB shared object, ARM aarch64**）与 `ohosX64/.../libkn.so`（x86-64） |
+| 导出符号（NAPI 按名字取） | `nm -D` → `T sekb_spike_ping`、`T sekb_spike_echo_len` |
+| 头文件 | 同时产出 `libkn_api.h`（HAP 侧 C/NAPI 用） |
+| 工具链自动就位 | 构建时自动从该 nexus 拉取 **OHOS sysroot（`sysroot-hms-aarch64-6.0.2.640-02`）** 与 **毕昇 LLVM 19（`llvm-1914-aarch64-macos-dev-10`）** 到仓库内 `.tooling/konan/` |
+| 踩到的坑 | ① 空的 `kotlin.native.home=` 会让插件报 `Cannot convert '' to File`（删掉即可）；② `@CName` 需要 `@file:OptIn(kotlin.experimental.ExperimentalNativeApi::class)`；③ sample 的 wrapper 指向 **Gradle 8.14.3（腾讯镜像）**，与它的 Kotlin fork 匹配 |
+
+**仍未做的半段**：把 `libkn.so` 放进 HAP、经 NAPI 调用并**装到设备/模拟器**——按官方文档
+"鸿蒙应用必须完成签名才能安装"，这需要 **owner 的华为开发者账号**（DevEco 登录 + 签名配置）。
+
+**spike 第 1 条（原始描述）：🟡 配方已拿全，尚未实际编译。**
 从官方 KMP sample（`gitcode.com/CPF-KMP-CMP/kmp-cmp-example` 的 `kmp-example` 分支，
 已 clone 到 `.tooling/ohos-spike/sample`）抄到的**关键配方**：
 
