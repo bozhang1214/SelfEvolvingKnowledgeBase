@@ -122,8 +122,23 @@ ohosX64   { /* 模拟器/x86_64 用 */ }
 AGP 8.11.2（sample 用 AGP 8；**我们现有 Android 构建是 AGP 9** → spike 必须用**独立 Gradle 构建**，
 否则会把已验证的 Android 基线搅乱）。
 
-**spike 第 3 条（ONNX Runtime 自建）：❌ 被网络卡死**——ORT 源码在 GitHub（本机实测 HTTP 000），
-需先找 AtomGit/GitCode 上的 OHOS 移植镜像。
+**spike 第 3 条（ONNX Runtime 自建）：🟡 找到可用镜像，源码已开始拉取（2026-09-21）**
+
+| 候选源 | 实测 |
+|---|---|
+| `code.ruyicommunity.cn/xw1216/onnxruntime`（社区 OHOS 移植，带 `docs/ohos/build_deploy_usage.md`） | **HTTP 200** ✅ 已 `git clone --depth 1` |
+| `gitcode.com/OpenHarmony-AI-Components/ohos_model_benchmark` | **HTTP 200**（旁证：OHOS AI 组件生态存在） |
+| `gitcode.com/openharmony/third_party_onnxruntime` | 404（路径不对） |
+| GitHub 官方源码 | HTTP 000（不可达，已排除） |
+
+该移植的构建入口是 `tools/ci_build/build.py --ohos --ohos_arch arm64 --ohos_ndk_root <NDK>`
+（文档示例给的是 riscv64，arm64 同理；本机 OHOS NDK 已实测可编 aarch64 musl ELF）。
+**待做**：实际编译 `libonnxruntime.so`（ONNX Runtime 体积大、编译耗时长，属独立一轮）。
+
+**hvigor / ohpm CLI 已确认可用**（HAP 壳工程可以命令行构建）：
+`/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw`、`.../tools/ohpm/bin/ohpm`。
+→ spike 第 1 条的"HAP 半段"可以本地做出**未签名 HAP 包**；只有**装到设备/模拟器**需要 owner 的
+华为开发者账号（官方明确"鸿蒙应用必须完成签名才能安装"）。
 
 **spike 第 4 条（HAP 能装能起）：⛔ 需要 owner 的华为开发者账号**（DevEco 模拟器登录 + 应用签名）。
 
