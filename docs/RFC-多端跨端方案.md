@@ -2,25 +2,31 @@
 title: 多端跨端收敛方案（Android / iOS / 鸿蒙 / Mac）
 layer: 设计层
 owner: SEKB Team
-status: v1.0 收敛版（待 owner 确认）
-version: v1.0.0
+status: v1.0 已确认（2026-09-21 owner 通过 §9 的 6 条）
+version: v1.0.1
 last-updated: 2026-09-21
-based-on-commit: fe78ac7
-related: [docs/多端跨端-KMP方案, docs/多端跨端-CMP方案评估, docs/多端跨端-桌面端方案审计, docs/RFC-端云协同与端侧Agent, apps/README]
+based-on-commit: 945f07a
+related: [docs/多端跨端-KMP方案, docs/多端跨端-CMP方案评估, docs/多端跨端-桌面端方案审计, docs/多端跨端-工程议题（网络层·包体·热修复）, docs/RFC-端云协同与端侧Agent, apps/README]
 ---
 
-# 多端跨端收敛方案（Android / iOS / 鸿蒙 / Mac）· v1.0（待确认）
+# 多端跨端收敛方案（Android / iOS / 鸿蒙 / Mac）· v1.0（**已确认**）
 
 > **这份文档是唯一的决策入口**：四端做什么、共用什么、按什么顺序、各自的验收数字。
-> 细节与证据在四份支撑文档里：主线详设 [`多端跨端-KMP方案.md`](多端跨端-KMP方案.md)、
+> 细节与证据在五份支撑文档里：主线详设 [`多端跨端-KMP方案.md`](多端跨端-KMP方案.md)、
 > 备选评估 [`多端跨端-CMP方案评估.md`](多端跨端-CMP方案评估.md)、
 > 桌面存证 [`多端跨端-桌面端方案审计.md`](多端跨端-桌面端方案审计.md)、
+> 工程议题（网络层/包体/热修复）[`多端跨端-工程议题（网络层·包体·热修复）.md`](多端跨端-工程议题（网络层·包体·热修复）.md)、
 > 原设计 [`RFC-端云协同与端侧Agent.md`](RFC-端云协同与端侧Agent.md)（路由/升级/隐私边界）。
 >
-> **owner 已确认的输入（2026-09-21）**：
-> ① UI **各端原生**，不用跨端统一 UI（CMP 评估留档为备选）；
-> ② 同意 Kotlin 升到 ≥2.2.21（隔离提交 + 回滚 tag）；
-> ③ **桌面（Windows/Ubuntu）搁置**，计入跟踪项（`docs/BACKLOG.md` D16）。
+> **owner 已确认（2026-09-21）**：
+> ① 范围 = **Android / iOS / 鸿蒙 / Mac**，桌面（Windows/Ubuntu）搁置（跟踪项 `docs/BACKLOG.md` D16）；
+> ② UI **各端原生**（Compose / SwiftUI / ArkUI，Mac 复用 iOS 的 SwiftUI），CMP 归档为备选；
+> ③ 同意 Kotlin 升到 ≥2.2.21（隔离提交 + 回滚 tag）；
+> ④ 顺序 = M4 共享层 → iOS → 鸿蒙 spike → Mac；
+> ⑤ 鸿蒙先 3 天 spike（四条验收，不过则退 ArkTS + 契约夹具）；
+> ⑥ **R10（`DEVICE_ONLY` 语义收口）放进 M4**；⑦ 允许改 CI 加 macOS runner。
+> **另有三条工程议题待定**（网络层 libcurl / 包体与插件化 / 热修复）：
+> 结论与依据见 [`多端跨端-工程议题（网络层·包体·热修复）.md`](多端跨端-工程议题（网络层·包体·热修复）.md) §0 与 §5（S1–S4）。
 
 ---
 
@@ -116,7 +122,12 @@ CMP 评估文档里那 16 项能力对照与 12 条待实测门槛（V-1…V-12�
 
 ### D2 · 鸿蒙：KMP 逻辑 + ArkUI 原生 UI（**先 3 天 spike**）
 
-事实前提（外部 + 本机实测）：
+> **"spike" 是什么**：不是"试试看"，而是**有明确期限、有可证伪验收、有失败出口的技术验证**——
+> 目的是用**最小代价**把一个"不做就不知道行不行"的关键假设问出答案，**答案可以是"不行"**。
+> 做法：只写能验证假设的最小代码（不接产品、不做 UI），跑完就写结论并**按结论选路**，
+> 不允许"反正写了点，就继续往下做"。本端 spike 的产出只有两样：**一份结论 + 四条验收的原始日志**。
+>
+> 事实前提（外部 + 本机实测）：
 - 官方 Kotlin/Native **没有 OHOS target**；华为在 HDC 2026 发布社区版 **CPF-KMP-CMP**
   （基于 KMP 2.2.21 + CMP 1.9.2，新增 `OHOS_ARM64`/`OHOS_X64`，毕昇 LLVM 19 出 ELF）——**Beta + 社区分叉**；
 - 本机 **已实测**：OHOS NDK（`aarch64-unknown-linux-ohos-clang` 15.0.4）能编 + 链出
@@ -154,7 +165,8 @@ CMP 评估文档里那 16 项能力对照与 12 条待实测门槛（V-1…V-12�
 | 嵌入 | ONNX Runtime Android 1.20.0（已用） | ONNX Runtime iOS（C/ObjC，可选 CoreML EP） | ONNX Runtime 自建 OHOS 版（NDK 已验证） | ONNX Runtime（JVM，API 与 Android 同一套） |
 | 向量存储 | SQLite（已用） | SQLite（FMDB/自写 C） | relationalStore / SQLDelight（待验） | SQLite（JDBC） |
 | 凭证 | Keystore（已用） | Keychain | HUKS | Keychain |
-| 传输 | OkHttp（已用） | NSURLSession | `@ohos.net.http` / libcurl | OkHttp/`java.net.http` |
+| 传输 | OkHttp（已用）→ **libcurl** | NSURLSession（**保留系统栈**） | **libcurl（与 Android 共用一份 C 实现）** | NSURLSession（复用 iOS） |
+| ⤷ 说明 | 网络层统一方案（libcurl 范围、TLS 自建、iOS 为何保留）见 [`多端跨端-工程议题（网络层·包体·热修复）.md`](多端跨端-工程议题（网络层·包体·热修复）.md) §1，待确认项 **S1** ||||
 
 **一条纪律**：嵌入模型在所有端必须是**同一空间戳**（`BAAI/bge-small-zh-v1.5-int8@512`），
 否则端侧向量与云端 L3 不可比（M3 定的第一条不变量）。
@@ -234,16 +246,22 @@ apps/
 
 ---
 
-## 9. 待 owner 确认（收敛后只剩 6 条）
+## 9. 决策记录（✅ 6 条已由 owner 确认，2026-09-21）
 
-| # | 决策 | 我的建议 |
+| # | 决策 | 结论 |
 |---|---|---|
-| Q1 | **四端收敛表（§0）是否就是最终范围**：Android（已在）/ iOS / 鸿蒙 / Mac，桌面搁置？ | ✅ 按此锁定 |
-| Q2 | **UI 各端原生**（SwiftUI / ArkUI / Compose），CMP 归档为备选 | ✅（= 你已表达的倾向） |
-| Q3 | **顺序 M4 共享层 → iOS → 鸿蒙 spike → Mac**（Mac 复用 iOS 的 SwiftUI） | ✅ 建议按此；Mac 也可提到 iOS 之后立刻做（4–6 天，白捡一个桌面端） |
-| Q4 | **鸿蒙先 3 天 spike**，四条验收任一不过就退 ArkTS 重写（+ 契约夹具） | ✅ 先 spike 再承诺，避免陷在 Beta 生态里 |
-| Q5 | **R10 是否在 M4 一起收口**（给 LLM 平面补"本机"判据 + 契约夹具） | ✅ 建议做（0.5–1 天，避免"隐私硬边界"名不副实） |
-| Q6 | **是否允许改 CI**（`.github/workflows` 加 iOS/鸿蒙 macos runner；Windows/Ubuntu 待桌面重启时再加） | ✅ 建议允许（否则 CI 覆盖不到新端） |
+| Q1 | 四端范围：Android（已在）/ iOS / 鸿蒙 / Mac，桌面搁置 | ✅ **已确认**（桌面 → `docs/BACKLOG.md` D16） |
+| Q2 | UI 各端原生（Compose / SwiftUI / ArkUI），CMP 归档为备选 | ✅ **已确认** |
+| Q3 | 顺序 M4 共享层 → iOS → 鸿蒙 spike → Mac（Mac 复用 iOS 的 SwiftUI） | ✅ **已确认** |
+| Q4 | 鸿蒙先 3 天 spike，四条验收任一不过 → 退 ArkTS 重写 + 契约夹具 | ✅ **已确认** |
+| Q5 | R10（`DEVICE_ONLY` 语义收口）放进 M4 | ✅ **已确认**（0.5–1 天） |
+| Q6 | 允许改 CI（`.github/workflows` 加 macOS runner） | ✅ **已确认** |
+
+**另有三条工程议题待确认**（owner 2026-09-21 提出）：
+网络层是否统一到 **libcurl**、跨端包体增长是否要**插件化**、是否一起做**热修复**。
+分析与建议：见 [`多端跨端-工程议题（网络层·包体·热修复）.md`](多端跨端-工程议题（网络层·包体·热修复）.md)，需确认项 **S1–S4**。
+
+**开工状态**：M4 共享层（契约夹具 → 去平台化 → `shared/` → iOS target → Kotlin 升级 → R10 收口 + P0 包体瘦身）。
 
 ---
 
