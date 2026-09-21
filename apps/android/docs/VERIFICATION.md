@@ -2,6 +2,8 @@
 
 > 规则：**只写跑过的命令与真实输出**。"应该能跑"不算验证；没能验的写在最后一节。
 
+> 端侧单测总量：**186**（功能 182 + 跨端契约夹具 4）<!-- fact:android_unit_cases=186 -->
+
 环境：macOS（Apple Silicon）+ Android Studio JBR 21 + Android SDK platform 36.1 +
 AVD `Medium_Phone_API_36.1`（arm64-v8a，google_apis_playstore）。
 

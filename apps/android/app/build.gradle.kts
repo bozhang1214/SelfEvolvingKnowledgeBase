@@ -75,6 +75,22 @@ android {
     }
 }
 
+// ── 契约夹具（apps/contract）必须成为单测的**输入** ──────────────────────────
+// 为什么这几行是必须的（踩过：差点留下"假绿"）：
+//   ContractFixturesTest 在**运行时**读 ../../contract/*.json，Gradle 不知道它依赖这些文件。
+//   实测后果：只改夹具不改 Kotlin → `testDebugUnitTest` 判为 UP-TO-DATE **不重跑**，
+//   于是一个"把期望改成相反值"的夹具改动会**静默通过**——夹具就成了摆设。
+// 做法：把夹具目录登记为输入（路径敏感度 RELATIVE），并用 -Dsekb.contractDir 显式传给测试，
+//       这样①改夹具会触发重跑；②CI 与将来 iOS/鸿蒙 runner 复用同一份 JSON 时路径一致。
+val contractDir = rootProject.file("../contract")
+
+tasks.withType<Test>().configureEach {
+    inputs.dir(contractDir)
+        .withPropertyName("sekbContractFixtures")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    systemProperty("sekb.contractDir", contractDir.absolutePath)
+}
+
 // Kotlin 编译选项必须放在 android{} **外面**：AGP 9 里 `android { kotlin { … } }`
 // 会重复注册名为 kotlin 的 extension，报 "extension already registered"。
 kotlin {

@@ -124,7 +124,7 @@ apps/
 │       │   ├── core/              # ← 现 android 的 route/ net/ tools/ chat/ rag/ embed/ eval/ model/ edge/ core/JsonX
 │       │   ├── ports/             # 端口接口（HttpTransport / CredentialStore / VectorStore / …）
 │       │   └── constants/         # 空间戳、阈值、升级信号枚举（不变量集中地）
-│       ├── commonTest/kotlin/     # ← 现 182 个用例里可共享的部分（实测 158 个；见 §2.1）
+│       ├── commonTest/kotlin/     # ← 现 186 个用例里可共享的部分（功能 158 + 契约 4；见 §2.1）
 │       ├── androidMain/           # OkHttp、Keystore、SQLite、ONNX(android)、PdfBox、设备工具
 │       ├── iosMain/               # NSURLSession、Keychain、SQLite、ONNX(ObjC/C)、PDFKit、设备工具
 │       ├── jvmMain/               # 桌面宿主/单测：OkHttp(JVM)、JDBC SQLite、ONNX(java)、PdfBox、文件存储
@@ -140,7 +140,7 @@ JVM→jar（桌面对共享层是"零边界成本"，这也让**单测跑在 JVM
 
 ### 2.1 测试能共享多少（实测，2026-09-21）
 
-`apps/android/app/src/test` 现有 **182 个 `@Test`**；其中所在文件 import 了
+`apps/android/app/src/test` 现有 **186 个 `@Test`**（功能 182 + 跨端契约夹具 4）；其中所在文件 import 了
 `android.*` / `androidx.*` / `org.json` 的只有 **24 个**（`SekbApiTest` 10、`EdgeLlmClientTest` 7、
 `EmbeddingProviderTest` 7），而且这 24 个里的平台依赖**只是用 `org.json` 造测试数据**——
 也就是 §6 步骤 2 的"去平台化"做完后，它们可以一起共享。
@@ -149,7 +149,8 @@ JVM→jar（桌面对共享层是"零边界成本"，这也让**单测跑在 JVM
 在 iOS/鸿蒙上跑同一份断言。这是"逻辑共享"最硬的证据：**行为一致性由测试保证，不靠人抄得仔细**。
 
 > 顺带核对了基线：本轮为拿 §0 的微基准数字跑了一次全量 JVM 单测，
-> **182 个用例全部通过**（11 秒；临时基准是第 183 个，跑完已删）。
+> **当时 182 个用例全部通过**（11 秒；临时基准是第 183 个，跑完已删）。
+> 之后新增的 4 个契约夹具测试（见 `apps/contract/README.md`）使总量变为 **186**。
 
 ---
 
@@ -344,7 +345,7 @@ for await chunk in orchestrator.send(text) { /* 更新 SwiftUI 状态 */ }
 
 | 步 | 动作 | 验收 |
 |---|---|---|
-| 1 | **契约夹具先行**：协议路径/字段、6 类升级信号、隐私边界用例、评测集固化成 `apps/contract/*.json`；Android 先接上 runner | Android 182 测试 + 契约 runner 全绿 |
+| 1 | **契约夹具先行**：协议/字段、6 类升级信号、隐私边界用例固化成 `apps/contract/*.json`；Android 接上 runner | ✅ **已完成**：186 测试全绿；改夹具立刻红（Gradle 输入已接线） |
 | 2 | **依赖去平台化（不建 KMP 模块）**：`org.json` 全量收敛到 `JsonX`；`HttpTransport` 拆接口/实现；`File/UUID/concurrent` 换多平台 API | Android 行为零变化（自检 26/26、检索数字不变） |
 | 3 | 建 `shared/`，**先只加 androidTarget + jvmTarget**，把 28 个可移植文件搬进来 | Android 编译通过；原 182 用例中可共享部分在 **JVM** 上跑绿 |
 | 4 | 加 `iosArm64` / `iosSimulatorArm64`，补齐 `iosMain` 端口（NSURLSession/Keychain/SQLite/ONNX/PDFKit） | `:shared:linkDebugFrameworkIosSimulatorArm64` 通过；P1/P3 出数 |

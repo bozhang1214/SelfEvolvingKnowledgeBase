@@ -1,0 +1,109 @@
+{
+  "schema": "sekb.contract.signals/1",
+  "comment": "6 类升级信号 + 退化/低置信/工具幻觉的判定契约。expectSignals 为**排序后的完整集合**（不是子集）——多一个信号也是行为变更。",
+  "defaults": {
+    "maxTtftMs": 800,
+    "availableTools": [
+      "device_time",
+      "device_network",
+      "device_contacts_search",
+      "kb_search"
+    ]
+  },
+  "cases": [
+    {
+      "id": "clean.normal_answer",
+      "text": "端侧检索把索引留在设备上，阈值按模型标定。",
+      "expectSignals": []
+    },
+    {
+      "id": "empty.whitespace_only",
+      "text": "   \n  ",
+      "expectSignals": [
+        "empty"
+      ]
+    },
+    {
+      "id": "low_confidence.abstain_marker",
+      "text": "抱歉，我无法确定这个问题的答案。",
+      "expectSignals": [
+        "low_confidence"
+      ]
+    },
+    {
+      "id": "degenerate.three_identical_lines",
+      "text": "这一行是重复的示例内容，用来触发退化检测\n这一行是重复的示例内容，用来触发退化检测\n这一行是重复的示例内容，用来触发退化检测",
+      "expectSignals": [
+        "degenerate"
+      ],
+      "comment": "3 行完全相同且总长 ≥ 40（DEGEN_MIN_LEN）→ 退化"
+    },
+    {
+      "id": "degenerate.two_identical_lines_not_degenerate",
+      "text": "这一行是重复的示例内容，用来触发退化检测\n这一行是重复的示例内容，用来触发退化检测",
+      "comment": "只有 2 行相同（<3）→ 不判退化（临界：行数）",
+      "expectSignals": []
+    },
+    {
+      "id": "degenerate.short_text_is_not_degenerate",
+      "text": "重复重复重复",
+      "expectSignals": []
+    },
+    {
+      "id": "tool_hallucination.unknown_tool",
+      "text": "{\"tool\": \"send_email\", \"args\": {\"to\": \"a@b.c\"}}",
+      "expectSignals": [
+        "tool_hallucination"
+      ]
+    },
+    {
+      "id": "tool_hallucination.known_tool_is_clean",
+      "text": "{\"tool\": \"kb_search\", \"args\": {\"query\": \"阈值\"}}",
+      "expectSignals": []
+    },
+    {
+      "id": "json_invalid.non_json_with_json_format",
+      "text": "这不是 JSON，只是普通文本。",
+      "responseFormat": "json",
+      "expectSignals": [
+        "json_invalid"
+      ]
+    },
+    {
+      "id": "json_invalid.json_format_but_valid_object",
+      "text": "{\"tool\": \"kb_search\", \"args\": {\"query\": \"阈值\"}}",
+      "responseFormat": "json",
+      "expectSignals": []
+    },
+    {
+      "id": "json_invalid.excluded_in_partial_prefix",
+      "text": "{\"tool\":",
+      "responseFormat": "json",
+      "partial": true,
+      "expectSignals": []
+    },
+    {
+      "id": "partial_prefix.still_reports_empty",
+      "text": "",
+      "responseFormat": "json",
+      "partial": true,
+      "expectSignals": [
+        "empty"
+      ]
+    },
+    {
+      "id": "timeout.ttft_over_budget",
+      "text": "端侧检索把索引留在设备上。",
+      "ttftMillis": 1200,
+      "expectSignals": [
+        "timeout"
+      ]
+    },
+    {
+      "id": "timeout.not_triggered_under_budget",
+      "text": "端侧检索把索引留在设备上。",
+      "ttftMillis": 300,
+      "expectSignals": []
+    }
+  ]
+}

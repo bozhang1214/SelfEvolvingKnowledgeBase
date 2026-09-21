@@ -1,0 +1,82 @@
+{
+  "schema": "sekb.contract.routing/1",
+  "comment": "端云路由决策契约：四端对同一输入必须给出相同的 plane / reason / tier / deviceOnly / escalationAllowed。含数字的 reason 用 prefix 匹配。messages 的元素可以是字符串，也可以是 {\"repeat\": {\"unit\": \"...\", \"times\": N}}（避免夹具里贴几千字）。",
+  "defaults": {
+    "maxInputTokens": 2048,
+    "maxOutputTokens": 512,
+    "maxTtftMs": 800,
+    "guardChars": 60,
+    "preferEdge": true,
+    "deviceOnlyRoles": [],
+    "availableTools": ["device_time", "device_network", "device_contacts_search", "kb_search"]
+  },
+  "cases": [
+    {
+      "id": "edge.chat_default",
+      "role": "chat",
+      "messages": ["端侧推理为什么省电？"],
+      "expect": { "plane": "edge", "reason": "edge_preferred", "tier": "default", "deviceOnly": false, "escalationAllowed": true }
+    },
+    {
+      "id": "edge.short_role_uses_short_tier",
+      "role": "supervisor",
+      "messages": ["把这句话分类"],
+      "expect": { "plane": "edge", "tier": "short", "escalationAllowed": true }
+    },
+    {
+      "id": "edge.output_budget_boundary_512",
+      "role": "chat",
+      "messages": ["写一段简短回答"],
+      "expectedOutputTokens": 512,
+      "expect": { "plane": "edge", "reason": "edge_preferred", "tier": "default", "outputBudget": 512 }
+    },
+    {
+      "id": "edge.input_near_budget",
+      "role": "chat",
+      "messages": [{ "repeat": { "unit": "端侧检索把索引留在设备上。", "times": 150 } }],
+      "expect": { "plane": "edge", "reason": "edge_preferred" }
+    },
+    {
+      "id": "cloud.input_over_budget",
+      "role": "chat",
+      "messages": [{ "repeat": { "unit": "端侧检索把索引留在设备上。", "times": 170 } }],
+      "expect": { "plane": "cloud", "reasonPrefix": "input_over_edge_budget", "escalationAllowed": false }
+    },
+    {
+      "id": "cloud.output_over_budget",
+      "role": "chat",
+      "messages": ["帮我写一篇长文"],
+      "expectedOutputTokens": 600,
+      "expect": { "plane": "cloud", "reasonPrefix": "output_over_edge_budget", "tier": "quality" }
+    },
+    {
+      "id": "cloud.quality_role",
+      "role": "job_analysis",
+      "messages": ["分析这份 JD"],
+      "expectedOutputTokens": 1500,
+      "expect": { "plane": "cloud", "tier": "quality" }
+    },
+    {
+      "id": "cloud.prefer_cloud_switch",
+      "role": "chat",
+      "messages": ["随便聊聊"],
+      "config": { "preferEdge": false },
+      "expect": { "plane": "cloud", "reason": "prefer_cloud", "escalationAllowed": false }
+    },
+    {
+      "id": "edge.device_only_role_wins_over_cloud_pref",
+      "role": "chat",
+      "messages": ["读一下我的通讯录备注"],
+      "config": { "preferEdge": false, "deviceOnlyRoles": ["chat"] },
+      "expect": { "plane": "edge", "reason": "device_only_data", "deviceOnly": true, "escalationAllowed": false }
+    },
+    {
+      "id": "edge.device_only_data_flag",
+      "role": "chat",
+      "messages": ["当前位置附近有什么"],
+      "deviceData": true,
+      "config": { "preferEdge": false },
+      "expect": { "plane": "edge", "reason": "device_only_data", "deviceOnly": true, "escalationAllowed": false }
+    }
+  ]
+}

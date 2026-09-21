@@ -4,6 +4,7 @@
 
 ```
 apps/
+├── contract/    语言无关契约夹具（四端跑同一份 JSON，见 apps/contract/README.md）
 ├── android/     Kotlin + Jetpack Compose（已可用）
 ├── ios/         iOS 宿主（规划中，SwiftUI 原生 UI，见 apps/ios/README.md）
 ├── harmony/     HarmonyOS 宿主（规划中，ArkUI 原生 UI，见 apps/harmony/README.md）

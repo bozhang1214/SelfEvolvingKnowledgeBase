@@ -1,0 +1,92 @@
+{
+  "schema": "sekb.contract.privacy/1",
+  "comment": "隐私硬边界（RFC §5.2）：DEVICE_ONLY 数据永不出设备。每个 case 都命中至少一条升级信号，但**升级必须被拦**（escalationAllowed=false）——即『宁可承认失败，也不把数据发出去』。这是端侧方案唯一的硬约束，任何一端放松这条都算失败。",
+  "defaults": {
+    "maxTtftMs": 800,
+    "availableTools": [
+      "device_time",
+      "device_network",
+      "device_contacts_search",
+      "kb_search"
+    ]
+  },
+  "cases": [
+    {
+      "id": "device_only.blocks_empty",
+      "role": "chat",
+      "deviceData": true,
+      "text": "   ",
+      "expectSignals": [
+        "empty"
+      ]
+    },
+    {
+      "id": "device_only.blocks_low_confidence",
+      "role": "chat",
+      "deviceData": true,
+      "text": "我无法确定。",
+      "expectSignals": [
+        "low_confidence"
+      ]
+    },
+    {
+      "id": "device_only.blocks_timeout",
+      "role": "chat",
+      "deviceData": true,
+      "text": "端侧检索把索引留在设备上。",
+      "ttftMillis": 1500,
+      "expectSignals": [
+        "timeout"
+      ]
+    },
+    {
+      "id": "device_only.blocks_json_invalid",
+      "role": "chat",
+      "deviceData": true,
+      "text": "不是 JSON",
+      "responseFormat": "json",
+      "expectSignals": [
+        "json_invalid"
+      ]
+    },
+    {
+      "id": "device_only.blocks_degenerate",
+      "role": "chat",
+      "deviceData": true,
+      "text": "这一行是重复的示例内容，用来触发退化检测\n这一行是重复的示例内容，用来触发退化检测\n这一行是重复的示例内容，用来触发退化检测",
+      "expectSignals": [
+        "degenerate"
+      ]
+    },
+    {
+      "id": "device_only.blocks_tool_hallucination",
+      "role": "chat",
+      "deviceData": true,
+      "text": "{\"tool\": \"read_gallery\", \"args\": {}}",
+      "expectSignals": [
+        "tool_hallucination"
+      ]
+    },
+    {
+      "id": "device_only.by_role_also_blocks",
+      "role": "chat",
+      "deviceOnlyRoles": [
+        "chat"
+      ],
+      "text": "",
+      "expectSignals": [
+        "empty"
+      ]
+    },
+    {
+      "id": "device_only.wins_even_when_cloud_preferred",
+      "role": "chat",
+      "deviceData": true,
+      "preferEdge": false,
+      "text": "我无法确定。",
+      "expectSignals": [
+        "low_confidence"
+      ]
+    }
+  ]
+}
