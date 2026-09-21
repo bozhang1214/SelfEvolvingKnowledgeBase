@@ -151,6 +151,45 @@ func runSharedSelfTest() -> [CheckResult] {
     // 7) 知识检索的阈值必须来自策略（没有策略时用默认 0.5）
     out.append(.init(name: "retriever_default_threshold", ok: true, detail: "0.5（策略未接入）"))
 
+    // 7.5) **PDF 端口（PDFKit）**：与 Android 侧同一套四类结果语义。
+    //      样本直接复用 Android 的 test resources（拷进 .app 包），避免两端各造一份样本。
+    func bundleData(_ name: String) -> Data? {
+        guard let path = Bundle.main.path(forResource: name, ofType: nil) else { return nil }
+        return try? Data(contentsOf: URL(fileURLWithPath: path))
+    }
+    if let textPdf = bundleData("sample-text.pdf") {
+        switch PdfTextExtractor.extract(data: textPdf) {
+        case let .ok(text, pages):
+            out.append(.init(name: "pdf_extract_text_layer",
+                             ok: !text.isEmpty && pages >= 1,
+                             detail: "页数=\(pages) 字符=\(text.count) 开头=\(text.prefix(24))"))
+        case .noTextLayer:
+            out.append(.init(name: "pdf_extract_text_layer", ok: false, detail: "有文本层的样本被判成无文本层"))
+        case .encrypted:
+            out.append(.init(name: "pdf_extract_text_layer", ok: false, detail: "意外结果：被判为加密"))
+        case .failed(let reason):
+            out.append(.init(name: "pdf_extract_text_layer", ok: false, detail: "意外结果：\(reason)"))
+        }
+    } else {
+        out.append(.init(name: "pdf_extract_text_layer", ok: false, detail: "bundle 里找不到 sample-text.pdf"))
+    }
+    if let blankPdf = bundleData("sample-no-text.pdf") {
+        switch PdfTextExtractor.extract(data: blankPdf) {
+        case .noTextLayer:
+            out.append(.init(name: "pdf_extract_no_text_layer", ok: true, detail: "扫描件/无文本层被如实识别"))
+        default:
+            out.append(.init(name: "pdf_extract_no_text_layer", ok: false, detail: "无文本层样本未被识别"))
+        }
+    } else {
+        out.append(.init(name: "pdf_extract_no_text_layer", ok: false, detail: "bundle 里找不到 sample-no-text.pdf"))
+    }
+    switch PdfTextExtractor.extract(data: Data("这不是 PDF".utf8)) {
+    case .failed:
+        out.append(.init(name: "pdf_extract_rejects_non_pdf", ok: true, detail: "非 PDF 被拒并给出原因"))
+    default:
+        out.append(.init(name: "pdf_extract_rejects_non_pdf", ok: false, detail: "非 PDF 没被拒"))
+    }
+
     // 8) **网络端口（NSURLSession）**：真的发一次请求。
     //    iOS 模拟器共享宿主机网络，所以 `127.0.0.1` 就是宿主（与 Android 的 10.0.2.2 对应）。
     //    这条同时证明了：Swift 侧实现 Kotlin 接口可用（`HttpTransport` 是 interface）、

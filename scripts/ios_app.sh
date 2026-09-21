@@ -63,6 +63,10 @@ build_app() {
         -o "$APP_BUNDLE/$APP_NAME" \
         $ROOT/apps/ios/App/*.swift || return 1
     cp "$ROOT/apps/ios/App/Info.plist" "$APP_BUNDLE/Info.plist"
+    # 自检用的样本文档（与 Android 侧共用同一批 test resources，避免"两端各造一份样本"）
+    for f in "$ROOT"/apps/android/app/src/test/resources/*.pdf; do
+        [ -f "$f" ] && cp "$f" "$APP_BUNDLE/"
+    done
     echo "✅ 已产出 $APP_BUNDLE"
 }
 

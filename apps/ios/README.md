@@ -20,7 +20,7 @@
 | **iOS 端口①：传输（NSURLSession）** | ✅ | `apps/ios/App/UrlSessionTransport.swift`：实现共享层 `HttpTransport`（同步语义用信号量、SSE 用 `URLSessionDataDelegate` 逐行回调）。自检实测：`transport_get_host_ollama — code=200 bytes=3474`、`transport_stream_lines — code=200 行数=9`；**iOS 自检 10 PASS / 0 FAIL** |
 | iOS 端口②：凭证（Keychain） | ⏳ | |
 | iOS 端口③：嵌入（ONNX/CoreML） | ⏳ | |
-| iOS 端口④：PDF（PDFKit） | ⏳ | |
+| **iOS 端口④：PDF（PDFKit）** | ✅ | `apps/ios/App/PdfExtractor.swift`：与 Android 同一套**四类结果**（有文本 / 无文本层 / 加密 / 解析失败）+ 先判 `%PDF` 魔数 + 40 万字符上限。自检实测：`pdf_extract_text_layer — 页数=1 字符=78`（**与 Android 端同一份样本的 78 字符/1 页完全一致**）、`pdf_extract_no_text_layer`、`pdf_extract_rejects_non_pdf`；**iOS 自检 13 PASS / 0 FAIL** |
 | iOS 真机性能 | ⏳ 等硬件 | 模拟器只验功能 |
 | 四个端口（NSURLSession/Keychain/ONNX/PDFKit） | ⏳ | 待 App 骨架跑通后补 |
 
