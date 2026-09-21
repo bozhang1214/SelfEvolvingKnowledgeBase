@@ -7,10 +7,13 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.provider.ContactsContract
 import androidx.core.content.ContextCompat
-import com.sekb.ondevice.model.ToolResult
+import com.sekb.shared.model.ToolResult
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.sekb.shared.tools.DeviceTool
+import com.sekb.shared.tools.PermissionChecker
+import com.sekb.shared.tools.*
 
 /** Android 权限检查实现（唯一接触 `checkSelfPermission` 的地方）。 */
 class AndroidPermissionChecker(private val context: Context) : PermissionChecker {

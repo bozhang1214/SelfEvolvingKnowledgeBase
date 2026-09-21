@@ -5,13 +5,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sekb.ondevice.BuildConfig
 import com.sekb.ondevice.SekbApp
-import com.sekb.ondevice.edge.ChatMessage
-import com.sekb.ondevice.model.DeviceCredentials
-import com.sekb.ondevice.model.ExecutionInfo
-import com.sekb.ondevice.model.Plane
-import com.sekb.ondevice.model.RouteEventPayload
-import com.sekb.ondevice.rag.DocumentInfo
-import com.sekb.ondevice.tools.PermissionAudit
+import com.sekb.shared.edge.ChatMessage
+import com.sekb.shared.model.DeviceCredentials
+import com.sekb.shared.model.ExecutionInfo
+import com.sekb.shared.model.Plane
+import com.sekb.shared.model.RouteEventPayload
+import com.sekb.shared.rag.DocumentInfo
+import com.sekb.shared.tools.PermissionAudit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,7 +50,7 @@ data class ChatUiState(
     val toolEvalSummary: String = "工具调用：暂无尝试",
     val lastReason: String = "",
     /** 已导入的本机文档（UI 列表用） */
-    val documents: List<com.sekb.ondevice.rag.DocumentInfo> = emptyList(),
+    val documents: List<com.sekb.shared.rag.DocumentInfo> = emptyList(),
     val importing: Boolean = false,
 ) {
     val documentSummary: String get() =

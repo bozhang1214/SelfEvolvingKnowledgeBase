@@ -1,12 +1,13 @@
 package com.sekb.ondevice.edge
 
 import com.sekb.ondevice.FakeTransport
-import com.sekb.ondevice.route.EdgeRuntimeConfig
+import com.sekb.shared.route.EdgeRuntimeConfig
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.sekb.shared.edge.*
 
 /** 端侧 LLM 适配层：请求体约定（关思考 / JSON 模式）与 OpenAI 兼容流式解析。 */
 class EdgeLlmClientTest {
@@ -80,7 +81,7 @@ class EdgeLlmClientTest {
 
     @Test
     fun `transport exception becomes a failed completion`() {
-        val boom = object : com.sekb.ondevice.net.HttpTransport {
+        val boom = object : com.sekb.shared.net.HttpTransport {
             override fun postJson(url: String, headers: Map<String, String>, body: String, timeoutSeconds: Long) =
                 throw java.io.IOException("Connection refused")
             override fun get(url: String, headers: Map<String, String>, timeoutSeconds: Long) =

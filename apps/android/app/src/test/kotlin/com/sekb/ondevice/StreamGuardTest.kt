@@ -1,8 +1,8 @@
 package com.sekb.ondevice
 
-import com.sekb.ondevice.route.EdgeRuntimeConfig
-import com.sekb.ondevice.route.PlaneRouter
-import com.sekb.ondevice.route.StreamGuard
+import com.sekb.shared.route.EdgeRuntimeConfig
+import com.sekb.shared.route.PlaneRouter
+import com.sekb.shared.route.StreamGuard
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

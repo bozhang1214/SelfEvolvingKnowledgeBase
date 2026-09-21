@@ -1,12 +1,13 @@
 package com.sekb.ondevice.embed
 
 import com.sekb.ondevice.FakeTransport
-import com.sekb.ondevice.rag.VectorMath
+import com.sekb.shared.rag.VectorMath
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.sekb.shared.embed.*
 
 class EmbeddingProviderTest {
 

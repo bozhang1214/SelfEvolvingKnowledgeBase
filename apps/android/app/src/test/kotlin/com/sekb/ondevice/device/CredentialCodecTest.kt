@@ -1,6 +1,6 @@
 package com.sekb.ondevice.device
 
-import com.sekb.ondevice.model.DeviceCredentials
+import com.sekb.shared.model.DeviceCredentials
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

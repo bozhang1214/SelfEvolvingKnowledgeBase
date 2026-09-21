@@ -43,7 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.sekb.ondevice.model.Plane
+import com.sekb.shared.model.Plane
 
 /**
  * 端侧宿主主界面：聊天 + **执行位置** + 权限审计 + 端云配置。

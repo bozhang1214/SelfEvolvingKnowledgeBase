@@ -1,9 +1,10 @@
 package com.sekb.ondevice.rag
 
-import com.sekb.ondevice.embed.DeterministicEmbedding
+import com.sekb.shared.embed.DeterministicEmbedding
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.sekb.shared.rag.*
 
 class KnowledgeIndexTest {
 

@@ -68,8 +68,8 @@ class MainActivity : ComponentActivity() {
         Thread {
             try {
                 val cfg = container.config
-                val router = com.sekb.ondevice.route.PlaneRouter(cfg)
-                val edge = com.sekb.ondevice.edge.OpenAiCompatibleEdgeLlm(
+                val router = com.sekb.shared.route.PlaneRouter(cfg)
+                val edge = com.sekb.shared.edge.OpenAiCompatibleEdgeLlm(
                     container.transport, cfg.edgeBaseUrl, config = cfg,
                 )
                 // 两个档位都测：语法约束的收益通常**只在小模型上**才显现，
@@ -77,7 +77,7 @@ class MainActivity : ComponentActivity() {
                 for (tier in listOf("short", "default")) {
                     val model = router.modelFor(tier)
                     edge.warmup(model)      // 预热：不预热的话第一组数据全是冷启动
-                    val runner = com.sekb.ondevice.eval.ToolCallEvalRunner(
+                    val runner = com.sekb.shared.eval.ToolCallEvalRunner(
                         edge = edge, router = router, tools = container.tools, model = model,
                         hard = intent?.getBooleanExtra("hard", false) == true,
                     )
@@ -95,7 +95,7 @@ class MainActivity : ComponentActivity() {
         val container = (application as SekbApp).container
         Thread {
             try {
-                val runner = com.sekb.ondevice.eval.RetrievalEvalRunner(container.embeddingProvider)
+                val runner = com.sekb.shared.eval.RetrievalEvalRunner(container.embeddingProvider)
                 val (index, store) = runner.buildIndex()
                 val reports = runner.calibrate(index, store)
                 val desc = if (container.onnxModelAvailable) {

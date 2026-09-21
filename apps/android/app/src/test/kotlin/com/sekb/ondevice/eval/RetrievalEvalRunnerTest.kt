@@ -1,9 +1,10 @@
 package com.sekb.ondevice.eval
 
-import com.sekb.ondevice.embed.DeterministicEmbedding
+import com.sekb.shared.embed.DeterministicEmbedding
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.sekb.shared.eval.*
 
 /**
  * 评测**工具本身**的测试（用确定性桩跑）：确认指标口径正确，别出现"评测器算错分"

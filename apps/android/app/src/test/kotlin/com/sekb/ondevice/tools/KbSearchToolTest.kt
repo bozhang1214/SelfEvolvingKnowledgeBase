@@ -1,13 +1,14 @@
 package com.sekb.ondevice.tools
 
-import com.sekb.ondevice.embed.DeterministicEmbedding
-import com.sekb.ondevice.model.ToolCall
-import com.sekb.ondevice.rag.InMemoryVectorStore
-import com.sekb.ondevice.rag.KnowledgeIndex
-import com.sekb.ondevice.rag.Retriever
+import com.sekb.shared.embed.DeterministicEmbedding
+import com.sekb.shared.model.ToolCall
+import com.sekb.shared.rag.InMemoryVectorStore
+import com.sekb.shared.rag.KnowledgeIndex
+import com.sekb.shared.rag.Retriever
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.sekb.shared.tools.*
 
 /** `kb_search` 作为**设备工具**接入：过闸门、走检索、结果可读。 */
 class KbSearchToolTest {

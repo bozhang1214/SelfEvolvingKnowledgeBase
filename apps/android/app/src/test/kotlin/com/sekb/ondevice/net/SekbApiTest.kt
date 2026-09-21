@@ -1,12 +1,13 @@
 package com.sekb.ondevice.net
 
 import com.sekb.ondevice.FakeTransport
-import com.sekb.ondevice.model.RouteEventPayload
+import com.sekb.shared.model.RouteEventPayload
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.sekb.shared.net.*
 
 /** SEKB 客户端：每个动作的**请求形状**与**错误分类**都要对得上协议（§2–§4）。 */
 class SekbApiTest {

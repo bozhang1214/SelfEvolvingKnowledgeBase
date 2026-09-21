@@ -1,12 +1,12 @@
 package com.sekb.ondevice
 
-import com.sekb.ondevice.chat.ChatOrchestrator
-import com.sekb.ondevice.chat.CloudChat
-import com.sekb.ondevice.chat.CloudReply
-import com.sekb.ondevice.edge.ChatMessage
-import com.sekb.ondevice.edge.OpenAiCompatibleEdgeLlm
-import com.sekb.ondevice.model.ToolCall
-import com.sekb.ondevice.route.PlaneRouter
+import com.sekb.shared.chat.ChatOrchestrator
+import com.sekb.shared.chat.CloudChat
+import com.sekb.shared.chat.CloudReply
+import com.sekb.shared.edge.ChatMessage
+import com.sekb.shared.edge.OpenAiCompatibleEdgeLlm
+import com.sekb.shared.model.ToolCall
+import com.sekb.shared.route.PlaneRouter
 
 /**
  * 端侧自检（模拟器/真机上的**功能与协议**验证入口，RFC §9.1 的 D10 决策）。
@@ -100,20 +100,20 @@ object SelfTest {
         // 3.5 R10（M4）：DEVICE_ONLY + 非本机端点 → 一个请求都不许发。
         // 模拟器里 edgeBaseUrl=10.0.2.2（开发机）正是"非本机"，所以这条自检应当看到**拒绝**；
         // 若哪天它变成"照发"，就是隐私硬边界被破坏——这比"功能不可用"严重得多。
-        val blockedEdge = object : com.sekb.ondevice.edge.EdgeLlm {
+        val blockedEdge = object : com.sekb.shared.edge.EdgeLlm {
             var calls = 0
             override fun streamChat(
                 model: String, messages: List<ChatMessage>, maxTokens: Int,
                 jsonMode: Boolean, onToken: (String) -> Unit,
-            ): com.sekb.ondevice.edge.EdgeCompletion {
+            ): com.sekb.shared.edge.EdgeCompletion {
                 calls++
-                return com.sekb.ondevice.edge.EdgeCompletion("不该出现", 0.0, 0.0, true, "")
+                return com.sekb.shared.edge.EdgeCompletion("不该出现", 0.0, 0.0, true, "")
             }
             override fun complete(
                 model: String, messages: List<ChatMessage>, maxTokens: Int, jsonMode: Boolean,
-            ): com.sekb.ondevice.edge.EdgeCompletion {
+            ): com.sekb.shared.edge.EdgeCompletion {
                 calls++
-                return com.sekb.ondevice.edge.EdgeCompletion("不该出现", 0.0, 0.0, true, "")
+                return com.sekb.shared.edge.EdgeCompletion("不该出现", 0.0, 0.0, true, "")
             }
         }
         val blockedOrch = ChatOrchestrator(
@@ -204,7 +204,7 @@ object SelfTest {
         val appContext = SelfTestContextHolder.appContext
         val spaceMismatchOnOpen = if (appContext == null) null else runCatching {
             com.sekb.ondevice.rag.SqliteVectorStore(
-                appContext, com.sekb.ondevice.embed.EmbeddingSpace("other-model@256", 256),
+                appContext, com.sekb.shared.embed.EmbeddingSpace("other-model@256", 256),
             )
         }.exceptionOrNull()
         record("rag_sqlite_space_guard", spaceMismatchOnOpen != null,
@@ -215,7 +215,7 @@ object SelfTest {
         // 但根因在嵌入这一层（实测踩到过：输入张量/掩码构造错了）。
         val vA = container.embeddingProvider.embedOne("端侧推理为什么省电")
         val vB = container.embeddingProvider.embedOne("北京今天多云转晴，适合骑行")
-        val cosAB = com.sekb.ondevice.rag.VectorMath.cosine(vA, vB)
+        val cosAB = com.sekb.shared.rag.VectorMath.cosine(vA, vB)
         val dbg = container.embeddingProvider as? com.sekb.ondevice.embed.OnnxBgeEmbedding
         if (dbg != null) {
             val idsA = dbg.debugTokenIds("端侧推理为什么省电")
@@ -238,15 +238,15 @@ object SelfTest {
         //   **int8 量化模型空间不同 → false**（量化会把分数分布抬上去，混用就是混两套向量）；
         //   确定性桩 → false。
         val expectedCloudCompatible =
-            container.embeddingProvider.space.id == com.sekb.ondevice.embed.EmbeddingSpace.SERVER_SPACE_ID
+            container.embeddingProvider.space.id == com.sekb.shared.embed.EmbeddingSpace.SERVER_SPACE_ID
         record("rag_space_guard", hit.cloudCompatible == expectedCloudCompatible,
             "索引空间=${hit.space.id} 与云端一致=${hit.cloudCompatible}（期望 $expectedCloudCompatible：" +
                 "只有与云端同空间的模型才允许融合；int8 与桩都不行）")
 
         // 空间不一致必须**拒绝检索**而不是混算余弦
-        val mismatched = com.sekb.ondevice.rag.Retriever(
-            com.sekb.ondevice.embed.DeterministicEmbedding(
-                space = com.sekb.ondevice.embed.EmbeddingSpace("other-model@256", 256),
+        val mismatched = com.sekb.shared.rag.Retriever(
+            com.sekb.shared.embed.DeterministicEmbedding(
+                space = com.sekb.shared.embed.EmbeddingSpace("other-model@256", 256),
             ),
             container.vectorStore,
         )
@@ -257,19 +257,19 @@ object SelfTest {
         // 设备专属集合 + 非本机嵌入 → 必须拒绝（隐私闸门）。
         // ⚠️ 必须用**同一空间**但 isOnDevice=false 的提供者，否则先触发的是"空间不一致"
         // 那条规则，就测不到隐私闸门本身（第一版就是这么写错的）。
-        val sameSpaceRemote = object : com.sekb.ondevice.embed.EmbeddingProvider {
+        val sameSpaceRemote = object : com.sekb.shared.embed.EmbeddingProvider {
             override val space = container.embeddingProvider.space
             override val isOnDevice = false
             override fun embed(texts: List<String>) = container.embeddingProvider.embed(texts)
         }
-        val remoteEmbed = com.sekb.ondevice.rag.Retriever(sameSpaceRemote, container.vectorStore)
+        val remoteEmbed = com.sekb.shared.rag.Retriever(sameSpaceRemote, container.vectorStore)
         val ragDenied = remoteEmbed.retrieve("端侧 RAG", deviceOnly = true)
         record("rag_device_only_guard", !ragDenied.searchable,
             ragDenied.reason.take(80))
 
         // 工具化：模型可调用的 kb_search 走同一套闸门
         val toolRes = container.tools.execute(
-            com.sekb.ondevice.model.ToolCall("kb_search", mapOf("query" to "端侧 RAG 隐私")),
+            com.sekb.shared.model.ToolCall("kb_search", mapOf("query" to "端侧 RAG 隐私")),
         )
         record("rag_tool_search", toolRes.ok && toolRes.output.contains("doc-rag"),
             "ok=${toolRes.ok} 输出=${toolRes.output.take(50)}")
@@ -390,7 +390,7 @@ object SelfTest {
         val reported = runCatching {
             api.reportRouteEvent(
                 cred.deviceToken,
-                com.sekb.ondevice.model.RouteEventPayload(
+                com.sekb.shared.model.RouteEventPayload(
                     eventId = eventId, role = "chat", plane = "edge",
                     reason = "edge_preferred", model = router.modelFor("default"),
                     tier = "default", inputTokens = 42, outputTokens = 64, latencyMs = 83.0,
@@ -420,5 +420,5 @@ object SelfTest {
 /** 工具调用 JSON 是否合法（自检里只做最小判定，正式统计走 `ToolCallEval`）。 */
 private object ToolCallJsonProbe {
     fun isLegal(text: String): Boolean =
-        com.sekb.ondevice.tools.ToolCallJson.parse(text) is com.sekb.ondevice.tools.ToolCallJson.Parsed.Ok
+        com.sekb.shared.tools.ToolCallJson.parse(text) is com.sekb.shared.tools.ToolCallJson.Parsed.Ok
 }

@@ -1,6 +1,6 @@
 package com.sekb.ondevice.ui
 
-import com.sekb.ondevice.model.ExecutionInfo
+import com.sekb.shared.model.ExecutionInfo
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

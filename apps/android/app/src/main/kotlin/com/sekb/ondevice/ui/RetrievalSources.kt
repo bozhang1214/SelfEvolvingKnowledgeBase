@@ -1,6 +1,6 @@
 package com.sekb.ondevice.ui
 
-import com.sekb.ondevice.model.ToolResult
+import com.sekb.shared.model.ToolResult
 
 /**
  * 从工具结果里解析出**检索来源**（用于在回答下方显示"这次引用了哪些文档、几分"）。

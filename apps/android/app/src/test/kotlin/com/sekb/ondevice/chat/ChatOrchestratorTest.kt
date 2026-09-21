@@ -1,21 +1,22 @@
 package com.sekb.ondevice.chat
 
-import com.sekb.ondevice.edge.ChatMessage
-import com.sekb.ondevice.edge.EdgeCompletion
-import com.sekb.ondevice.edge.EdgeLlm
-import com.sekb.ondevice.model.ExecutionInfo
-import com.sekb.ondevice.model.Plane
-import com.sekb.ondevice.model.RouteEventPayload
-import com.sekb.ondevice.route.EdgeRuntimeConfig
-import com.sekb.ondevice.route.PlaneRouter
-import com.sekb.ondevice.tools.DeviceTool
-import com.sekb.ondevice.tools.PermissionAudit
-import com.sekb.ondevice.tools.PermissionChecker
-import com.sekb.ondevice.tools.ToolRegistry
+import com.sekb.shared.edge.ChatMessage
+import com.sekb.shared.edge.EdgeCompletion
+import com.sekb.shared.edge.EdgeLlm
+import com.sekb.shared.model.ExecutionInfo
+import com.sekb.shared.model.Plane
+import com.sekb.shared.model.RouteEventPayload
+import com.sekb.shared.route.EdgeRuntimeConfig
+import com.sekb.shared.route.PlaneRouter
+import com.sekb.shared.tools.DeviceTool
+import com.sekb.shared.tools.PermissionAudit
+import com.sekb.shared.tools.PermissionChecker
+import com.sekb.shared.tools.ToolRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.sekb.shared.chat.*
 
 /**
  * **端云协同全流程**（无网、无模拟器）：
@@ -87,13 +88,13 @@ class ChatOrchestratorTest {
         val tools = ToolRegistry(
             tools = listOf(
                 DeviceTool("device_time", "当前时间", run = {
-                    com.sekb.ondevice.model.ToolResult(ok = true, output = "2026-09-18 09:00")
+                    com.sekb.shared.model.ToolResult(ok = true, output = "2026-09-18 09:00")
                 }),
                 DeviceTool(
                     "device_contacts_search", "搜索联系人",
                     requiredPermission = "android.permission.READ_CONTACTS",
                     args = mapOf("query" to "关键字"),
-                    run = { com.sekb.ondevice.model.ToolResult(ok = true, output = "张明") },
+                    run = { com.sekb.shared.model.ToolResult(ok = true, output = "张明") },
                 ),
             ),
             checker = PermissionChecker { it in granted },

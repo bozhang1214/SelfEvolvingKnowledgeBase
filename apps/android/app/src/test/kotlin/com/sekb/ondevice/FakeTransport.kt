@@ -1,7 +1,7 @@
 package com.sekb.ondevice
 
-import com.sekb.ondevice.net.HttpResponse
-import com.sekb.ondevice.net.HttpTransport
+import com.sekb.shared.net.HttpResponse
+import com.sekb.shared.net.HttpTransport
 
 /** 记录请求、按序返回响应的假传输（**不出网**，可在 JVM 单测里跑到完整协议流程）。 */
 class FakeTransport : HttpTransport {

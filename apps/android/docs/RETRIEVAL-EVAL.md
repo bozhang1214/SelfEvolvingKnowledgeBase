@@ -3,7 +3,7 @@
 > 复现：`bash scripts/emulator.sh --background && bash scripts/android.sh push-model`
 > 然后 `adb shell am start -n com.sekb.ondevice/.MainActivity --ez evalrag true`，
 > 结果输出在 `adb logcat -s SEKB_RAG_EVAL`。
-> 标注集在 `app/src/main/kotlin/com/sekb/ondevice/eval/RetrievalEvalSet.kt`。
+> 标注集在 `apps/shared/src/commonMain/kotlin/com/sekb/shared/eval/RetrievalEvalSet.kt`（M4 第 5 步后已搬到 :shared）。
 
 ## 1. 这套评测回答什么问题
 

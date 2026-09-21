@@ -4,7 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import com.sekb.ondevice.model.DeviceCredentials
+import com.sekb.shared.model.DeviceCredentials
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator

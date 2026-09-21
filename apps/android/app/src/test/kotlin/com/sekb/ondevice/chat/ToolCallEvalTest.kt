@@ -2,6 +2,7 @@ package com.sekb.ondevice.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import com.sekb.shared.chat.*
 
 /** 工具调用合法率：分母是**尝试次数**，不是全部回答（否则模型越不敢用工具，数字越好看）。 */
 class ToolCallEvalTest {

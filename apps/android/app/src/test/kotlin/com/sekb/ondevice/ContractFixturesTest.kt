@@ -1,8 +1,8 @@
 package com.sekb.ondevice
 
-import com.sekb.ondevice.model.Plane
-import com.sekb.ondevice.route.EdgeRuntimeConfig
-import com.sekb.ondevice.route.PlaneRouter
+import com.sekb.shared.model.Plane
+import com.sekb.shared.route.EdgeRuntimeConfig
+import com.sekb.shared.route.PlaneRouter
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals

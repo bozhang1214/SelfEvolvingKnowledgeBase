@@ -1,11 +1,12 @@
 package com.sekb.ondevice.rag
 
-import com.sekb.ondevice.embed.DeterministicEmbedding
-import com.sekb.ondevice.embed.EmbeddingSpace
+import com.sekb.shared.embed.DeterministicEmbedding
+import com.sekb.shared.embed.EmbeddingSpace
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.sekb.shared.rag.*
 
 /**
  * 端侧检索的三条硬规则（RFC §18.1/§18.3）。

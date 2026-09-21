@@ -6,6 +6,10 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import java.io.File
+import com.sekb.shared.embed.BertWordPieceTokenizer
+import com.sekb.shared.embed.EmbeddingProvider
+import com.sekb.shared.embed.EmbeddingSpace
+import com.sekb.shared.embed.*
 
 /**
  * 端侧**真·**嵌入实现：ONNX 版 `bge-small-zh-v1.5`（512 维，CLS pooling + L2 归一化）。

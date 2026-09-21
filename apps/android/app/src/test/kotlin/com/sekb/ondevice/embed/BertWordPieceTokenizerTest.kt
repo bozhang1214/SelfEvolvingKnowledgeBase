@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import com.sekb.shared.embed.*
 
 /**
  * **金标准比对**：期望的 token id 由 HuggingFace 分词器（`BAAI/bge-small-zh-v1.5` 原配）

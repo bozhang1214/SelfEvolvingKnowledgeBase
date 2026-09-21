@@ -1,11 +1,11 @@
 package com.sekb.ondevice
 
-import com.sekb.ondevice.model.ToolCall
-import com.sekb.ondevice.model.ToolResult
-import com.sekb.ondevice.tools.DeviceTool
-import com.sekb.ondevice.tools.PermissionAudit
-import com.sekb.ondevice.tools.PermissionChecker
-import com.sekb.ondevice.tools.ToolRegistry
+import com.sekb.shared.model.ToolCall
+import com.sekb.shared.model.ToolResult
+import com.sekb.shared.tools.DeviceTool
+import com.sekb.shared.tools.PermissionAudit
+import com.sekb.shared.tools.PermissionChecker
+import com.sekb.shared.tools.ToolRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -118,7 +118,7 @@ class ToolRegistryTest {
 
     @Test
     fun `schema prompt lists every tool and its args`() {
-        val prompt = com.sekb.ondevice.tools.ToolCallJson.schemaPrompt(registry().all())
+        val prompt = com.sekb.shared.tools.ToolCallJson.schemaPrompt(registry().all())
         assertTrue(prompt.contains("device_time"))
         assertTrue(prompt.contains("device_contacts_search"))
         assertTrue(prompt.contains("query"))

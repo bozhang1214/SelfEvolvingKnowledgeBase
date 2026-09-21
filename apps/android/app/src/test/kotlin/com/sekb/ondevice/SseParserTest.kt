@@ -1,7 +1,7 @@
 package com.sekb.ondevice
 
-import com.sekb.ondevice.model.ChatEvent
-import com.sekb.ondevice.net.SseParser
+import com.sekb.shared.model.ChatEvent
+import com.sekb.shared.net.SseParser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

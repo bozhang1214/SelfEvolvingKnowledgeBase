@@ -10,6 +10,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import com.sekb.shared.net.HttpResponse
+import com.sekb.shared.net.HttpTransport
+import com.sekb.shared.net.*
 
 /** OkHttp 实现（唯一的真实实现；测试用假传输）。 */
 class OkHttpTransport(private val client: OkHttpClient = defaultClient()) : HttpTransport {

@@ -3,6 +3,7 @@ package com.sekb.ondevice.rag
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.sekb.shared.rag.*
 
 class ChunkingTest {
 

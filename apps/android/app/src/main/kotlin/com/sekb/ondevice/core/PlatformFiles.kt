@@ -1,6 +1,7 @@
 package com.sekb.ondevice.core
 
 import java.io.File
+import com.sekb.shared.core.*
 
 /**
  * 文件读取端口（M4 第 2 步：把 `java.io.File` 从纯逻辑里赶出来）。

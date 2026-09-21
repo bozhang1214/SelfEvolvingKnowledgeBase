@@ -2,6 +2,7 @@ package com.sekb.ondevice.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import com.sekb.shared.core.*
 
 /**
  * [Fmt] 专测。

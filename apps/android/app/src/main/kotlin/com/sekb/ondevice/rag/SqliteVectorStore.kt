@@ -4,9 +4,16 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
-import com.sekb.ondevice.embed.EmbeddingSpace
+import com.sekb.shared.embed.EmbeddingSpace
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import com.sekb.shared.rag.DocumentInfo
+import com.sekb.shared.rag.DocumentRegistry
+import com.sekb.shared.rag.VectorHit
+import com.sekb.shared.rag.VectorRecord
+import com.sekb.shared.rag.VectorMath
+import com.sekb.shared.rag.VectorStore
+import com.sekb.shared.rag.*
 
 /**
  * SQLite 向量存储（端侧索引的**持久化**实现）。
@@ -109,7 +116,7 @@ class SqliteVectorStore(
      *
      * @return 重算的片段数
      */
-    fun reembed(provider: com.sekb.ondevice.embed.EmbeddingProvider, batch: Int = 16): Int {
+    fun reembed(provider: com.sekb.shared.embed.EmbeddingProvider, batch: Int = 16): Int {
         val rows = all()
         if (rows.isEmpty()) {
             writeSpace()
@@ -286,7 +293,7 @@ class SqliteVectorStore(
          */
         fun openOrReembed(
             context: Context,
-            provider: com.sekb.ondevice.embed.EmbeddingProvider,
+            provider: com.sekb.shared.embed.EmbeddingProvider,
             dbName: String = "sekb_rag.db",
         ): OpenResult {
             val probe = SqliteVectorStore(context, provider.space, dbName, strictSpace = false)

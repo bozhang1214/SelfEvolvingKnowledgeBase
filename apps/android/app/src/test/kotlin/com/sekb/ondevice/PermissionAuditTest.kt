@@ -1,6 +1,6 @@
 package com.sekb.ondevice
 
-import com.sekb.ondevice.tools.PermissionAudit
+import com.sekb.shared.tools.PermissionAudit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

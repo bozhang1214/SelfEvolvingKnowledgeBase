@@ -2,29 +2,29 @@ package com.sekb.ondevice
 
 import android.app.Application
 import android.content.Context
-import com.sekb.ondevice.chat.ChatOrchestrator
-import com.sekb.ondevice.chat.CloudChat
-import com.sekb.ondevice.chat.CloudReply
-import com.sekb.ondevice.chat.ToolCallEval
+import com.sekb.shared.chat.ChatOrchestrator
+import com.sekb.shared.chat.CloudChat
+import com.sekb.shared.chat.CloudReply
+import com.sekb.shared.chat.ToolCallEval
 import com.sekb.ondevice.device.KeystoreCredentialStore
-import com.sekb.ondevice.edge.OpenAiCompatibleEdgeLlm
-import com.sekb.ondevice.embed.DeterministicEmbedding
-import com.sekb.ondevice.embed.EmbeddingProvider
-import com.sekb.ondevice.embed.EmbeddingSpace
+import com.sekb.shared.edge.OpenAiCompatibleEdgeLlm
+import com.sekb.shared.embed.DeterministicEmbedding
+import com.sekb.shared.embed.EmbeddingProvider
+import com.sekb.shared.embed.EmbeddingSpace
 import com.sekb.ondevice.embed.OnnxBgeEmbedding
-import com.sekb.ondevice.rag.KnowledgeIndex
+import com.sekb.shared.rag.KnowledgeIndex
 import com.sekb.ondevice.rag.SqliteVectorStore
-import com.sekb.ondevice.rag.Retriever
-import com.sekb.ondevice.rag.VectorStore
-import com.sekb.ondevice.tools.KbSearchTool
+import com.sekb.shared.rag.Retriever
+import com.sekb.shared.rag.VectorStore
+import com.sekb.shared.tools.KbSearchTool
 import com.sekb.ondevice.net.OkHttpTransport
-import com.sekb.ondevice.net.SekbApi
-import com.sekb.ondevice.route.EdgeRuntimeConfig
-import com.sekb.ondevice.route.PlaneRouter
+import com.sekb.shared.net.SekbApi
+import com.sekb.shared.route.EdgeRuntimeConfig
+import com.sekb.shared.route.PlaneRouter
 import com.sekb.ondevice.tools.AndroidDeviceTools
 import com.sekb.ondevice.tools.AndroidPermissionChecker
-import com.sekb.ondevice.tools.PermissionAudit
-import com.sekb.ondevice.tools.ToolRegistry
+import com.sekb.shared.tools.PermissionAudit
+import com.sekb.shared.tools.ToolRegistry
 
 /**
  * 进程级装配（没有引 DI 框架——这个体量用不上，显式构造比注解更好读）。
@@ -133,7 +133,7 @@ class AppContainer(context: Context) {
      */
     fun orchestrator(
         deviceToken: String,
-        onRouteEvent: (com.sekb.ondevice.model.RouteEventPayload) -> Unit,
+        onRouteEvent: (com.sekb.shared.model.RouteEventPayload) -> Unit,
     ): ChatOrchestrator {
         val cfg = config
         val api = api()

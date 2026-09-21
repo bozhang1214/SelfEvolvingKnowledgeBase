@@ -1,6 +1,6 @@
 package com.sekb.ondevice
 
-import com.sekb.ondevice.tools.ToolCallJson
+import com.sekb.shared.tools.ToolCallJson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -69,7 +69,7 @@ class ToolCallJsonTest {
     @Test
     fun `known tool check distinguishes hallucination`() {
         val known = setOf("device_time", "device_network")
-        assertTrue(ToolCallJson.isKnownTool(com.sekb.ondevice.model.ToolCall("device_time"), known))
-        assertFalse(ToolCallJson.isKnownTool(com.sekb.ondevice.model.ToolCall("device_sms"), known))
+        assertTrue(ToolCallJson.isKnownTool(com.sekb.shared.model.ToolCall("device_time"), known))
+        assertFalse(ToolCallJson.isKnownTool(com.sekb.shared.model.ToolCall("device_sms"), known))
     }
 }
