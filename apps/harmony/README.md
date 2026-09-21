@@ -143,8 +143,26 @@ AGP 8.11.2（sample 用 AGP 8；**我们现有 Android 构建是 AGP 9** → spi
   改用 **后端 venv 的 python3.11** |
 | 主机 cmake/ninja | 本机**都没装** → 用 Android SDK 自带那份（`~/Library/Android/sdk/cmake/4.1.2/bin`，含 ninja） |
 
-**状态**：编译已在后台启动（`build_dir=build/ohos_aarch64`，`--skip_tests`，
-`onnxruntime_BUILD_SHARED_LIB=ON`）。ONNX Runtime 体积大、耗时长，**结果下一轮取**。
+**状态（2026-09-21 结论）：❌ 本机无法完成编译——不是参数问题，是外部依赖拿不到。**
+
+实测过程：`--ohos_arch aarch64` 参数修正后启动编译，**25 分钟无任何产物**（`build/ohos_aarch64` 始终 0B，
+`.o` 数为 0），进程卡在 `--update` 阶段。查证：
+
+| 证据 | 说明 |
+|---|---|
+| `ort-ohos/.gitmodules` | 三个子模块的 URL 全指向 **github.com**（`onnx/onnx`、`google/libprotobuf-mutator`、`emscripten-core/emsdk`） |
+| `cmake/external/` | 只有 `.cmake` **脚本**，没有拉取下来的源码（abseil / protobuf / onnx 等都要现拉） |
+| 网络 | github.com 在本机 **HTTP 000（不可达）**，与 M5 端口③（ORT iOS）是**同一堵墙** |
+| 镜像仓库 | 不含任何预编译 `libonnxruntime.so`（只有移植补丁与构建脚本） |
+
+**三条可行路径**（都需要外部条件）：
+1. 在**能访问 GitHub 的机器**上编译 OHOS aarch64 版 `libonnxruntime.so`，再把产物取回本机；
+2. 找**已编译好的 OHOS 版 libonnxruntime.so**（社区 release / AtomGit·GitCode 的制品），直接链接；
+3. 给本机配代理，让 Gradle/CMake 能拉 GitHub（这一步会同时解开 M5 端口③ 的阻塞）。
+
+**按方案 §4 D2**：spike 要"四条全通"才进 M7。当前 **第 2 条 ✅、第 1 条编译半段 ✅**；
+第 3 条与第 1 条的"装设备"半段，以及第 4 条，都卡在**外部条件**（网络 / 华为开发者账号）上——
+这属于需要 owner 决策的阻塞，不再继续消耗轮次硬撞。
 
 **hvigor / ohpm CLI 已确认可用**（HAP 壳工程可以命令行构建）：
 `/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw`、`.../tools/ohpm/bin/ohpm`。
