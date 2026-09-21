@@ -95,7 +95,7 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 | 方案 | 现状 | 结论 |
 |---|---|---|
 | 宿主 Ollama 嵌入（`HostOllamaEmbedding`） | 宿主**没有装任何嵌入模型**（`/api/tags` 只有 qwen3.5/deepseek/llama2 等对话模型） | 需先拉一个嵌入模型；而本机到 ollama registry 的国际链路此前实测不可用（`scripts/edge_m0_setup.sh` 记录了 ModelScope 绕行方案） |
-| ONNX Runtime iOS（`onnxruntime-objc`/`-c`） | **CocoaPods 未安装**（`pod` 不在 PATH）；直连 GitHub Release 下载 ORT iOS 归档也未验证 | 待评估：装 CocoaPods 或直接从镜像取 ORT iOS 静态库 |
+| ONNX Runtime iOS（`onnxruntime-objc`/`-c`） | ❌ **被网络卡死（2026-09-21 实测）**：GitHub Release 直连 `onnxruntime-objc-1.20.0.zip` → **HTTP 000（不可达）**；CocoaPods CDN 可达（200）但 podspec 的 source 仍指向 GitHub；Maven（aliyun 镜像）只有 `onnxruntime`（JVM）与 `-android`，**没有 iOS 产物**；本机也未装 CocoaPods、无本地缓存 | 两条可行路径：① 在有 GitHub 访问的机器上取回 ORT iOS xcframework（或配代理）；② 用 `coremltools` 把 bge-small 转 **Core ML**（需 pip 装 coremltools，且转换后要**重标阈值**——空间变了） |
 | Core ML（把 bge-small 转 coreml） | 需要 `coremltools` 转换环境 + 模型转换验证 | 更重，且转换后要重新标定阈值（空间变了） |
 
 **因此本轮的可验证范围**：把**整条检索链路**用共享层的确定性桩嵌入打通（与 Android 在"ONNX 模型缺失"
