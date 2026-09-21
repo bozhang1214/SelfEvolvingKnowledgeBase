@@ -5,9 +5,14 @@
 ```
 apps/
 ├── android/     Kotlin + Jetpack Compose（已可用）
-├── ios/         SwiftUI（规划中，见 apps/ios/README.md）
-└── harmony/     ArkTS / ArkUI（规划中，见 apps/harmony/README.md）
+├── ios/         iOS 宿主（规划中，见 apps/ios/README.md）
+├── harmony/     HarmonyOS 宿主（规划中，见 apps/harmony/README.md）
+└── desktop/     Windows/Linux/macOS（规划中：边缘宿主 + 桌面 GUI）
 ```
+
+> **多端跨端方案（draft，待 owner 拍板）**：[`docs/RFC-多端跨端方案.md`](../docs/RFC-多端跨端方案.md)。
+> 关键建议：① UI 统一到 **CMP**（Android/iOS/鸿蒙/桌面一套 UI）；② 鸿蒙走 **KMP/CMP 鸿蒙版**（先 3 天 spike）；
+> ③ 桌面**先做 headless 边缘宿主**（给手机端供算力）、GUI 后置。开工前先看那份文档 §9 的决策清单。
 
 ## 为什么放在同一个仓库（而不是各端独立成仓）
 
@@ -24,17 +29,19 @@ apps/
 
 | 层 | 内容 | 放哪 |
 |---|---|---|
-| **纯逻辑**（无平台依赖） | 路由决策、6 类升级信号、前缀守卫、SSE 解析、工具调用 JSON、编排器 | 目标：`shared/`（Kotlin Multiplatform）→ Android + iOS 共用一份 |
-| **平台适配** | HTTP 传输、凭证存储（Keystore/Keychain）、权限、设备工具、UI | 各端自己的目录 |
+| **纯逻辑**（无平台依赖） | 路由决策、6 类升级信号、前缀守卫、SSE 解析、工具调用 JSON、编排器 | 目标：`shared/core`（Kotlin Multiplatform）→ **四端共用一份**（Android/iOS/鸿蒙/桌面） |
+| **平台适配** | HTTP 传输、凭证存储（Keystore/Keychain/HUKS）、权限、设备工具、文件与 PDF、SQLite、嵌入运行时 | 各端自己的目录（薄） |
+| **UI** | 聊天 / 来源 / 文档 / 设置 | 目标：`shared/ui`（Compose Multiplatform）→ 一套 UI 四端跑 |
 
 现状：这些纯逻辑已经**物理隔离**在 `apps/android/app/src/main/kotlin/com/sekb/ondevice/`
 的 `route/` `net/` `tools/` `chat/` `eval/` 里（它们不 import 任何 `android.*`），
-因此抽成 KMP 模块是**搬家**而不是重写。抽出的时机是开始做 iOS 时（M4）——
-在那之前保持现状，避免为还没存在的第二个端付构建复杂度。
+因此抽成 KMP 模块是**搬家**而不是重写。实测：main 5,406 行里 **3,786 行（70%）可移植**，
+剩下 1,620 行是平台代码。抽出的时机是开始做 iOS 时（M4）。
 
-⚠️ **鸿蒙是个例外**：ArkTS 不能直接复用 Kotlin。可选路线：① 用 ArkTS 重写一份纯逻辑并
-配同一套契约测试（本项目 Android 侧的 96 条单测可直接当模板）；② 把纯逻辑下沉到
-C/C++/Rust 核心，三端各自做绑定。**不要**在没有契约测试的情况下手抄逻辑。
+⚠️ **鸿蒙的旧结论已过期**：2026-06 HDC 华为发布了 KMP/CMP 鸿蒙社区版 Beta（Kotlin/Native 新增
+`OHOS_ARM64` target），"ArkTS 不能复用 Kotlin" 不再是唯一选项。新的路线判断、spike 验收标准与
+回退条件见 [`docs/RFC-多端跨端方案.md`](../docs/RFC-多端跨端方案.md) §4 D2；
+**无论走哪条路线，都必须先有契约测试**——没有测试的"重写一份"等于制造第二套事实。
 
 ## 进度与恢复
 

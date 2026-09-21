@@ -2,6 +2,15 @@
 
 **状态：占位。** 记录开工前的事实与取舍。
 
+> ⚠️ **2026-09-20 更新**：下面「ArkTS 不能复用 Kotlin」的前提**已经过期**——2026-06 华为 HDC 发布了
+> **KMP/CMP 鸿蒙社区版 Beta**（`CPF-KMP-CMP`，基于 KMP 2.2.21 + CMP 1.9.2；Kotlin/Native 新增
+> `OHOS_ARM64`/`OHOS_X64` target，毕昇 LLVM 19 出 ELF，再由 NAPI 与 ArkTS 协作）。
+> 新的路线判断、**3 天 spike 的四条验收标准**、回退条件与风险见
+> [`docs/RFC-多端跨端方案.md`](../../docs/RFC-多端跨端方案.md) §4 D2 与 §10 E2/E3。
+> **结论先说**：优先走 KMP/CMP 路线（spike 通过则复用 ~70% 逻辑），spike 失败才退回下面的路线 A。
+> 本机已具备条件：DevEco SDK **API 22** + OHOS NDK（`aarch64-unknown-linux-ohos-clang`，sysroot `aarch64-linux-ohos`）→ C/C++ 可交叉编译。
+
+
 ## 本机工具链（2026-09-18 实测）
 
 | 项 | 路径 / 实测值 |
