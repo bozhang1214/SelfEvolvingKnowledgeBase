@@ -19,7 +19,8 @@
 | **iOS App 骨架（SwiftUI）** | ✅ | `bash scripts/ios_app.sh run` → 装到 iPhone 17 Pro 模拟器并启动，日志抓到 **`SEKB_IOS_SELFTEST PASS=8 FAIL=0`**：HMAC 向量、规范化 JSON、路由决策、**R10 本机/远端两条对照**、**流式守卫零外泄**、工具调用解析、检索阈值默认值 |
 | **iOS 端口①：传输（NSURLSession）** | ✅ | `apps/ios/App/UrlSessionTransport.swift`：实现共享层 `HttpTransport`（同步语义用信号量、SSE 用 `URLSessionDataDelegate` 逐行回调）。自检实测：`transport_get_host_ollama — code=200 bytes=3474`、`transport_stream_lines — code=200 行数=9`；**iOS 自检 10 PASS / 0 FAIL** |
 | **iOS 端口②：凭证（Keychain）** | ⚠️ 实现完成 / 往返未验 | `apps/ios/App/KeychainCredentialStore.swift` 实现共享层 `CredentialStore`（接口与 `CredentialCodec` 本轮**一起搬进共享层**，两端同一格式）。自检：空库→nil ✅、清理→nil ✅、轮换规则（共享层 `needsRotation`）✅；**往返 SKIP 且原因明确**：手搓未签名 `.app` 调 Keychain 返回 **-34018 errSecMissingEntitlement**，而 ad-hoc 签名（带任何 entitlements）会让模拟器 SpringBoard **拒绝启动**——两条路互斥。需真实 Xcode 工程 + 签名身份或真机时补验；entitlements 文件已备好在 `apps/ios/App/Sekb.entitlements` |
-| iOS 端口③：嵌入（ONNX/CoreML） | ⏳ | |
+| **检索链路（RAG）** | ✅ | 分块 → 嵌入 → 向量库 → 检索 → 阈值 → 隐私闸门，**全部走共享层代码**。自检：`rag_ingest`（1 切片，空间 `stub-hash@256`）、`rag_retrieve`（命中 0.244）、`rag_threshold_refuses`（`below_threshold:最高分=0.180<0.99`）、`rag_device_only_gate`（`device_only_requires_on_device_embedding`）；**iOS 自检 20 PASS / 0 FAIL / 1 SKIP** |
+| iOS 端口③：嵌入（ONNX/CoreML） | ❌ 缺口（已调研） | 见下方"端口③ 调研结论" |
 | **iOS 端口④：PDF（PDFKit）** | ✅ | `apps/ios/App/PdfExtractor.swift`：与 Android 同一套**四类结果**（有文本 / 无文本层 / 加密 / 解析失败）+ 先判 `%PDF` 魔数 + 40 万字符上限。自检实测：`pdf_extract_text_layer — 页数=1 字符=78`（**与 Android 端同一份样本的 78 字符/1 页完全一致**）、`pdf_extract_no_text_layer`、`pdf_extract_rejects_non_pdf`；**iOS 自检 13 PASS / 0 FAIL** |
 | iOS 真机性能 | ⏳ 等硬件 | 模拟器只验功能 |
 | 四个端口（NSURLSession/Keychain/ONNX/PDFKit） | ⏳ | 待 App 骨架跑通后补 |
@@ -88,6 +89,21 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 `application-identifier`）→ SpringBoard 拒绝启动（`FBSOpenApplicationServiceErrorDomain code=1`）。
 当前选择保住"能启动"（其余自检都依赖它），因此 iOS 自检采用**三态**（PASS/FAIL/**SKIP**，
 与 Android 侧自检同口径）："没验"既不算过、也不算失败，原因写进详情。
+
+### 端口③（端侧嵌入）调研结论（2026-09-21，未完成，原因具体）
+
+| 方案 | 现状 | 结论 |
+|---|---|---|
+| 宿主 Ollama 嵌入（`HostOllamaEmbedding`） | 宿主**没有装任何嵌入模型**（`/api/tags` 只有 qwen3.5/deepseek/llama2 等对话模型） | 需先拉一个嵌入模型；而本机到 ollama registry 的国际链路此前实测不可用（`scripts/edge_m0_setup.sh` 记录了 ModelScope 绕行方案） |
+| ONNX Runtime iOS（`onnxruntime-objc`/`-c`） | **CocoaPods 未安装**（`pod` 不在 PATH）；直连 GitHub Release 下载 ORT iOS 归档也未验证 | 待评估：装 CocoaPods 或直接从镜像取 ORT iOS 静态库 |
+| Core ML（把 bge-small 转 coreml） | 需要 `coremltools` 转换环境 + 模型转换验证 | 更重，且转换后要重新标定阈值（空间变了） |
+
+**因此本轮的可验证范围**：把**整条检索链路**用共享层的确定性桩嵌入打通（与 Android 在"ONNX 模型缺失"
+时的回退**同一条代码路径**），证明 iOS 上 RAG 的结构、阈值语义与隐私闸门都成立；
+"端侧真模型"仍记为缺口，下一步在下列三条里选一条（建议按序）：
+① 装 CocoaPods → `onnxruntime-objc` → 用**已有的 int8 ONNX 模型**（`apps/android` 那份，23.9MB）跑真嵌入；
+② 若 ORT iOS 不可得，先用宿主嵌入（先解决嵌入模型获取问题）；
+③ 最后才是 Core ML 转换（成本最高，且要重标阈值）。
 
 ## 与 SEKB 的契约
 

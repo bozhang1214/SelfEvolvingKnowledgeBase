@@ -231,6 +231,58 @@ func runSharedSelfTest() -> [CheckResult] {
         out.append(.init(name: "pdf_extract_rejects_non_pdf", ok: false, detail: "非 PDF 没被拒"))
     }
 
+    // 7.8) **检索链路（RAG）**：chunking → 嵌入 → 向量库 → 检索 → 阈值。
+    //      嵌入**用共享层的确定性桩**（与 Android 在"ONNX 模型缺失"时的回退同一条路）：
+    //      它证明的是"iOS 上整条检索链路能跑"，而**不是**"端侧真模型可用"——
+    //      真模型需要 ONNX Runtime iOS / CoreML（端口③，见 apps/ios/README.md 的缺口记录）。
+    // Kotlin 的默认参数不导出 → 桩嵌入的两个参数也要显式给（否则 init() 被标记 unavailable）
+    let stubSpace = EmbeddingSpace(id: "stub-hash@256", dim: 256)
+    let provider = DeterministicEmbedding(space: stubSpace, isOnDevice: true)
+    let vecStore = InMemoryVectorStore(space: provider.space)   // 注意别与上面的 Keychain store 重名
+    let index = KnowledgeIndex(provider: provider, store: vecStore, maxChars: 512,
+                               overlapChars: 64, registry: nil, nowMillis: { 0 })
+
+    let ingest = index.ingest(
+        sourceId: "doc-rag",
+        text: "端侧 RAG 把知识索引放在设备上，检索不出网，因此隐私更好、延迟更低。\n\n"
+            + "向量空间戳决定了两份向量能不能混用：空间不同必须重算，而不是复用缓存。",
+        name: "端侧 RAG 说明",
+        sizeBytes: 120,
+        deviceOnly: true)
+    out.append(.init(name: "rag_ingest",
+                     ok: ingest.chunks >= 1 && ingest.embedded == ingest.chunks,
+                     detail: "切片=\(ingest.chunks) 嵌入=\(ingest.embedded) 空间=\(ingest.space)"))
+
+    // Kotlin 的默认参数**不会**导出到 Swift：`cloudSpace`/`nowMillis` 必须显式传（实测报 missing arguments）
+    let serverSpace = EmbeddingSpace(id: "BAAI/bge-small-zh-v1.5@512", dim: 512)
+    let retriever = Retriever(provider: provider, store: vecStore, minScore: 0.05,
+                              cloudSpace: serverSpace, nowMillis: { 0 })
+    let hitOutcome = retriever.retrieve(query: "端侧检索为什么隐私更好", topK: 3, deviceOnly: true)
+    let topText = hitOutcome.hits.first?.text ?? ""
+    out.append(.init(name: "rag_retrieve",
+                     ok: hitOutcome.hits.count >= 1 && topText.contains("隐私"),
+                     detail: "命中=\(hitOutcome.hits.count) 首条分=\(String(format: "%.3f", hitOutcome.hits.first?.score ?? 0))"))
+
+    // 阈值：库里没有相关内容时**必须拒绝**（"宁可说没有，也不硬塞给模型"）
+    let strict = Retriever(provider: provider, store: vecStore, minScore: 0.99,
+                           cloudSpace: serverSpace, nowMillis: { 0 })
+    let refused = strict.retrieve(query: "完全不相关的天文问题", topK: 3, deviceOnly: true)
+    out.append(.init(name: "rag_threshold_refuses",
+                     ok: refused.hits.isEmpty && refused.reason.hasPrefix("below_threshold"),
+                     detail: refused.reason.isEmpty ? "未给出原因" : refused.reason))
+
+    // 隐私闸门：非本机嵌入（宿主 Ollama）**一律拒绝** deviceOnly 检索
+    let hostEmbed = HostOllamaEmbedding(transport: UrlSessionTransport(),
+                                        baseUrl: "http://127.0.0.1:11434/v1",
+                                        model: "bge-m3", dim: 1024, apiKey: "ollama")
+    let hostStore = InMemoryVectorStore(space: hostEmbed.space)
+    let hostRetriever = Retriever(provider: hostEmbed, store: hostStore, minScore: 0.05,
+                                  cloudSpace: serverSpace, nowMillis: { 0 })
+    let denied = hostRetriever.retrieve(query: "设备专属内容", topK: 3, deviceOnly: true)
+    out.append(.init(name: "rag_device_only_gate",
+                     ok: denied.hits.isEmpty && denied.reason.contains("device_only"),
+                     detail: denied.reason.isEmpty ? "闸门没拦" : denied.reason))
+
     // 8) **网络端口（NSURLSession）**：真的发一次请求。
     //    iOS 模拟器共享宿主机网络，所以 `127.0.0.1` 就是宿主（与 Android 的 10.0.2.2 对应）。
     //    这条同时证明了：Swift 侧实现 Kotlin 接口可用（`HttpTransport` 是 interface）、
