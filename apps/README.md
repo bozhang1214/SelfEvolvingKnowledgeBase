@@ -5,14 +5,16 @@
 ```
 apps/
 ├── android/     Kotlin + Jetpack Compose（已可用）
-├── ios/         iOS 宿主（规划中，见 apps/ios/README.md）
-├── harmony/     HarmonyOS 宿主（规划中，见 apps/harmony/README.md）
-└── desktop/     Windows/Linux/macOS（规划中：边缘宿主 + 桌面 GUI）
+├── ios/         iOS 宿主（规划中，SwiftUI 原生 UI，见 apps/ios/README.md）
+├── harmony/     HarmonyOS 宿主（规划中，ArkUI 原生 UI，见 apps/harmony/README.md）
+├── mac/         Mac 宿主（规划中，复用 ios/ 的 SwiftUI 源码）
+└── desktop/     Windows/Ubuntu —— **本轮搁置**（跟踪项 docs/BACKLOG.md D16）
 ```
 
-> **多端跨端方案（draft，待 owner 拍板）**：[`docs/RFC-多端跨端方案.md`](../docs/RFC-多端跨端方案.md)。
-> 关键建议：① UI 统一到 **CMP**（Android/iOS/鸿蒙/桌面一套 UI）；② 鸿蒙走 **KMP/CMP 鸿蒙版**（先 3 天 spike）；
-> ③ 桌面**先做 headless 边缘宿主**（给手机端供算力）、GUI 后置。开工前先看那份文档 §9 的决策清单。
+> **四端收敛方案**：[`docs/RFC-多端跨端方案.md`](../docs/RFC-多端跨端方案.md)（v1.0，待 owner 确认）。
+> 已定口径：**范围 = Android / iOS / 鸿蒙 / Mac**（桌面搁置）；**逻辑一份（KMP 共享）+ UI 各端原生**
+> （Compose / SwiftUI / ArkUI，不用跨端统一 UI）；顺序 = M4 共享层 → iOS → 鸿蒙 spike → Mac。
+> 细节：主线 [`多端跨端-KMP方案.md`](../docs/多端跨端-KMP方案.md)、备选评估 [`多端跨端-CMP方案评估.md`](../docs/多端跨端-CMP方案评估.md)。
 
 ## 为什么放在同一个仓库（而不是各端独立成仓）
 

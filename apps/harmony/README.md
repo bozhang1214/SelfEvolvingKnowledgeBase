@@ -2,16 +2,22 @@
 
 **状态：占位。** 记录开工前的事实与取舍。
 
-> ⚠️ **2026-09-20 更新**：下面「ArkTS 不能复用 Kotlin」的前提**已经过期**——2026-06 华为 HDC 发布了
+> ✅ **2026-09-21 定案（KMP 逻辑 + ArkUI 原生 UI，先 spike）**：owner 已定各端原生 UI，
+> 所以本端目标形态是 **ArkUI 原生界面 + KMP 共享逻辑**（经 CPF-KMP-CMP 的 Kotlin/Native `OHOS_ARM64`），
+> 而不是"用 CMP 写鸿蒙界面"。**先做 3 天 spike**（四条验收见
+> [`docs/RFC-多端跨端方案.md`](../../docs/RFC-多端跨端方案.md) §4 D2），任一不过就退回下面的**路线 A**
+> （ArkTS 重写纯逻辑，但必须**先把契约夹具抄过去**）。
+>
+> ⚠️ **前提已变（2026-09-20）**：本节原结论「ArkTS 不能复用 Kotlin」**不再成立**——2026-06 华为 HDC 发布了
 > **KMP/CMP 鸿蒙社区版 Beta**（`CPF-KMP-CMP`，基于 KMP 2.2.21 + CMP 1.9.2；Kotlin/Native 新增
-> `OHOS_ARM64`/`OHOS_X64` target，毕昇 LLVM 19 出 ELF，再由 NAPI 与 ArkTS 协作）。
-> 新的路线判断、**3 天 spike 的四条验收标准**、回退条件与风险见
-> [`docs/RFC-多端跨端方案.md`](../../docs/RFC-多端跨端方案.md) §4 D2 与 §10 E2/E3。
-> **结论先说**：优先走 KMP/CMP 路线（spike 通过则复用 ~70% 逻辑），spike 失败才退回下面的路线 A。
-> 本机已具备条件：DevEco SDK **API 22** + OHOS NDK（`aarch64-unknown-linux-ohos-clang`，sysroot `aarch64-linux-ohos`）。
-> **已实测**（2026-09-21）：该 clang（15.0.4 "OHOS (dev)"）能编 + 链出
-> `ELF 64-bit LSB pie executable, ARM aarch64`，解释器 `/lib/ld-musl-aarch64.so.1`（musl）——
-> 即"给鸿蒙编 C/C++ 库"这条链路是通的；但 clang 15 基线偏老，ONNX Runtime 可能要高版本补丁或降版本（spike 要撞的墙）。
+> `OHOS_ARM64`/`OHOS_X64` target，毕昇 LLVM 19 出 ELF，再由 NAPI 与 ArkTS 协作）。外部来源与核验状态见
+> [`docs/RFC-多端跨端方案.md`](../../docs/RFC-多端跨端方案.md) §10 E2/E3。
+>
+> 🔧 **本机工具链（已实测）**：DevEco SDK **API 22** + OHOS NDK（`aarch64-unknown-linux-ohos-clang`，sysroot `aarch64-linux-ohos`）。
+> 该 clang（15.0.4 "OHOS (dev)"）能编 + 链出 `ELF 64-bit LSB pie executable, ARM aarch64`，
+> 解释器 `/lib/ld-musl-aarch64.so.1`（musl）→ "给鸿蒙编 C/C++ 库"这条链路是通的；
+> 但 clang 15 基线偏老，ONNX Runtime 可能要吃补丁或降版本（spike 第 3 条要撞的墙）。
+
 
 
 ## 本机工具链（2026-09-18 实测）
