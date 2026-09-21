@@ -37,9 +37,14 @@ kotlin {
     // 所以：Android/JVM 的日常构建保持秒级；要验 iOS 时显式开这个开关（CI 上另开 job）。
     val nativeTargets = (project.findProperty("sekbNativeTargets") as String?)?.toBoolean() ?: false
     if (nativeTargets) {
-        iosArm64()
-        iosSimulatorArm64()
-        macosArm64()
+        // iOS/Mac 的产物是 **framework**（Swift 侧 `import SharedCore`）。
+        // `isStatic = true`：静态 framework 省掉动态库加载与签名麻烦（App Store 也更省心）。
+        listOf(iosArm64(), iosSimulatorArm64(), macosArm64()).forEach { target ->
+            target.binaries.framework {
+                baseName = "SharedCore"
+                isStatic = true
+            }
+        }
     }
 
     sourceSets {

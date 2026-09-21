@@ -9,6 +9,30 @@
 > 四端范围与顺序见 [`docs/RFC-多端跨端方案.md`](../../docs/RFC-多端跨端方案.md) v1.0。
 
 
+## M5 进展（2026-09-21）
+
+| 步骤 | 状态 | 证据 |
+|---|---|---|
+| KMP 共享层编到 iOS/macOS | ✅ | `-PsekbNativeTargets=true` 下 `:shared:compileKotlinIosSimulatorArm64` / `compileKotlinMacosArm64` 通过 |
+| framework 产出 | ✅ | `:shared:linkDebugFrameworkIosSimulatorArm64` / `linkDebugFrameworkMacosArm64` → `SharedCore.framework`（`isStatic = true`） |
+| **Swift 互操作冒烟** | ✅ | `bash scripts/ios.sh smoke` → **SMOKE OK（5/5）**：Apple 侧 HMAC/SHA256 对齐公知向量、canonical JSON 与 Python 一致、`ToolCallJson.parse` 的 sealed 类导出可用、`Fmt` 与 Android 逐字符一致 |
+| iOS App（SwiftUI + 模拟器安装） | ⏳ 下一步 | 计划用 `swiftc` 直编 iOS 模拟器目标 + 手工 `.app` 包（`simctl install`），避免手写 `.xcodeproj` |
+| 四个端口（NSURLSession/Keychain/ONNX/PDFKit） | ⏳ | 待 App 骨架跑通后补 |
+
+```bash
+bash scripts/ios.sh smoke        # 产出 framework + 编译并运行 Swift 冒烟
+bash scripts/ios.sh framework    # 只产出 iOS 模拟器 + macOS 的 framework
+```
+
+**三个必须知道的环境事实（都踩过，脚本里已封装）**：
+1. `DEVELOPER_DIR` **必须**指向 Xcode（`/Applications/Xcode.app/Contents/Developer`）：
+   本机 `xcode-select` 指向 CommandLineTools，不设它会报
+   `An error occurred during an xcrun execution / xcrun xcodebuild -version`——
+   **表面像 klib 缓存错误，实则是 Xcode 不可用**（我第一次就被它误导）；
+2. `KONAN_DATA_DIR` 指向仓库内 `.tooling/konan`（Kotlin/Native 工具链默认写 `~/.konan`，工作区外会被沙箱拒）；
+3. `CLANG_MODULE_CACHE_PATH` + `-module-cache-path` 也要指向仓库内（Swift/clang 默认写
+   `/var/folders/.../C/clang/ModuleCache`，同样报 `Operation not permitted`）。
+
 ## 本机工具链（2026-09-18 实测）
 
 | 项 | 实测值 | 备注 |
