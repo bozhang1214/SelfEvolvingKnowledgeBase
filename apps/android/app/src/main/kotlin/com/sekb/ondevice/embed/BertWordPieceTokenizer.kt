@@ -1,6 +1,5 @@
 package com.sekb.ondevice.embed
 
-import java.io.File
 
 /**
  * BERT WordPiece 分词器（`bge-small-zh-v1.5` 用的就是这一套）。
@@ -24,7 +23,6 @@ class BertWordPieceTokenizer(
     private val maxCharsPerWord: Int = 100,
 ) {
 
-    constructor(vocabFile: File, maxLength: Int = 512) : this(loadVocab(vocabFile), maxLength)
 
     private val clsId = vocab["[CLS]"] ?: 101
     private val sepId = vocab["[SEP]"] ?: 102
@@ -119,9 +117,16 @@ class BertWordPieceTokenizer(
     }
 
     companion object {
-        fun loadVocab(file: File): Map<String, Int> {
+        /**
+         * 从**词表文本**建表（不是从 File）。
+         *
+         * 为什么改成吃文本：`java.io.File` 是 JVM 专有，而分词规则本身是纯逻辑（要进 KMP `shared`）。
+         * 读文件这件事交给平台端口（见 `core/PlatformFiles.kt`），传进来的只是字符串——
+         * 这样分词器在 iOS/鸿蒙上能原样编译，行为也完全一致。
+         */
+        fun loadVocab(vocabText: String): Map<String, Int> {
             val map = HashMap<String, Int>(32768)
-            file.forEachLine { line ->
+            vocabText.lineSequence().forEach { line ->
                 val t = line.trimEnd('\n', '\r')
                 if (t.isNotEmpty() || map.isEmpty()) map.putIfAbsent(t, map.size)
             }

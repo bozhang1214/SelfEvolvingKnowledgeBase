@@ -16,13 +16,13 @@ class BertWordPieceTokenizerTest {
     private val vocabFile = File("src/test/resources/bge-small-zh-vocab.txt")
 
     private val tokenizer: BertWordPieceTokenizer by lazy {
-        BertWordPieceTokenizer(vocabFile)
+        BertWordPieceTokenizer(BertWordPieceTokenizer.loadVocab(vocabFile.readText()))
     }
 
     @Test
     fun `vocab file is present and complete`() {
         assertTrue("词表缺失：${vocabFile.absolutePath}", vocabFile.isFile)
-        assertEquals(21128, BertWordPieceTokenizer.loadVocab(vocabFile).size)
+        assertEquals(21128, BertWordPieceTokenizer.loadVocab(vocabFile.readText()).size)
     }
 
     @Test

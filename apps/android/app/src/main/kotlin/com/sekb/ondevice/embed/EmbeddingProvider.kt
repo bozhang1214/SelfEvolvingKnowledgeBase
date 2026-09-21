@@ -2,8 +2,8 @@ package com.sekb.ondevice.embed
 
 import com.sekb.ondevice.core.JsonX
 import com.sekb.ondevice.net.HttpTransport
-import org.json.JSONArray
-import org.json.JSONObject
+import com.sekb.ondevice.core.JsonArray
+import com.sekb.ondevice.core.JsonObject
 
 /**
  * 向量空间标识：`<模型>@<维度>`，与 SEKB 服务端的 `EMBEDDING_SPACE` 同一口径
@@ -118,9 +118,9 @@ class HostOllamaEmbedding(
     override val isOnDevice: Boolean = false
 
     override fun embed(texts: List<String>): List<FloatArray> {
-        val body = JSONObject()
+        val body = JsonObject()
             .put("model", model)
-            .put("input", JSONArray().apply { texts.forEach { put(it) } })
+            .put("input", JsonArray().apply { texts.forEach { put(it) } })
             .toString()
         val resp = transport.postJson(
             url = "$baseUrl/embeddings",

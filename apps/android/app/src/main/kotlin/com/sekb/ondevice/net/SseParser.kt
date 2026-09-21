@@ -1,5 +1,7 @@
 package com.sekb.ondevice.net
 
+import com.sekb.ondevice.core.JsonObject
+
 import com.sekb.ondevice.core.JsonX
 import com.sekb.ondevice.model.ChatEvent
 import com.sekb.ondevice.model.DoneMeta
@@ -49,7 +51,7 @@ class SseParser {
         }
     }
 
-    private fun parseDone(metaObj: org.json.JSONObject?): DoneMeta {
+    private fun parseDone(metaObj: JsonObject?): DoneMeta {
         val execObj = metaObj?.optJSONObject("execution")
         val execution = execObj?.let {
             ExecutionInfo(

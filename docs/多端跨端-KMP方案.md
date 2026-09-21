@@ -69,7 +69,7 @@ related: [docs/RFC-多端跨端方案, docs/RFC-端云协同与端侧Agent, docs
 | 包体积 | 共享 framework 增加**数 MB**（Kotlin/Native 运行时 + stdlib + coroutines + serialization） | 开 dead-code elimination、release 混淆；iOS 用静态 framework；**实测后记进文档** |
 | 构建复杂度 | iOS 需要 Xcode ↔ Gradle 协作（Run Script 产 XCFramework）；Android 侧多一个模块 | 一次性脚本化（`scripts/ios.sh`，**计划新增**），并写进 `apps/ios/README.md` <!-- check-docs:ignore 计划中的脚本，尚未创建 --> |
 | 调试体验 | Swift ↔ Kotlin 断点跨语言；Kotlin/Native 的崩溃栈需要符号化 | 用 XCFramework + dSYM；关键路径保留 Swift 侧日志 |
-| **依赖可移植性**（真正的工作量） | `org.json` / `okhttp3` / `java.io.File`·`UUID`·`concurrent` / `ai.onnxruntime`（JVM API）在 iOS/鸿蒙不可用 | 见 §3，把 4 类依赖变成"端口"（约 3–5 天） |
+| **依赖可移植性**（真正的工作量） | `org.json` / `okhttp3` / `java.io.File`·`UUID` / `ai.onnxruntime`（JVM API）在 iOS/鸿蒙不可用 | ✅ **已处理（M4 第 2 步，2026-09-21）**：`org.json` 收敛到 `core/Json.kt` 一个门面；`okhttp3` 拆到 `net/OkHttpTransport.kt`；`File`/`UUID` 变成 `core/PlatformFiles.kt` / `core/Ids.kt` 两个端口；`ai.onnxruntime` 留在 `embed/OnnxBgeEmbedding.kt`（**按设计**就是平台实现）。结果：除这 4 个端口文件外，其余 main 代码**不再出现任何 JVM/platform import** |
 | 学习/维护面 | 一套 Kotlin + 各端原生 UI（Swift/ArkTS 也要会） | 这是 owner 已选的路线；共享的是"最容易写错的那部分" |
 
 ### Q3 三条路线对比（给 owner 的决策用）
@@ -124,7 +124,7 @@ apps/
 │       │   ├── core/              # ← 现 android 的 route/ net/ tools/ chat/ rag/ embed/ eval/ model/ edge/ core/JsonX
 │       │   ├── ports/             # 端口接口（HttpTransport / CredentialStore / VectorStore / …）
 │       │   └── constants/         # 空间戳、阈值、升级信号枚举（不变量集中地）
-│       ├── commonTest/kotlin/     # ← 现 186 个用例里可共享的部分（功能 158 + 契约 4；见 §2.1）
+│       ├── commonTest/kotlin/     # ← 现 202 个用例里可共享的部分（功能 ~158 + 契约 4 + 门面 11；见 §2.1）
 │       ├── androidMain/           # OkHttp、Keystore、SQLite、ONNX(android)、PdfBox、设备工具
 │       ├── iosMain/               # NSURLSession、Keychain、SQLite、ONNX(ObjC/C)、PDFKit、设备工具
 │       ├── jvmMain/               # 桌面宿主/单测：OkHttp(JVM)、JDBC SQLite、ONNX(java)、PdfBox、文件存储
@@ -140,17 +140,17 @@ JVM→jar（桌面对共享层是"零边界成本"，这也让**单测跑在 JVM
 
 ### 2.1 测试能共享多少（实测，2026-09-21）
 
-`apps/android/app/src/test` 现有 **186 个 `@Test`**（功能 182 + 跨端契约夹具 4）；其中所在文件 import 了
+`apps/android/app/src/test` 现有 **202 个 `@Test`**（功能 187 + 契约夹具 4 + JSON 门面专测 11）；其中所在文件 import 了
 `android.*` / `androidx.*` / `org.json` 的只有 **24 个**（`SekbApiTest` 10、`EdgeLlmClientTest` 7、
 `EmbeddingProviderTest` 7），而且这 24 个里的平台依赖**只是用 `org.json` 造测试数据**——
 也就是 §6 步骤 2 的"去平台化"做完后，它们可以一起共享。
 
-**结论：≈158 个用例可以直接搬进 `commonTest`**（占 87%），并在 JVM 上秒级跑完、
+**结论：≈173 个用例可以直接搬进 `commonTest`**（功能 158 + 契约 4 + 门面 11，占 202 的 86%），并在 JVM 上秒级跑完、
 在 iOS/鸿蒙上跑同一份断言。这是"逻辑共享"最硬的证据：**行为一致性由测试保证，不靠人抄得仔细**。
 
 > 顺带核对了基线：本轮为拿 §0 的微基准数字跑了一次全量 JVM 单测，
 > **当时 182 个用例全部通过**（11 秒；临时基准是第 183 个，跑完已删）。
-> 之后新增的 4 个契约夹具测试（见 `apps/contract/README.md`）使总量变为 **186**。
+> 之后依次新增：4 个契约夹具测试（`apps/contract/README.md`）、11 个 JSON 门面专测 → 总量 **202**。
 
 ---
 

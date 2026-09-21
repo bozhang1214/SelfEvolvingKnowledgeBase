@@ -2,7 +2,7 @@
 
 > 规则：**只写跑过的命令与真实输出**。"应该能跑"不算验证；没能验的写在最后一节。
 
-> 端侧单测总量：**191**（功能 187 + 跨端契约夹具 4）<!-- fact:android_unit_cases=191 -->
+> 端侧单测总量：**202**（功能 187 + 跨端契约夹具 4 + JSON 门面专测 11）<!-- fact:android_unit_cases=202 -->
 
 环境：macOS（Apple Silicon）+ Android Studio JBR 21 + Android SDK platform 36.1 +
 AVD `Medium_Phone_API_36.1`（arm64-v8a，google_apis_playstore）。
@@ -24,6 +24,25 @@ bash scripts/android.sh test        # 191 tests, 0 failed（功能 187 + 契约 
 | **R10：DEVICE_ONLY + 非本机端点 = 一个请求都不发** | `PlaneRouterTest`：`10.0.2.2` / `192.168.1.20` / `100.71.24.105` / `edge-host.local` / `0.0.0.0` 全部判为**非本机** → `blockedReason=device_only_requires_local_runtime`；`127.0.0.1` / `localhost` / `[::1]` 判为本机 → 可执行（`device_only_data`） |
 | **编排器层面真的不发** | `ChatOrchestratorTest.device only data is not sent at all when edge endpoint is remote`：端侧 0 次调用、云端 0 次调用、`text=""`、`error` 里有可读原因 |
 | **普通数据不受影响** | 同一批测试里 `non device-only traffic is unaffected by endpoint locality`：普通数据打远端端点仍是 `edge_preferred`（R10 不误伤端云协同） |
+
+### 1.0.2 依赖去平台化（M4 第 2 步，2026-09-21）
+
+```bash
+bash scripts/android.sh test        # 202 tests, 0 failed（新增 JsonFacadeTest 11 条）
+grep -rn "org.json" app/src/main    # 只剩 core/Json.kt（门面本体）
+```
+
+| 原先散落的 JVM 依赖 | 处理 | 现在在哪 |
+|---|---|---|
+| `org.json`（8 个文件直接 import） | 收敛成一个门面（`JsonObject`/`JsonArray`，API 与 org.json 子集同名，调用点只改 import） | `core/Json.kt`（唯一 import org.json 的地方） |
+| `okhttp3` | 接口与实现分文件 | `net/HttpTransport.kt`（接口）/ `net/OkHttpTransport.kt`（实现） |
+| `java.io.File`（词表读取） | 分词器改为吃**词表文本**；读文件收进端口 | `core/PlatformFiles.kt` + `embed/BertWordPieceTokenizer.kt`（已无 JVM import） |
+| `java.util.UUID` | 收进端口 | `core/Ids.kt` |
+| `ai.onnxruntime`（JVM API） | **按设计保留**（这就是平台实现） | `embed/OnnxBgeEmbedding.kt` |
+
+**结果**：除 4 个端口文件（`OkHttpTransport`/`PlatformFiles`/`Ids`/`OnnxBgeEmbedding`）外，
+`main` 代码里**不再出现任何 JVM/platform import**；纯 Kotlin 行数 **3,723 / 5,673 = 66%**（去平台化前 70% 口径含了端口文件，现已更正）。
+JSON 门面新增 11 条专测（失败返回 null 而非抛、转义/中文/嵌套往返一致、宽松 vs 严格读法、`intMap` 动态键）。
 
 ### 1.0.1 P0 包体瘦身 + 自检 27/27（M4 第 4 步，2026-09-21）
 

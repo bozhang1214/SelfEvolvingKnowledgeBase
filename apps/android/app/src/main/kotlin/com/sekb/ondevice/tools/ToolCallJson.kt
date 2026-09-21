@@ -2,7 +2,7 @@ package com.sekb.ondevice.tools
 
 import com.sekb.ondevice.model.ToolCall
 import com.sekb.ondevice.model.ToolResult
-import org.json.JSONObject
+import com.sekb.ondevice.core.JsonObject
 
 /**
  * 工具调用的**结构化解析与校验**（端侧 Agent 可用性的关键一环）。
@@ -29,11 +29,8 @@ object ToolCallJson {
         val candidate = extractJsonObject(text)
             ?: return Parsed.Invalid("no_json_object", text.take(200))
         val normalized = normalize(candidate)
-        val obj = try {
-            JSONObject(normalized)
-        } catch (e: Exception) {
-            return Parsed.Invalid("json_syntax:${e.message?.take(60) ?: "error"}", candidate.take(200))
-        }
+        val obj = JsonObject.parse(normalized)
+            ?: return Parsed.Invalid("json_syntax:not_an_object", candidate.take(200))
         val tool = obj.optString("tool", "").ifBlank { obj.optString("name", "") }
         if (tool.isBlank()) return Parsed.Invalid("missing_tool_name", candidate.take(200))
         val argsNode = obj.optJSONObject("args") ?: obj.optJSONObject("arguments")

@@ -4,8 +4,8 @@ import com.sekb.ondevice.core.JsonX
 import com.sekb.ondevice.net.HttpTransport
 import com.sekb.ondevice.net.OpenAiSseParser
 import com.sekb.ondevice.route.EdgeRuntimeConfig
-import org.json.JSONArray
-import org.json.JSONObject
+import com.sekb.ondevice.core.JsonArray
+import com.sekb.ondevice.core.JsonObject
 
 /**
  * 端侧 LLM 适配层（**可插拔**）。
@@ -142,17 +142,17 @@ class OpenAiCompatibleEdgeLlm(
      *    这是"约束解码开关"在 OpenAI 兼容协议里的对应物；合法率对比实验靠它来分组。
      */
     fun buildBody(model: String, messages: List<ChatMessage>, maxTokens: Int, jsonMode: Boolean, stream: Boolean): String {
-        val arr = JSONArray()
+        val arr = JsonArray()
         for (m in messages) {
-            arr.put(JSONObject().put("role", m.role).put("content", m.content))
+            arr.put(JsonObject().put("role", m.role).put("content", m.content))
         }
-        val body = JSONObject()
+        val body = JsonObject()
             .put("model", model)
             .put("messages", arr)
             .put("max_tokens", maxTokens)
             .put("stream", stream)
             .put("temperature", 0.2)
-        if (jsonMode) body.put("response_format", JSONObject().put("type", "json_object"))
+        if (jsonMode) body.put("response_format", JsonObject().put("type", "json_object"))
         if (config.disableThinking) body.put("reasoning_effort", "none")
         return body.toString()
     }
@@ -171,7 +171,7 @@ class OpenAiCompatibleEdgeLlm(
         transport.postJson(
             url = "$nativeBase/api/generate",
             headers = jsonHeaders(),
-            body = JSONObject().put("model", model).put("prompt", "").put("keep_alive", keepAlive).toString(),
+            body = JsonObject().put("model", model).put("prompt", "").put("keep_alive", keepAlive).toString(),
             timeoutSeconds = 180,
         ).isOk
     } catch (e: Exception) {

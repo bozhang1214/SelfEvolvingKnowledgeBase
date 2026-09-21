@@ -1,5 +1,7 @@
 package com.sekb.ondevice.embed
 
+import com.sekb.ondevice.core.PlatformFiles
+
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -31,7 +33,12 @@ class OnnxBgeEmbedding(
     override val space: EmbeddingSpace = EmbeddingSpace(spaceId, 512)
     override val isOnDevice: Boolean = true
 
-    private val tokenizer = BertWordPieceTokenizer(File(modelDir, VOCAB_FILE), maxLength)
+    private val tokenizer = BertWordPieceTokenizer(
+        BertWordPieceTokenizer.loadVocab(
+            PlatformFiles.readText("$modelDir/$VOCAB_FILE"),
+        ),
+        maxLength,
+    )
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val session: OrtSession = env.createSession(
         File(modelDir, MODEL_FILE).absolutePath,

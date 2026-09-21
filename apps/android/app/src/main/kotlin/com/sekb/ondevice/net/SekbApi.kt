@@ -5,8 +5,8 @@ import com.sekb.ondevice.model.ChatEvent
 import com.sekb.ondevice.model.DeviceCredentials
 import com.sekb.ondevice.model.ExecutionInfo
 import com.sekb.ondevice.model.RouteEventPayload
-import org.json.JSONArray
-import org.json.JSONObject
+import com.sekb.ondevice.core.JsonArray
+import com.sekb.ondevice.core.JsonObject
 
 /** 云端一次聊天的结果：执行位置（S3）+ 会话 ID（下次要带回去，否则每轮都是新会话）。 */
 data class SekbChatResult(val execution: ExecutionInfo?, val conversationId: String?)
@@ -32,7 +32,7 @@ class SekbApi(
     // ---------- 账号与设备凭证 ----------
 
     fun login(email: String, password: String): String {
-        val body = JSONObject().put("email", email).put("password", password).toString()
+        val body = JsonObject().put("email", email).put("password", password).toString()
         val resp = transport.postJson("$baseUrl/api/v1/auth/login", jsonHeaders(), body)
         if (!resp.isOk) throw SekbApiException(resp.code, errorDetail(resp.body))
         // 字段名以服务端 LoginResponse 为准：`{"user": {...}, "token": "..."}`。
@@ -47,7 +47,7 @@ class SekbApi(
     /** 用**用户 token** 换设备凭证（设备首次接入调一次）。 */
     fun enroll(userToken: String, name: String, platform: String = "android",
                appVersion: String, embeddingSpace: String): DeviceCredentials {
-        val body = JSONObject()
+        val body = JsonObject()
             .put("name", name)
             .put("platform", platform)
             .put("app_version", appVersion)
@@ -66,7 +66,7 @@ class SekbApi(
     }
 
     fun heartbeat(deviceToken: String, appVersion: String, embeddingSpace: String): Boolean {
-        val body = JSONObject().put("app_version", appVersion).put("embedding_space", embeddingSpace).toString()
+        val body = JsonObject().put("app_version", appVersion).put("embedding_space", embeddingSpace).toString()
         val resp = transport.postJson("$baseUrl/api/v1/device/heartbeat", authHeaders(deviceToken), body)
         return resp.isOk
     }
@@ -96,7 +96,7 @@ class SekbApi(
         onToken: (String) -> Unit,
         onThinking: (String) -> Unit = {},
     ): SekbChatResult {
-        val body = JSONObject().put("message", message)
+        val body = JsonObject().put("message", message)
         if (!conversationId.isNullOrBlank()) body.put("conversation_id", conversationId)
         var execution: ExecutionInfo? = null
         var convId: String? = conversationId
@@ -142,7 +142,7 @@ class SekbApi(
      * "端侧完成率/升级率"永远只统计到一半（协议 §4）。
      */
     fun reportRouteEvent(deviceToken: String, event: RouteEventPayload): Boolean {
-        val body = JSONObject()
+        val body = JsonObject()
             .put("event_id", event.eventId)
             .put("role", event.role)
             .put("plane", event.plane)
@@ -154,8 +154,8 @@ class SekbApi(
             .put("latency_ms", event.latencyMs)
             .put("escalated", event.escalated)
             .put("escalate_reason", event.escalateReason)
-            .put("signals", JSONArray().apply { event.signals.forEach { put(it) } })
-            .put("versions", JSONObject().apply { event.versions.forEach { (k, v) -> put(k, v) } })
+            .put("signals", JsonArray().apply { event.signals.forEach { put(it) } })
+            .put("versions", JsonObject().apply { event.versions.forEach { (k, v) -> put(k, v) } })
             .toString()
         val resp = transport.postJson("$baseUrl/api/v1/edge/route-events", authHeaders(deviceToken), body)
         // 403（设备 token 无权限）与 401（凭证失效）都要让上层知道，但不能因此丢事件：

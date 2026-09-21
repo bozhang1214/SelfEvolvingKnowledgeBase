@@ -2,7 +2,7 @@ package com.sekb.ondevice.route
 
 import com.sekb.ondevice.model.Plane
 import com.sekb.ondevice.model.RouteDecision
-import org.json.JSONObject
+import com.sekb.ondevice.core.JsonObject
 
 /**
  * 端侧平面路由（服务端 `plane_router.PlaneRouter` 的客户端镜像）。
@@ -256,11 +256,11 @@ class PlaneRouter(val config: EdgeRuntimeConfig) {
             "\"(?:tool|name|function)\"\\s*:\\s*\"([A-Za-z_][A-Za-z0-9_]*)\"",
         )
 
-        fun parseJsonObjectOrNull(text: String): JSONObject? = try {
+        fun parseJsonObjectOrNull(text: String): JsonObject? = try {
             // 容忍 ```json 围栏与前后废话：只取第一个 { 到最后一个 }
             val start = text.indexOf('{')
             val end = text.lastIndexOf('}')
-            if (start < 0 || end <= start) null else JSONObject(text.substring(start, end + 1))
+            if (start < 0 || end <= start) null else JsonObject.parse(text.substring(start, end + 1))
         } catch (e: Exception) {
             null
         }

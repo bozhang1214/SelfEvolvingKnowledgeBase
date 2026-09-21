@@ -1,5 +1,7 @@
 package com.sekb.ondevice.chat
 
+import com.sekb.ondevice.core.Ids
+
 import com.sekb.ondevice.edge.ChatMessage
 import com.sekb.ondevice.edge.EdgeLlm
 import com.sekb.ondevice.model.ExecutionInfo
@@ -12,7 +14,6 @@ import com.sekb.ondevice.route.PlaneRouter
 import com.sekb.ondevice.route.StreamGuard
 import com.sekb.ondevice.tools.ToolCallJson
 import com.sekb.ondevice.tools.ToolRegistry
-import java.util.UUID
 
 /** 云端一次聊天的回执：执行位置 + 会话 ID（会话 ID 必须回流，否则每轮都是新会话）。 */
 data class CloudReply(val execution: ExecutionInfo?, val conversationId: String?)
@@ -68,7 +69,7 @@ class ChatOrchestrator(
     private val tools: ToolRegistry,
     private val reporter: (RouteEventPayload) -> Unit = {},
     private val now: () -> Long = { System.currentTimeMillis() },
-    private val newId: () -> String = { UUID.randomUUID().toString().replace("-", "").take(12) },
+    private val newId: () -> String = { Ids.short() },
 ) {
 
     init {
