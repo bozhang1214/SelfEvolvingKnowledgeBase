@@ -29,6 +29,7 @@ from app.api.middleware import RateLimitMiddleware, setup_cors
 from app.core.bootstrap import AppContext, initialize_app, shutdown_app
 from app.core.config import AppConfig, get_config
 from app.core.exceptions import (
+    AuthError,
     BudgetExceededError,
     LLMError,
     LLMRateLimitError,
@@ -264,6 +265,35 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": "服务内部错误，请稍后重试", "error_id": error_id},
+        )
+
+    # ---------- 全局异常处理器：鉴权失败（AuthError → 401） ----------
+    @app.exception_handler(AuthError)
+    async def auth_error_handler(_request: Request, exc: AuthError) -> JSONResponse:
+        """鉴权失败必须回 401（而不是 500）。
+
+        为什么需要单独注册：``AuthError`` 继承的是 ``Exception`` 而**不是**
+        ``SEKBError``（见 ``core/exceptions.py``），所以它穿过了 SEKBError 处理器，
+        也不是 HTTPException，最后落进兜底的 Exception 处理器 → **500**。
+        后果（2026-09-21 实测）：token 过期/被吊销/畸形时客户端拿到
+        `{"error":"InternalServerError",...}`，而前端**只在 401 时**才判定
+        token 失效并跳登录页（`frontend/src/services/api.ts:68-71`）——
+        于是"会话过期"被显示成"服务内部错误"，既不跳登录也不清 token。
+        顺带一提，``_claims_or_401`` 的注释早就写了"缺失/无效统一 401"，
+        这里补上的正是「无效」那一半。
+
+        响应体用 ``{"detail": ...}``：与 HTTPException 处理器的 4xx 形状一致，
+        前端无需为鉴权错误单开一条解析路径。
+        """
+        logger.info(
+            "鉴权失败",
+            message=exc.message,
+            status_code=exc.status_code,
+            path=str(_request.url.path),
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.message},
         )
 
     # ---------- 全局兜底异常处理器 ----------
