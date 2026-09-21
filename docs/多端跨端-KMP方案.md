@@ -118,13 +118,14 @@ apps/
 ├── settings.gradle.kts            # include(":shared", ":android:app", ":desktop")
 ├── gradlew / gradle/              # wrapper 从 apps/android/ 上移（一次性）
 ├── shared/
-│   ├── build.gradle.kts           # kotlin { androidTarget(); iosArm64(); iosSimulatorArm64(); jvm(); [ohosArm64()] }
+│   ├── build.gradle.kts           # kotlin { androidLibrary{}; iosArm64(); iosSimulatorArm64(); macosArm64() }
+│   │                              #   ↑ native target 用 -PsekbNativeTargets=true 开关（默认关，见 §5 第 3 步）
 │   └── src/
 │       ├── commonMain/kotlin/com/sekb/shared/
 │       │   ├── core/              # ← 现 android 的 route/ net/ tools/ chat/ rag/ embed/ eval/ model/ edge/ core/JsonX
 │       │   ├── ports/             # 端口接口（HttpTransport / CredentialStore / VectorStore / …）
 │       │   └── constants/         # 空间戳、阈值、升级信号枚举（不变量集中地）
-│       ├── commonTest/kotlin/     # ← 现 202 个用例里可共享的部分（功能 ~158 + 契约 4 + 门面 11；见 §2.1）
+│       ├── commonTest/kotlin/     # ← 现 207 个用例里可共享的部分（功能 ~158 + 契约 4 + 门面 11 + 格式化 5；见 §2.1）
 │       ├── androidMain/           # OkHttp、Keystore、SQLite、ONNX(android)、PdfBox、设备工具
 │       ├── iosMain/               # NSURLSession、Keychain、SQLite、ONNX(ObjC/C)、PDFKit、设备工具
 │       ├── jvmMain/               # 桌面宿主/单测：OkHttp(JVM)、JDBC SQLite、ONNX(java)、PdfBox、文件存储
@@ -140,17 +141,17 @@ JVM→jar（桌面对共享层是"零边界成本"，这也让**单测跑在 JVM
 
 ### 2.1 测试能共享多少（实测，2026-09-21）
 
-`apps/android/app/src/test` 现有 **202 个 `@Test`**（功能 187 + 契约夹具 4 + JSON 门面专测 11）；其中所在文件 import 了
+`apps/android/app/src/test` 现有 **207 个 `@Test`**（功能 187 + 契约夹具 4 + JSON 门面 11 + 格式化 5）；其中所在文件 import 了
 `android.*` / `androidx.*` / `org.json` 的只有 **24 个**（`SekbApiTest` 10、`EdgeLlmClientTest` 7、
 `EmbeddingProviderTest` 7），而且这 24 个里的平台依赖**只是用 `org.json` 造测试数据**——
 也就是 §6 步骤 2 的"去平台化"做完后，它们可以一起共享。
 
-**结论：≈173 个用例可以直接搬进 `commonTest`**（功能 158 + 契约 4 + 门面 11，占 202 的 86%），并在 JVM 上秒级跑完、
+**结论：≈178 个用例可以直接搬进 `commonTest`**（功能 158 + 契约 4 + 门面 11 + 格式化 5，占 207 的 86%），并在 JVM 上秒级跑完、
 在 iOS/鸿蒙上跑同一份断言。这是"逻辑共享"最硬的证据：**行为一致性由测试保证，不靠人抄得仔细**。
 
 > 顺带核对了基线：本轮为拿 §0 的微基准数字跑了一次全量 JVM 单测，
 > **当时 182 个用例全部通过**（11 秒；临时基准是第 183 个，跑完已删）。
-> 之后依次新增：4 个契约夹具测试（`apps/contract/README.md`）、11 个 JSON 门面专测 → 总量 **202**。
+> 之后依次新增：4 个契约夹具测试（`apps/contract/README.md`）、11 个 JSON 门面专测、5 个格式化专测 → 总量 **207**。
 
 ---
 
