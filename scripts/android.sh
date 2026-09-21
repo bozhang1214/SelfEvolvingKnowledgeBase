@@ -44,6 +44,8 @@ export ANDROID_AVD_HOME="$ROOT/.tooling/android-avd"
 # 在受限沙箱里直接失败（实测：FileNotFoundException .../kotlin-native-prebuilt-.../.lock）。
 # 与 GRADLE_USER_HOME/ANDROID_USER_HOME 同一处理：收进仓库内 .tooling/。
 export KONAN_DATA_DIR="${KONAN_DATA_DIR:-$ROOT/.tooling/konan}"
+# 端侧（宿主 Ollama）地址：模拟器上用 adb reverse 时传 http://127.0.0.1:11434/v1
+# （见 docs/... 与 emulator.sh 里的说明；不传则用 10.0.2.2）
 mkdir -p "$GRADLE_USER_HOME" "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME"
 
 # 3) Android SDK：优先 apps/android/local.properties 里的 sdk.dir
@@ -77,7 +79,8 @@ for task in "$@"; do
     case "$task" in
         test)      ./gradlew :app:testDebugUnitTest --console=plain $MINOR_FLAG ;;
         assemble)  ./gradlew :app:assembleDebug --console=plain $MINOR_FLAG \
-                       ${SEKB_SEKB_URL:+-PsekbBaseUrl="$SEKB_SEKB_URL"} ;;
+                       ${SEKB_SEKB_URL:+-PsekbBaseUrl="$SEKB_SEKB_URL"} \
+                       ${SEKB_EDGE_URL:+-PsekbEdgeUrl="$SEKB_EDGE_URL"} ;;
         install)   ./gradlew :app:installDebug --console=plain $MINOR_FLAG ;;
         push-sample)
             # 端侧 RAG 导入 E2E 用的样本文档：写进 App 内部 filesDir（App 自己能读，无需存储权限）

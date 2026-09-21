@@ -39,11 +39,21 @@ bash scripts/android.sh test        # 231 tests, 0 failed（新增 PolicyFetcher
 | 阈值进检索 | `container.retriever` 的 `minScore` 取自落盘策略（`retrievalMinScore`），没有则 0.5 | `activeRetrievalMinScore()` 单测 |
 | 自检项 | `policy_refresh`（无设备凭证 → SKIP）、`policy_rollback_guard`（无上一份时必须干净跳过） | ⏳ **本轮未能 E2E**（见下） |
 
-**⚠️ 本轮 E2E 未跑通，原因与修法（已落在脚本里）**：自检第 1 项 `edge_reachable` 就是 false——
-实测宿主 Ollama **只绑 `127.0.0.1:11434`**，而当前模拟器访问不到宿主回环别名 `10.0.2.2:11434`。
-**修法（推荐，已加进 `scripts/emulator.sh`）**：起模拟器时自动 `adb reverse tcp:11434 tcp:11434`，
-并用 `-PsekbEdgeUrl=http://127.0.0.1:11434/v1` 构建（无需把 Ollama 绑到 `0.0.0.0` 暴露到局域网）。
-下一轮 E2E 应能跑满 29 项（27 + `policy_refresh` + `policy_rollback_guard`）。
+**✅ E2E 已跑通（2026-09-21 复跑）**：
+
+```
+[PASS] edge_reachable — http://10.0.2.2:11434/v1 → true
+[SKIP] policy_refresh — 无设备凭证（先登录换设备 token）→ 跳过
+[PASS] policy_rollback_guard — 无上一份时回滚必须干净跳过（不抛、不改状态）
+自检汇总：PASS=28 FAIL=0 SKIP=2
+```
+
+**首次失败的原因与最终修法**：第一次跑时自检第 1 项 `edge_reachable=false`——宿主 Ollama 默认只绑
+`127.0.0.1:11434`。现在 `scripts/emulator.sh` 起好模拟器后会自动 `adb reverse tcp:11434 tcp:11434`
+（配合 `-PsekbEdgeUrl=http://127.0.0.1:11434/v1` 或 `SEKB_EDGE_URL=` 构建），
+**不必**把 Ollama 绑到 `0.0.0.0` 暴露到局域网；复跑时 `10.0.2.2` 亦可直连（两种路径都留着）。
+`policy_refresh` 之所以 SKIP：策略端点按**设备 token** 鉴权，而自检未登录（与 `cloud_login` 同样 SKIP）——
+这不是失败：拿不到策略时端侧照常工作（`PolicyFetcherTest` 已钉住"失败不改状态"）。
 
 ### 1.0.4 端侧策略（L1 热修）校验与应用（M4.5 端侧，2026-09-21）
 

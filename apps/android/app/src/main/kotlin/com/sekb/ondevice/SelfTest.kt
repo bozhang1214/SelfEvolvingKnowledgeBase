@@ -114,12 +114,14 @@ object SelfTest {
                 // 通过标准：**要么成功应用，要么给出明确原因**（网络/签名/灰度都不算失败——
                 // 策略是锦上添花，端侧必须能在拿不到它的情况下照常工作）
                 record("policy_refresh", result != null, detail)
-                record(
-                    "policy_rollback_guard",
-                    container.policyFetcher.rollback(container.config) is com.sekb.shared.policy.PolicyRefreshResult.Skipped,
-                    "无上一份时回滚必须干净跳过（不抛、不改状态）",
-                )
             }
+            // 回滚守卫与"有没有凭证"无关：无上一份时必须干净跳过（不抛、不改状态）
+            record(
+                "policy_rollback_guard",
+                container.policyFetcher.rollback(container.config)
+                    is com.sekb.shared.policy.PolicyRefreshResult.Skipped,
+                "无上一份时回滚必须干净跳过（不抛、不改状态）",
+            )
         }
 
         // 3.5 R10（M4）：DEVICE_ONLY + 非本机端点 → 一个请求都不许发。
