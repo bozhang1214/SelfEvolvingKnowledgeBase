@@ -40,6 +40,40 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+#: DEVICE_ONLY 数据 + **非本机**端侧端点 → 拒绝执行（与客户端 R10 同一口径，2026-09-21）
+REASON_DEVICE_ONLY_NOT_LOCAL = "device_only_requires_local_runtime"
+
+#: 等价于"这台机器自己"的主机名/IPv4/IPv6 写法
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0:0:0:0:0:0:0:1", "localhost.localdomain"}
+
+
+def host_of(url: str) -> str | None:
+    """从 URL 里取 host（纯字符串解析：不引 urllib，保持与客户端实现同形便于对照）。"""
+    after_scheme = url.split("://", 1)[1] if "://" in url else ""
+    if not after_scheme:
+        return None
+    authority = after_scheme.split("/", 1)[0].split("?", 1)[0]
+    if not authority or authority.startswith("@"):
+        return None
+    host_part = authority.split("@", 1)[-1]        # 去掉 user:pass@
+    if host_part.startswith("["):                  # IPv6
+        return host_part[1:].split("]", 1)[0]
+    return host_part.split(":", 1)[0] or None
+
+
+def is_local_endpoint(url: str) -> bool:
+    """该端点是否指向**本机**（DEVICE_ONLY 能不能真执行的判据）。
+
+    为什么按地址而不是按配置项名：端侧端点是可配置的（`127.0.0.1` 的同机 Ollama、
+    局域网里的另一台机器、桌面宿主、尾网 IP 都合法）——**只有回环地址才等价于"这台机器自己"**。
+    判据故意保守：拿不准（域名、`0.0.0.0`、解析失败）一律当**非本机**，宁可拒绝执行。
+    """
+    host = host_of(url)
+    if not host:
+        return False
+    return host.strip("[]").lower() in _LOCAL_HOSTS
+
+
 #: 平面名
 PLANE_EDGE = "edge"
 PLANE_CLOUD = "cloud"
@@ -104,10 +138,16 @@ class Decision:
     output_budget: int = 0
     #: 本次请求属于**永不出端**的数据（§5.2 硬边界）→ 禁止升级到云端
     device_only: bool = False
+    #: 非 None 表示**一个请求都不许发**（当前只有一种：DEVICE_ONLY + 非本机端侧端点，R10）
+    blocked_reason: str | None = None
 
     @property
     def is_edge(self) -> bool:
         return self.plane == PLANE_EDGE
+
+    @property
+    def is_blocked(self) -> bool:
+        return self.blocked_reason is not None
 
 
 @dataclass
@@ -335,6 +375,12 @@ class PlaneRouter:
         # 数据分级优先于一切：DEVICE_ONLY 数据永不出端（§5.2）
         device_only = set(getattr(self._routing, "device_only_roles", []) or [])
         if device_data or role in device_only:
+            # R10：还要确认"端侧"真的是**本机**——edge.base_url 可能是局域网里的另一台机器。
+            # 目标不是本机 → 拒绝执行（不改道云端、也不假装成功）。
+            edge_url = getattr(self._edge, "base_url", "") or ""
+            if not is_local_endpoint(edge_url):
+                return Decision(PLANE_EDGE, REASON_DEVICE_ONLY_NOT_LOCAL, tier, est_in, out_budget,
+                                device_only=True, blocked_reason=REASON_DEVICE_ONLY_NOT_LOCAL)
             return Decision(PLANE_EDGE, "device_only_data", tier, est_in, out_budget,
                             device_only=True)
 
@@ -668,6 +714,16 @@ class RoutedLLM:
         decision = self.router.decide(role, messages,
                                       max_output_tokens=max_output_tokens,
                                       device_data=device_data)
+        if decision.is_blocked:
+            # R10 硬闸门：DEVICE_ONLY 数据遇上非本机端侧端点 → 连端侧都不发（更不会发云端）。
+            # 宁可失败并说清原因，也不把"永不出端"的数据送出去。
+            logger.warning("DEVICE_ONLY 数据被拒绝执行（端侧端点不是本机）",
+                           role=role, reason=decision.blocked_reason,
+                           edge_base_url=getattr(self.router.edge, "base_url", ""))
+            raise ValueError(
+                f"设备专属数据不能发往非本机端点（{decision.blocked_reason}）："
+                f"端侧端点 {getattr(self.router.edge, 'base_url', '')} 不是本机"
+            )
         role_cfg = self._config.llm.roles.get(role)
         fmt = getattr(role_cfg, "response_format", None)
         versions = self.router.versions(role)

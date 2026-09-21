@@ -531,6 +531,11 @@ class LLMFactory:
             decision = self._routed.router.decide(
                 role, messages, max_output_tokens=expected_output_tokens,
                 device_data=device_data)
+            if decision.is_blocked:
+                # R10：流式路径同样一个请求都不发（与 ainvoke 口径一致）
+                raise ValueError(
+                    f"设备专属数据不能发往非本机端点（{decision.blocked_reason}）"
+                )
             stream_plane = decision.plane
             if (decision.is_edge
                     and self._routed.router.escalation_allowed(decision)):

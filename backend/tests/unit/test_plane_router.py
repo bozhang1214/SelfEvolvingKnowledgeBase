@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from langchain_core.messages import HumanMessage
 
 from app.api.routes import edge as edge_route
 from app.core.access import require_full_access
@@ -44,7 +45,8 @@ EDGE_URL = "http://127.0.0.1:11434/v1"
 
 def make_config(*, routing: bool = True, prefer: str = "edge",
                 device_only: list[str] | None = None,
-                roles: dict[str, LLMRoleConfig] | None = None) -> SimpleNamespace:
+                roles: dict[str, LLMRoleConfig] | None = None,
+                edge_url: str = EDGE_URL) -> SimpleNamespace:
     """构造一个够用的配置对象（不读真实 config.yaml，避免与生产配置耦合）。"""
     roles = roles or {
         "supervisor": LLMRoleConfig(model="deepseek-flash", temperature=0.1,
@@ -56,7 +58,7 @@ def make_config(*, routing: bool = True, prefer: str = "edge",
         api_key="sk-test", base_url="https://api.deepseek.com/v1", roles=roles,
         planes=PlanesConfig(
             edge=PlaneEndpointConfig(
-                base_url=EDGE_URL,
+                base_url=edge_url,
                 models={"short": "qwen3.5-2b", "default": "qwen3.5-4b", "quality": "qwen3.5-9b"},
             ),
             routing=RoutingConfig(enabled=routing, prefer=prefer,
@@ -118,6 +120,54 @@ class TestDecide:
     def test_device_only_flag_overrides_everything(self):
         d = PlaneRouter(make_config()).decide("news_report", ["x"], device_data=True)
         assert d.plane == PLANE_EDGE and d.reason == "device_only_data"
+
+    # ───────── R10：DEVICE_ONLY 的「本机」判据（与服务端同一口径，2026-09-21） ─────────
+
+    def test_local_endpoint_rules(self):
+        """只有回环地址算本机；域名/0.0.0.0/局域网/尾网一律当非本机（保守）。"""
+        from app.core.plane_router import is_local_endpoint
+
+        for local in ("http://127.0.0.1:11434/v1", "http://localhost:11434/v1",
+                      "http://[::1]:11434/v1", "http://127.0.0.1:11434"):
+            assert is_local_endpoint(local), local
+        for remote in ("http://10.0.2.2:11434/v1", "http://192.168.1.20:11434/v1",
+                       "http://100.71.24.105:11434/v1", "http://edge-host.local:11434/v1",
+                       "http://0.0.0.0:11434/v1", ""):
+            assert not is_local_endpoint(remote), remote
+
+    def test_device_only_blocked_when_edge_is_not_local(self):
+        """端侧端点不是本机 → 拒绝执行（不改道云端、也不假装成功）。"""
+        r = PlaneRouter(make_config(edge_url="http://192.168.1.20:11434/v1"))
+        d = r.decide("planner", ["我的联系人里有谁"], device_data=True)
+        assert d.plane == PLANE_EDGE
+        assert d.device_only is True
+        assert d.blocked_reason == "device_only_requires_local_runtime"
+        assert d.is_blocked is True
+        assert not r.escalation_allowed(d)          # 硬边界照旧
+
+    def test_device_only_allowed_when_edge_is_local(self):
+        d = PlaneRouter(make_config()).decide("planner", ["x"], device_data=True)
+        assert d.reason == "device_only_data"
+        assert d.blocked_reason is None and d.is_blocked is False
+
+    def test_non_device_only_traffic_unaffected_by_locality(self):
+        """普通数据打远端端点是正常用法，不能被 R10 误伤。"""
+        r = PlaneRouter(make_config(edge_url="http://10.0.2.2:11434/v1"))
+        d = r.decide("supervisor", ["分类一下"])
+        assert d.plane == PLANE_EDGE and not d.is_blocked
+
+    @pytest.mark.asyncio
+    async def test_routed_llm_refuses_to_call_any_endpoint_when_blocked(self):
+        """被拦时连端侧都不发：ainvoke 直接抛，factory 根本没被碰到。"""
+        cfg = make_config(edge_url="http://10.0.2.2:11434/v1")
+
+        class Boom:
+            async def ainvoke_with_stats(self, *a, **k):
+                raise AssertionError("被拦的请求不该调用任何端点")
+
+        routed = RoutedLLM(factory=Boom(), config=cfg)
+        with pytest.raises(ValueError, match="非本机端点"):
+            await routed.ainvoke("supervisor", [HumanMessage(content="x")], device_data=True)
 
     def test_prefer_cloud(self):
         d = PlaneRouter(make_config(prefer="cloud")).decide("supervisor", ["短问题"])

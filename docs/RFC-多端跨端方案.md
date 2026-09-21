@@ -257,7 +257,7 @@ apps/
 | 阶段 | 内容 | 工作量 | 验收（可证伪） |
 |---|---|---|---|
 | **M4** 共享层 | 契约夹具 ✅ + 去平台化 + `shared/` + iOS/Mac target + Kotlin 升级 | **8–12 天** | Android **202 测试 + 自检 27/27 + 检索数字 不回归**；`shared` 在 JVM 与 `iosSimulatorArm64` 均可编译并通过共享单测；**P1** 微基准 ≤100 µs（Kotlin/Native 版）、**P3** iOS 包体积增量 ≤5 MB |
-| **M4.5** L1 策略热修（**本期实现**） | 服务端 `GET /edge/policy`（版本化 + 签名 + 灰度桶）+ 端侧应用（缓存/校验/回滚/审计 + 白名单 + **空间戳绑定**）；**「设备适配」子集只预留字段** | **2–3 天**（服务端 1 天 + 端侧 1–2 天） | ① 单测：非法/过期/空间不符/越白名单的策略**必须被拒**且留痕；② 灰度：同版本策略按设备分桶生效，可一键回滚到上一版；③ 端到端：改一次阈值 → 不发版、不重启也能生效（日志可证）；④ 后端全量测试不回归（基线 966） |
+| **M4.5** L1 策略热修（**本期实现**） | 服务端 `GET /edge/policy`（版本化 + 签名 + 灰度桶）+ 端侧应用（缓存/校验/回滚/审计 + 白名单 + **空间戳绑定**）；**「设备适配」子集只预留字段** | **2–3 天**（服务端 1 天 + 端侧 1–2 天） | ① 单测：非法/过期/空间不符/越白名单的策略**必须被拒**且留痕；② 灰度：同版本策略按设备分桶生效，可一键回滚到上一版；③ 端到端：改一次阈值 → 不发版、不重启也能生效（日志可证）；④ 后端全量测试不回归（基线 **971**：955 单元 + 16 集成） |
 | **M5** iOS 端 | SwiftUI UI + NSURLSession/Keychain/PDFKit + 自检入口 | **12–16 天** | 自检项与 Android **等价**；检索 **Hit@1 87% / Hit@3 100% / MRR 0.928**（同语料同模型）；路由事件与 Android 同构；**P2** 跨语言调用 ≤5 µs |
 | **M6** 鸿蒙 spike | D2 四条 | **3 天** | 四条全通 → M7；任一不通 → 路线 B（ArkTS + 契约夹具） |
 | **M7** 鸿蒙端 | ArkUI UI + NAPI 桥 | **12–16 天** | 契约 runner 全绿；嵌入向量与 Android **同空间同余弦** |
@@ -279,7 +279,7 @@ apps/
 | R7 | 原生 UI × 4 端验证成本 | 每轮改动验证慢 | **高** | 分层验证：共享逻辑跑 JVM 单测（秒级）；各端只跑端口 + 端到端自检 |
 | R8 | 无真机（Android/iOS/鸿蒙都缺） | 性能结论缺失 | 高（现状） | 模拟器验功能、Mac 拿性能真值、按带宽保守外推 |
 | R9 | 桌面搁置后"给手机供算力"能力缺失 | 手机上只能用宿主（开发机）或云端 | 低（可接受） | 已记 D16；Mac 宿主可用（M0 完成） |
-| **R10** | **`DEVICE_ONLY` 在 LLM 平面缺"本机"判据** | 若 EDGE 指向局域网另一台机器，标记"永不出设备"的数据就会出设备 | 中 | ✅ **已实现（2026-09-21，M4 第 3 步）**：`PlaneRouter.isLocalEndpoint()` 只在回环地址（`127.0.0.1`/`localhost`/`[::1]`）判定为"本机"，域名/`0.0.0.0`/局域网/尾网一律按非本机处理 → `blockedReason=device_only_requires_local_runtime`；编排器**一个请求都不发**（端侧 0 次、云端 0 次）并给用户可读原因。证据：`PlaneRouterTest` 5 条 + `ChatOrchestratorTest` 2 条 + 契约夹具 `privacy.json` 13 case（含本机/局域网/模拟器宿主/尾网四种端点）。⚠️ **行为变化**：模拟器上 DEVICE_ONLY 请求会被明确拒绝（这正是正确语义） |
+| **R10** | **`DEVICE_ONLY` 在 LLM 平面缺"本机"判据** | 若 EDGE 指向局域网另一台机器，标记"永不出设备"的数据就会出设备 | 中 | ✅ **已实现（2026-09-21，M4 第 3 步）**：`PlaneRouter.isLocalEndpoint()` 只在回环地址（`127.0.0.1`/`localhost`/`[::1]`）判定为"本机"，域名/`0.0.0.0`/局域网/尾网一律按非本机处理 → `blockedReason=device_only_requires_local_runtime`；编排器**一个请求都不发**（端侧 0 次、云端 0 次）并给用户可读原因。证据：客户端 `PlaneRouterTest` 5 条 + `ChatOrchestratorTest` 2 条 + 契约夹具 `privacy.json` 13 case（含本机/局域网/模拟器宿主/尾网四种端点）+ 模拟器自检 `privacy_device_only_local_gate`；**服务端同口径同步**（`backend/app/core/plane_router.py` 的 `is_local_endpoint()` / `Decision.blocked_reason`，`RoutedLLM.ainvoke` 与 `astream_with_stats` 在 `is_blocked` 时直接抛错不发请求，`backend/tests/unit/test_plane_router.py` +5 条）。⚠️ **行为变化**：模拟器上 DEVICE_ONLY 请求会被明确拒绝（这正是正确语义） |
 
 ---
 
