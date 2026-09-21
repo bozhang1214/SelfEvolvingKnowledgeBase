@@ -2,7 +2,7 @@
 
 > 规则：**只写跑过的命令与真实输出**。"应该能跑"不算验证；没能验的写在最后一节。
 
-> 端侧单测总量：**202**（功能 187 + 跨端契约夹具 4 + JSON 门面专测 11）<!-- fact:android_unit_cases=202 -->
+> 端侧单测总量：**207**（功能 187 + 契约夹具 4 + JSON 门面 11 + 格式化 5）<!-- fact:android_unit_cases=207 -->
 
 环境：macOS（Apple Silicon）+ Android Studio JBR 21 + Android SDK platform 36.1 +
 AVD `Medium_Phone_API_36.1`（arm64-v8a，google_apis_playstore）。
@@ -28,7 +28,7 @@ bash scripts/android.sh test        # 191 tests, 0 failed（功能 187 + 契约 
 ### 1.0.3 KMP 共享模块（M4 第 5 步，2026-09-21）
 
 ```bash
-bash scripts/android.sh test        # 202 tests, 0 failed（单测现在测的是 :shared 里的代码）
+bash scripts/android.sh test        # 207 tests, 0 failed（单测现在测的是 :shared 里的代码）
 bash scripts/android.sh assemble    # app-arm64-v8a-debug.apk（45.4 MB）
 bash scripts/emulator.sh --background && bash scripts/android.sh install
 adb shell am start -n com.sekb.ondevice/.MainActivity --ez selftest true   # PASS=27 FAIL=0
@@ -48,6 +48,23 @@ adb shell am start -n com.sekb.ondevice/.MainActivity --ez selftest true   # PAS
 
 **native target（iOS/Mac）默认关闭**：`-PsekbNativeTargets=true` 打开——一打开，配置阶段就会准备
 Kotlin/Native 工具链（数百 MB），把日常 Android 构建拖成分钟级。
+
+**iOS / macOS 编译已实测通过**（这是 M5 的前置）：
+
+```bash
+cd apps/android && KONAN_DATA_DIR=$PWD/../../.tooling/konan ./gradlew \
+  -PsekbNativeTargets=true :shared:compileKotlinIosSimulatorArm64 :shared:compileKotlinMacosArm64
+# BUILD SUCCESSFUL
+```
+
+第一次跑时 iOS 编译器**查出 13 处平台泄漏**（`System.currentTimeMillis` ×6、`Math` ×3、
+`Character.getType` ×7、`HashMap.putIfAbsent`、`String.format` ×10、`@Synchronized` ×5）——
+这正是"先建 KMP 模块"的价值：平台泄漏不再靠人眼找，编译不过就是不过。修法：
+新增 `core/Clock.kt`（`expect fun nowMillis()` + `androidMain`/`appleMain` 两个 actual）、
+`core/Fmt.kt`（固定小数位/百分比/定宽对齐，替代 `String.format`）、`Math` → `kotlin.math` +
+自写 `floorMod`、`Character.getType` → `CharCategory`、`putIfAbsent` → `containsKey` 判断、
+`@Synchronized` → 去掉并写明"单线程契约"（编排器本身就是同步设计）。
+`FmtTest` 5 条钉住"与 `%.3f`/`%2d` 等价的输出"，其中一条直接对齐文档里记录的历史报告串。
 
 ### 1.0.2 依赖去平台化（M4 第 2 步，2026-09-21）
 

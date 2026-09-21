@@ -1,5 +1,7 @@
 package com.sekb.ondevice.rag
 
+import com.sekb.ondevice.core.nowMillis
+
 import com.sekb.ondevice.embed.EmbeddingProvider
 
 /**
@@ -15,7 +17,7 @@ class KnowledgeIndex(
     private val overlapChars: Int = Chunking.DEFAULT_OVERLAP_CHARS,
     /** 文档元信息（UI 列表/删除用）。传 null 时不做登记，纯检索场景够用。 */
     private val registry: DocumentRegistry? = null,
-    private val nowMillis: () -> Long = { System.currentTimeMillis() },
+    private val nowMillis: () -> Long = { com.sekb.ondevice.core.nowMillis() },
 ) {
 
     data class IngestReport(

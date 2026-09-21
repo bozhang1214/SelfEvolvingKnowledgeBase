@@ -4,6 +4,7 @@ import com.sekb.ondevice.embed.EmbeddingProvider
 import com.sekb.ondevice.rag.InMemoryVectorStore
 import com.sekb.ondevice.rag.KnowledgeIndex
 import com.sekb.ondevice.rag.Retriever
+import com.sekb.ondevice.core.Fmt
 
 /**
  * 检索质量与延迟评测（RFC §18.4），并做**阈值标定**。
@@ -48,16 +49,18 @@ class RetrievalEvalRunner(
 
         /** 一行式摘要（自检/报告直接贴）。 */
         fun line(): String =
-            // ⚠️ 必须给拼接后的整串加括号：不加的话 `.format(...)` 只作用于**第二个字面量**，
-            // 参数会错位（实测报 "f != java.lang.Integer"，且前半段根本没被格式化）。
-            (
-                "阈值=%.2f  Hit@1=%2d/%d(%3.0f%%)  Hit@3=%2d/%d  MRR=%.3f  误召回=%d/%d(%3.0f%%)  " +
-                    "嵌入均 %.0fms(p95 %.0fms)  检索均 %.1fms"
-                ).format(
-                threshold, hit1, answerable, hit1Rate * 100, hit3, answerable, mrr,
-                falsePositives, unanswerable, falsePositiveRate * 100,
-                embedMeanMs, embedP95Ms, searchMeanMs,
-            )
+            // 历史坑（保留，提醒别退回 String.format）：第一版写成多段字面量再 `.format(...)`，
+            // 而 `.format` 只作用于**紧邻的那一段字面量**，参数全部错位（实测报
+            // "f != java.lang.Integer"，且前半段根本没被格式化）。现在用 Fmt 显式拼接，
+            // 结构上不可能再犯——但"多段拼接 + 隐式格式化"这个坑值得记住。
+            // 注：这里原来用 String.format（JVM 专有，KMP 编不过）→ 换成 Fmt，
+            // 输出**逐字符一致**（含 `%2d`/`%3d` 的空格补齐），历史的日志对照仍然有效。
+            "阈值=${Fmt.fixed(threshold, 2)}  " +
+                "Hit@1=${Fmt.padStart(hit1, 2)}/$answerable(${Fmt.padStart(Fmt.pct(hit1Rate), 3)}%)  " +
+                "Hit@3=${Fmt.padStart(hit3, 2)}/$answerable  MRR=${Fmt.fixed(mrr, 3)}  " +
+                "误召回=$falsePositives/$unanswerable(${Fmt.padStart(Fmt.pct(falsePositiveRate), 3)}%)  " +
+                "嵌入均 ${Fmt.fixed(embedMeanMs, 0)}ms(p95 ${Fmt.fixed(embedP95Ms, 0)}ms)  " +
+                "检索均 ${Fmt.fixed(searchMeanMs, 1)}ms"
     }
 
     /** 用当前提供者把语料灌进**独立**索引（不碰 App 的真实索引）。 */
@@ -132,18 +135,18 @@ class RetrievalEvalRunner(
         appendLine("语料 ${corpus.size} 篇 / 问题 ${questions.size} 条（有答案 ${RetrievalEvalSet.answerable}，无答案 ${RetrievalEvalSet.unanswerable}）")
         for (r in reports) appendLine("  " + r.line())
         val best = reports.maxByOrNull { it.hit1Rate - it.falsePositiveRate } ?: return@buildString
-        appendLine("  推荐阈值：%.2f（Hit@1 %.0f%%、误召回 %.0f%% 的折中）".format(best.threshold, best.hit1Rate * 100, best.falsePositiveRate * 100))
-        appendLine("--- 排序明细（阈值 %.2f）---".format(best.threshold))
+        appendLine("  推荐阈值：${Fmt.fixed(best.threshold, 2)}（Hit@1 ${Fmt.pct(best.hit1Rate)}%、误召回 ${Fmt.pct(best.falsePositiveRate)}% 的折中）")
+        appendLine("--- 排序明细（阈值 ${Fmt.fixed(best.threshold, 2)}）---")
         for (row in best.rows.filter { it.expected != null && !it.hit3 }) {
-            appendLine("  ✗ 未命中：${row.question} | 期望=${row.expected} 实得=${row.got} 分=%.3f".format(row.score))
+            appendLine("  ✗ 未命中：${row.question} | 期望=${row.expected} 实得=${row.got} 分=${Fmt.fixed(row.score)}")
         }
         val ranked = best.rows.filter { it.expected != null && it.hit3 && !it.hit1 }
         if (ranked.isNotEmpty()) {
             appendLine("  ~ 命中但不在第 1 位（${ranked.size} 条，用于看排序质量）：")
-            ranked.forEach { appendLine("     #${it.rank} ${it.question} | 期望=${it.expected} 实得=${it.got} 分=%.3f".format(it.score)) }
+            ranked.forEach { appendLine("     #${it.rank} ${it.question} | 期望=${it.expected} 实得=${it.got} 分=${Fmt.fixed(it.score)}") }
         }
         for (row in best.rows.filter { it.expected == null && it.got != null }) {
-            appendLine("  ⚠ 误召回：${row.question} → ${row.got} 分=%.3f".format(row.score))
+            appendLine("  ⚠ 误召回：${row.question} → ${row.got} 分=${Fmt.fixed(row.score)}")
         }
     }
 }

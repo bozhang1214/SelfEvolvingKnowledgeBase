@@ -128,7 +128,7 @@ class BertWordPieceTokenizer(
             val map = HashMap<String, Int>(32768)
             vocabText.lineSequence().forEach { line ->
                 val t = line.trimEnd('\n', '\r')
-                if (t.isNotEmpty() || map.isEmpty()) map.putIfAbsent(t, map.size)
+                if (t.isNotEmpty() || map.isEmpty()) if (!map.containsKey(t)) map[t] = map.size
             }
             return map
         }
@@ -148,14 +148,15 @@ class BertWordPieceTokenizer(
         fun isPunctuation(c: Char): Boolean {
             val code = c.code
             if ((code in 33..47) || (code in 58..64) || (code in 91..96) || (code in 123..126)) return true
-            return when (Character.getType(c)) {
-                Character.CONNECTOR_PUNCTUATION.toInt(),
-                Character.DASH_PUNCTUATION.toInt(),
-                Character.START_PUNCTUATION.toInt(),
-                Character.END_PUNCTUATION.toInt(),
-                Character.INITIAL_QUOTE_PUNCTUATION.toInt(),
-                Character.FINAL_QUOTE_PUNCTUATION.toInt(),
-                Character.OTHER_PUNCTUATION.toInt(),
+            // 用 Kotlin 的 CharCategory（common 可用）替代 JVM 的 `Character.getType`
+            return when (c.category) {
+                CharCategory.CONNECTOR_PUNCTUATION,
+                CharCategory.DASH_PUNCTUATION,
+                CharCategory.START_PUNCTUATION,
+                CharCategory.END_PUNCTUATION,
+                CharCategory.INITIAL_QUOTE_PUNCTUATION,
+                CharCategory.FINAL_QUOTE_PUNCTUATION,
+                CharCategory.OTHER_PUNCTUATION,
                 -> true
                 else -> false
             }

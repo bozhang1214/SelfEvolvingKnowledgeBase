@@ -1,5 +1,7 @@
 package com.sekb.ondevice.chat
 
+import com.sekb.ondevice.core.nowMillis
+
 import com.sekb.ondevice.core.Ids
 
 import com.sekb.ondevice.edge.ChatMessage
@@ -68,7 +70,7 @@ class ChatOrchestrator(
     private val cloud: CloudChat,
     private val tools: ToolRegistry,
     private val reporter: (RouteEventPayload) -> Unit = {},
-    private val now: () -> Long = { System.currentTimeMillis() },
+    private val now: () -> Long = { nowMillis() },
     private val newId: () -> String = { Ids.short() },
 ) {
 

@@ -1,5 +1,7 @@
 package com.sekb.ondevice.embed
 
+import kotlin.math.sqrt
+
 import com.sekb.ondevice.core.JsonX
 import com.sekb.ondevice.net.HttpTransport
 import com.sekb.ondevice.core.JsonArray
@@ -61,8 +63,8 @@ class DeterministicEmbedding(
         for (t in tokenize(text)) {
             val h = t.hashCode()
             val sign = if ((h and 0x10000) == 0) 1f else -1f
-            v[Math.floorMod(h, space.dim)] += sign
-            v[Math.floorMod(h * 31 + 7, space.dim)] += 0.5f * sign
+            v[floorMod(h, space.dim)] += sign
+            v[floorMod(h * 31 + 7, space.dim)] += 0.5f * sign
         }
         l2Normalize(v)
         v
@@ -94,7 +96,7 @@ class DeterministicEmbedding(
     private fun l2Normalize(v: FloatArray) {
         var sum = 0.0
         for (x in v) sum += x.toDouble() * x
-        val norm = Math.sqrt(sum)
+        val norm = sqrt(sum)
         if (norm > 0.0) for (i in v.indices) v[i] = (v[i] / norm).toFloat()
     }
 }
@@ -141,3 +143,6 @@ class HostOllamaEmbedding(
         }
     }
 }
+
+/** `Math.floorMod` 的 common 版（Kotlin 标准库没有）：结果符号跟随除数。 */
+private fun floorMod(value: Int, modulus: Int): Int = ((value % modulus) + modulus) % modulus

@@ -1,8 +1,11 @@
 package com.sekb.ondevice.rag
 
+import com.sekb.ondevice.core.nowMillis
+
 import com.sekb.ondevice.embed.EmbeddingProvider
 import com.sekb.ondevice.embed.EmbeddingSpace
 import com.sekb.ondevice.model.ToolResult
+import com.sekb.ondevice.core.Fmt
 
 /**
  * 检索结果。
@@ -61,7 +64,7 @@ class Retriever(
     private val minScore: Double = 0.5,
     /** 云端向量空间（用于判断能否跨端融合；默认取服务端口径） */
     private val cloudSpace: EmbeddingSpace = EmbeddingSpace.SERVER,
-    private val nowMillis: () -> Long = { System.currentTimeMillis() },
+    private val nowMillis: () -> Long = { com.sekb.ondevice.core.nowMillis() },
 ) {
 
     /** 索引空间与当前嵌入模型是否一致——不一致必须重建索引。 */
@@ -111,7 +114,7 @@ class Retriever(
             searchable = true,
             cloudCompatible = cloudCompatible(),
             reason = if (raw.isNotEmpty() && raw.all { it.score < minScore }) {
-                "below_threshold:最高分=${"%.3f".format(raw.first().score)}<$minScore"
+                "below_threshold:最高分=${Fmt.fixed(raw.first().score)}<$minScore"
             } else {
                 ""
             },
@@ -133,7 +136,7 @@ class Retriever(
         val sb = StringBuilder()
         var used = 0
         for (h in outcome.hits) {
-            val line = "[${"%.3f".format(h.score)}] ${h.sourceId}: ${h.text.replace("\n", " ")}\n"
+            val line = "[${Fmt.fixed(h.score)}] ${h.sourceId}: ${h.text.replace("\n", " ")}\n"
             if (used + line.length > maxChars) break
             sb.append(line)
             used += line.length

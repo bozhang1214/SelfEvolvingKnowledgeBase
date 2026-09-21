@@ -1,5 +1,7 @@
 package com.sekb.ondevice.tools
 
+import com.sekb.ondevice.core.nowMillis
+
 import com.sekb.ondevice.model.ToolCall
 import com.sekb.ondevice.model.ToolResult
 
@@ -53,22 +55,17 @@ class PermissionAudit(private val capacity: Int = 500) {
         val deniedRate: Double,
     )
 
-    @Synchronized
-    fun record(tool: String, allowed: Boolean, reason: String, nowMillis: Long = System.currentTimeMillis()) {
+    fun record(tool: String, allowed: Boolean, reason: String, nowMillis: Long = com.sekb.ondevice.core.nowMillis()) {
         entries.addLast(Entry(nowMillis, tool, allowed, reason))
         while (entries.size > capacity) entries.removeFirst()
     }
 
-    @Synchronized
     fun all(): List<Entry> = entries.toList()
 
-    @Synchronized
     fun recent(limit: Int): List<Entry> = entries.toList().takeLast(limit).reversed()
 
-    @Synchronized
     fun clear() = entries.clear()
 
-    @Synchronized
     fun stats(): Stats {
         val total = entries.size
         val denied = entries.count { !it.allowed }
@@ -99,7 +96,7 @@ class ToolRegistry(
     private val tools: List<DeviceTool>,
     private val checker: PermissionChecker,
     private val audit: PermissionAudit = PermissionAudit(),
-    private val now: () -> Long = { System.currentTimeMillis() },
+    private val now: () -> Long = { nowMillis() },
 ) {
 
     private val byName = tools.associateBy { it.name }

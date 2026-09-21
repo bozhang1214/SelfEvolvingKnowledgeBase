@@ -1,5 +1,7 @@
 package com.sekb.ondevice.edge
 
+import com.sekb.ondevice.core.nowMillis
+
 import com.sekb.ondevice.core.JsonX
 import com.sekb.ondevice.net.HttpTransport
 import com.sekb.ondevice.net.OpenAiSseParser
@@ -59,7 +61,7 @@ class OpenAiCompatibleEdgeLlm(
     private val baseUrl: String,
     private val apiKey: String = "ollama",
     private val config: EdgeRuntimeConfig,
-    private val now: () -> Long = { System.currentTimeMillis() },
+    private val now: () -> Long = { nowMillis() },
 ) : EdgeLlm {
 
     private val parser = OpenAiSseParser()

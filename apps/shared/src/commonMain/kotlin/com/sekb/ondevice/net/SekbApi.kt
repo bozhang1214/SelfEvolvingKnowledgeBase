@@ -1,5 +1,7 @@
 package com.sekb.ondevice.net
 
+import com.sekb.ondevice.core.nowMillis
+
 import com.sekb.ondevice.core.JsonX
 import com.sekb.ondevice.model.ChatEvent
 import com.sekb.ondevice.model.DeviceCredentials
@@ -24,7 +26,7 @@ class SekbApiException(val code: Int, val detail: String) :
 class SekbApi(
     private val transport: HttpTransport,
     private val baseUrl: String,
-    private val now: () -> Long = { System.currentTimeMillis() },
+    private val now: () -> Long = { nowMillis() },
 ) {
 
     private val sse = SseParser()

@@ -6,6 +6,7 @@ import com.sekb.ondevice.edge.EdgeLlm
 import com.sekb.ondevice.route.PlaneRouter
 import com.sekb.ondevice.tools.ToolCallJson
 import com.sekb.ondevice.tools.ToolRegistry
+import com.sekb.ondevice.core.Fmt
 
 /**
  * 工具调用 JSON 合法率的**对照实验**（M2 的验收数字，RFC §9）。
@@ -155,10 +156,12 @@ class ToolCallEvalRunner(
             "${activePrompts().size} 条提示词）===")
         for (r in report.runs) {
             appendLine(
-                "%-14s 尝试 %2d/%d  合法 %2d  非法 %2d  工具名幻觉 %d  合法率 %3d%%  平均延迟 %dms".format(
-                    r.mode, r.eval.attempts, activePrompts().size, r.eval.legal, r.eval.illegal,
-                    r.eval.hallucinated, (r.eval.rate * 100).toInt(), r.latencyMillis,
-                ),
+                // 原来用 String.format（JVM 专有）→ Fmt；`%-14s`/`%2d`/`%3d` 的对齐效果保持一致
+                Fmt.padEnd(r.mode, 14) +
+                    " 尝试 ${Fmt.padStart(r.eval.attempts, 2)}/${activePrompts().size}" +
+                    "  合法 ${Fmt.padStart(r.eval.legal, 2)}  非法 ${Fmt.padStart(r.eval.illegal, 2)}" +
+                    "  工具名幻觉 ${r.eval.hallucinated}  合法率 ${Fmt.padStart(Fmt.pct(r.eval.rate), 3)}%" +
+                    "  平均延迟 ${r.latencyMillis}ms",
             )
         }
         appendLine("--- 明细（仅列未按预期产出的样本）---")
