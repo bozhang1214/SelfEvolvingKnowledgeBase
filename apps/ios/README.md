@@ -17,7 +17,10 @@
 | framework 产出 | ✅ | `:shared:linkDebugFrameworkIosSimulatorArm64` / `linkDebugFrameworkMacosArm64` → `SharedCore.framework`（`isStatic = true`） |
 | **Swift 互操作冒烟** | ✅ | `bash scripts/ios.sh smoke` → **SMOKE OK（5/5）**：Apple 侧 HMAC/SHA256 对齐公知向量、canonical JSON 与 Python 一致、`ToolCallJson.parse` 的 sealed 类导出可用、`Fmt` 与 Android 逐字符一致 |
 | **iOS App 骨架（SwiftUI）** | ✅ | `bash scripts/ios_app.sh run` → 装到 iPhone 17 Pro 模拟器并启动，日志抓到 **`SEKB_IOS_SELFTEST PASS=8 FAIL=0`**：HMAC 向量、规范化 JSON、路由决策、**R10 本机/远端两条对照**、**流式守卫零外泄**、工具调用解析、检索阈值默认值 |
-| iOS 端四个端口（NSURLSession/Keychain/ONNX/PDFKit） | ⏳ 下一步 | 补齐后自检项要与 Android 等价 |
+| **iOS 端口①：传输（NSURLSession）** | ✅ | `apps/ios/App/UrlSessionTransport.swift`：实现共享层 `HttpTransport`（同步语义用信号量、SSE 用 `URLSessionDataDelegate` 逐行回调）。自检实测：`transport_get_host_ollama — code=200 bytes=3474`、`transport_stream_lines — code=200 行数=9`；**iOS 自检 10 PASS / 0 FAIL** |
+| iOS 端口②：凭证（Keychain） | ⏳ | |
+| iOS 端口③：嵌入（ONNX/CoreML） | ⏳ | |
+| iOS 端口④：PDF（PDFKit） | ⏳ | |
 | iOS 真机性能 | ⏳ 等硬件 | 模拟器只验功能 |
 | 四个端口（NSURLSession/Keychain/ONNX/PDFKit） | ⏳ | 待 App 骨架跑通后补 |
 
@@ -68,6 +71,17 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
    iOS 设备工具（时间/网络/通讯录，权限用 `CNContactStore` 授权状态判断）。
 3. 验证策略与 Android 一致：**纯逻辑走单测（KMP 里跑）+ 模拟器验功能与协议**，
    性能数字等真机（模拟器不产出性能结论，见 SEKB RFC §9.1）。
+
+**iOS 侧又踩到的四个坑（`scripts/ios_app.sh` 已封装）**：
+1. `simctl launch` 对**已在运行**的 App 只是切到前台，`onAppear` 不再触发 → 自检挪到 `App.init()`，
+   且 launch 前先 `simctl terminate`（否则无人值守抓不到任何输出）；
+2. 但 `App.init()` 里**不能同步阻塞主线程**等网络（信号量 + URLSession 回调会拿不到执行机会，
+   表现为"日志里只有 trustd 请求痕迹、永远等不到自检输出"）→ 自检放 `DispatchQueue.global().async`；
+3. 自检含真实网络调用（宿主 Ollama 冷加载可能十几秒）→ 抓日志前等 45s、窗口 90s；
+4. 测流式传输时**必须给生成加上限**（`num_predict`）：否则模型长篇生成，
+   60s 超时前流不结束，`statusCode` 拿不到（表现为 `code=-1` 而"行数"上万）——
+   测的是传输，不该被模型行为影响。`URLSession` 的 delegate 与完成回调**跨队列**，
+   状态码要在 `didReceive response` 里加锁记录，不能只在 `didCompleteWithError` 读。
 
 ## 与 SEKB 的契约
 

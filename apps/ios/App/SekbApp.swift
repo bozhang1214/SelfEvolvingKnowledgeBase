@@ -12,8 +12,31 @@ import SharedCore
 // 与 Android 的关系：同一份 `apps/shared`（Kotlin），同一套契约夹具；
 // 端侧端口（NSURLSession / Keychain / ONNX / PDFKit）是后续步骤，本骨架先用共享层的纯逻辑。
 
+/// 跑一遍自检并把结果打出来（供启动时与按钮共用）。
+@discardableResult
+func runAndReportSelfTest() -> [CheckResult] {
+    let results = runSharedSelfTest()
+    let pass = results.filter { $0.ok }.count
+    report("SEKB_IOS_SELFTEST PASS=\(pass) FAIL=\(results.count - pass)")
+    for r in results {
+        report("SEKB_IOS_SELFTEST [\(r.ok ? "PASS" : "FAIL")] \(r.name) — \(r.detail)")
+    }
+    return results
+}
+
 @main
 struct SekbApp: App {
+
+    init() {
+        // **在 init 里触发**（不依赖 `onAppear`：无人值守时场景未前台化，`onAppear` 不触发），
+        // 但**必须放到后台队列**执行：自检里有同步网络调用（信号量等待），
+        // 在 `init()` 的主线程上阻塞会让 URLSession 的回调拿不到执行机会 → 整个自检卡住、日志全空
+        // （实测：日志里只有 trustd 的请求痕迹，永远等不到 SEKB_IOS_SELFTEST）。
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = runAndReportSelfTest()
+        }
+    }
+
     var body: some Scene {
         WindowGroup { ContentView() }
     }
@@ -128,6 +151,37 @@ func runSharedSelfTest() -> [CheckResult] {
     // 7) 知识检索的阈值必须来自策略（没有策略时用默认 0.5）
     out.append(.init(name: "retriever_default_threshold", ok: true, detail: "0.5（策略未接入）"))
 
+    // 8) **网络端口（NSURLSession）**：真的发一次请求。
+    //    iOS 模拟器共享宿主机网络，所以 `127.0.0.1` 就是宿主（与 Android 的 10.0.2.2 对应）。
+    //    这条同时证明了：Swift 侧实现 Kotlin 接口可用（`HttpTransport` 是 interface）、
+    //    同步语义在 Swift 侧能成立（DispatchSemaphore）、响应体解析链路通。
+    let transport = UrlSessionTransport()
+    let resp = transport.get(url: "http://127.0.0.1:11434/api/tags",
+                             headers: [:], timeoutSeconds: 10)
+    out.append(.init(name: "transport_get_host_ollama",
+                     ok: resp.isOk && resp.body.contains("models"),
+                     detail: "code=\(resp.code) bytes=\(resp.body.count)"))
+
+    // 9) **流式逐行回调**（`postJsonStream`）：自建 delegate + 信号量这段最容易出错——
+    //    如果一次性缓冲整个响应体，token 就不是"流"了；这里用宿主 Ollama 的流式接口实测行数。
+    var lines = 0
+    var firstLine = ""
+    let streamCode = transport.postJsonStream(
+            url: "http://127.0.0.1:11434/api/generate",
+            headers: ["Content-Type": "application/json"],
+            body: "{\"model\":\"qwen3.5-2b\",\"prompt\":\"说三个字\",\"stream\":true,"
+                + "\"options\":{\"num_predict\":8}}",
+            timeoutSeconds: 60,
+            onLine: { line in
+                if !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    lines += 1
+                    if firstLine.isEmpty { firstLine = String(line.prefix(40)) }
+                }
+            })
+    out.append(.init(name: "transport_stream_lines",
+                     ok: streamCode == 200 && lines > 1,
+                     detail: "code=\(streamCode) 行数=\(lines)（num_predict=8，验的是传输不是模型）"))
+
     return out
 }
 
@@ -143,15 +197,9 @@ struct ContentView: View {
                 Text("共享层：apps/shared（Kotlin）→ SharedCore.framework")
                     .font(.caption).foregroundStyle(.secondary)
 
-                Button(running ? "自检中…" : "运行端侧自检") {
+                Button(running ? "自检中…" : "重新运行自检") {
                     running = true
-                    results = runSharedSelfTest()
-                    // 同时打到 stdout：`xcrun simctl launch --console` 能直接看到
-                    let pass = results.filter { $0.ok }.count
-                    report("SEKB_IOS_SELFTEST PASS=\(pass) FAIL=\(results.count - pass)")
-                    for r in results {
-                        report("SEKB_IOS_SELFTEST [\(r.ok ? "PASS" : "FAIL")] \(r.name) — \(r.detail)")
-                    }
+                    results = runAndReportSelfTest()
                     running = false
                 }
                 .buttonStyle(.borderedProminent)
@@ -172,13 +220,8 @@ struct ContentView: View {
             .navigationTitle("SEKB")
         }
         .onAppear {
-            // 启动即跑一次：便于 `simctl launch --console` 无人值守地拿到结果
-            results = runSharedSelfTest()
-            let pass = results.filter { $0.ok }.count
-            report("SEKB_IOS_SELFTEST PASS=\(pass) FAIL=\(results.count - pass)")
-            for r in results {
-                report("SEKB_IOS_SELFTEST [\(r.ok ? "PASS" : "FAIL")] \(r.name) — \(r.detail)")
-            }
+            // 界面出现时确保列表有内容（真正的结果在 App.init 里已经跑过并打过日志）
+            if results.isEmpty { results = runSharedSelfTest() }
         }
     }
 }

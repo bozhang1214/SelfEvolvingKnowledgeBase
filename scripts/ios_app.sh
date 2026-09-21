@@ -61,7 +61,7 @@ build_app() {
         -target "$TARGET" -module-cache-path "$TMPDIR/modulecache" \
         -F "$FW_IOS" -framework SharedCore \
         -o "$APP_BUNDLE/$APP_NAME" \
-        "$ROOT/apps/ios/App/SekbApp.swift" || return 1
+        $ROOT/apps/ios/App/*.swift || return 1
     cp "$ROOT/apps/ios/App/Info.plist" "$APP_BUNDLE/Info.plist"
     echo "✅ 已产出 $APP_BUNDLE"
 }
@@ -73,13 +73,17 @@ case "$ACTION" in
         build_app || exit 1
         DEV="$(boot_sim)" || exit 1
         echo "模拟器：$DEV"
+        # 必须先 terminate：`simctl launch` 对**已在运行**的 App 只是切到前台，
+        # `onAppear` 不会再触发 → 无人值守时抓不到自检输出（实测踩过）。
+        xcrun simctl terminate "$DEV" "$BUNDLE_ID" >/dev/null 2>&1 || true
         xcrun simctl uninstall "$DEV" "$BUNDLE_ID" >/dev/null 2>&1 || true
         xcrun simctl install "$DEV" "$APP_BUNDLE" || exit 1
         # 不用 `--console-pty`：受限环境里分配 pty 会失败（实测 "Unable to open pty: Error 1"）。
         # 改为正常启动 + 从模拟器日志里抓应用输出（print → os_log），这在无人值守下更稳。
         xcrun simctl launch "$DEV" "$BUNDLE_ID" >/dev/null || exit 1
-        sleep 8
-        xcrun simctl spawn "$DEV" log show --last 40s --style compact \
+        # 自检里含真实网络调用（宿主 Ollama 冷加载可能十几秒）→ 等久一点再抓日志
+        sleep 45
+        xcrun simctl spawn "$DEV" log show --last 90s --style compact \
             --predicate 'process == "Sekb"' 2>/dev/null | grep -E "SEKB_IOS_SELFTEST" || {
                 echo "（未从日志抓到自检输出；把模拟器界面切到前台可看到 List 中的结果）"
                 exit 1
