@@ -40,6 +40,10 @@ grep -rn "org.json" app/src/main    # 只剩 core/Json.kt（门面本体）
 | `java.util.UUID` | 收进端口 | `core/Ids.kt` |
 | `ai.onnxruntime`（JVM API） | **按设计保留**（这就是平台实现） | `embed/OnnxBgeEmbedding.kt` |
 
+> 服务端口径同步（2026-09-21）：`backend/app/core/plane_router.py` 增加了同一套 `is_local_endpoint()`
+> 与 `Decision.blocked_reason`，`RoutedLLM.ainvoke` / `astream_with_stats` 在 `is_blocked` 时
+> **直接抛错、不发任何请求**；测试见 `backend/tests/unit/test_plane_router.py`（+5 条）。
+
 **结果**：除 4 个端口文件（`OkHttpTransport`/`PlatformFiles`/`Ids`/`OnnxBgeEmbedding`）外，
 `main` 代码里**不再出现任何 JVM/platform import**；纯 Kotlin 行数 **3,723 / 5,673 = 66%**（去平台化前 70% 口径含了端口文件，现已更正）。
 JSON 门面新增 11 条专测（失败返回 null 而非抛、转义/中文/嵌套往返一致、宽松 vs 严格读法、`intMap` 动态键）。
