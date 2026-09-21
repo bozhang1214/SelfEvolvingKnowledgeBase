@@ -65,3 +65,48 @@ iOS 能通过 Kotlin Multiplatform 共用纯逻辑，**鸿蒙不能**。所以�
 第 3 条受 ORT 源码获取影响（需先找镜像）；
 **第 4 条需要 owner 的华为开发者账号**（DevEco 模拟器登录 + 应用签名）。
 按方案 §4 D2 的规矩：**四条全通才进 M7，任一不过就退路线 B（ArkTS 重写 + 契约夹具）**。
+
+## M6 spike 进展（2026-09-21）
+
+**spike 第 2 条（kotlinx 库在 ohos 上可解析）：✅ 已在产物层面验证**——第三方 nexus
+（`https://maven.eazytec-cloud.com/nexus/repository/maven-public/`）上确实发布了 ohos 变体：
+
+| 坐标 | 实测 |
+|---|---|
+| `org.jetbrains.kotlinx:kotlinx-coroutines-core-ohosarm64:1.10.2-1.0.0` | **HTTP 200** |
+| `org.jetbrains.kotlinx:kotlinx-serialization-json-ohosarm64:1.9.1-1.0.0` | **HTTP 200** |
+
+（"依赖供给"是这条路线最大的风险——现在它从"担心"变成了"已验证"。
+注意版本线有两套：文档 三方库表用 `-1.0.0`，官方 sample 用 `-0.3.0-04`。）
+
+**spike 第 1 条（KMP 产物 + HAP 通过 NAPI 调用）：🟡 配方已拿全，尚未实际编译。**
+从官方 KMP sample（`gitcode.com/CPF-KMP-CMP/kmp-cmp-example` 的 `kmp-example` 分支，
+已 clone 到 `.tooling/ohos-spike/sample`）抄到的**关键配方**：
+
+```kotlin
+// settings.gradle.kts：所有依赖与插件都来自这一个仓库
+maven("https://maven.eazytec-cloud.com/nexus/repository/maven-public/")
+
+// gradle.properties
+kotlin.mpp.applyDefaultHierarchyTemplate=false      // ohos 源集要手工接
+kotlin.native.cacheKind.ohosArm64=none              // 与我在 iOS 上撞到的 klib cache 同源问题
+kotlin.native.cacheKind.ohosX64=none
+
+// 模块
+ohosArm64 { binaries { sharedLib { baseName = "kn" }; staticLib { baseName = "kn" } } }
+ohosX64   { /* 模拟器/x86_64 用 */ }
+// 源集：手工创建 ohosMain，再让 ohosArm64Main / ohosX64Main dependsOn 它（两目标共享导出代码）
+```
+
+版本线（sample 实测）：**Kotlin fork `2.2.21-0.3.0-07`**、kotlinx-coroutines `1.10.2-0.3.0-04`、
+AGP 8.11.2（sample 用 AGP 8；**我们现有 Android 构建是 AGP 9** → spike 必须用**独立 Gradle 构建**，
+否则会把已验证的 Android 基线搅乱）。
+
+**spike 第 3 条（ONNX Runtime 自建）：❌ 被网络卡死**——ORT 源码在 GitHub（本机实测 HTTP 000），
+需先找 AtomGit/GitCode 上的 OHOS 移植镜像。
+
+**spike 第 4 条（HAP 能装能起）：⛔ 需要 owner 的华为开发者账号**（DevEco 模拟器登录 + 应用签名）。
+
+> 按方案 §4 D2：**四条全通才进 M7**；任一不过就退路线 B（ArkTS 重写 + 契约夹具）。
+> 当前判断：第 2 条已过；第 1 条下一轮试（独立构建编 `libkn.so` + 一个最小 HAP 经 NAPI 调用）；
+> 第 3/4 条需要外部条件（镜像 / 华为账号）。
