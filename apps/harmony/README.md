@@ -131,9 +131,20 @@ AGP 8.11.2（sample 用 AGP 8；**我们现有 Android 构建是 AGP 9** → spi
 | `gitcode.com/openharmony/third_party_onnxruntime` | 404（路径不对） |
 | GitHub 官方源码 | HTTP 000（不可达，已排除） |
 
-该移植的构建入口是 `tools/ci_build/build.py --ohos --ohos_arch arm64 --ohos_ndk_root <NDK>`
-（文档示例给的是 riscv64，arm64 同理；本机 OHOS NDK 已实测可编 aarch64 musl ELF）。
-**待做**：实际编译 `libonnxruntime.so`（ONNX Runtime 体积大、编译耗时长，属独立一轮）。
+该移植的构建入口是 `tools/ci_build/build.py --ohos --ohos_arch <arch> --ohos_ndk_root <NDK> ...`。
+**本轮（2026-09-21）把编译真正启动起来，并纠正了三处"文档没写、只有撞了才知道"的细节**：
+
+| 坑 | 实际情况 |
+|---|---|
+| `--ohos_arch` 取值 | **是 `aarch64`，不是 `arm64`**（非法值会打印可选列表：`riscv64/aarch64/armv7/x86_64`） |
+| 工具链文件 | 移植版**只带 `cmake/ohos_riscv64.toolchain.cmake`**；arm64 需自己写 →
+  已新增 `cmake/ohos_aarch64.toolchain.cmake`（改名以匹配 `cmake/ohos_<arch>.toolchain.cmake` 的查找规则） |
+| 主机 Python | 系统 `/usr/bin/python3` 是 **3.9**，而 ORT 构建脚本用了 `match` 语句（需 3.10+）→
+  改用 **后端 venv 的 python3.11** |
+| 主机 cmake/ninja | 本机**都没装** → 用 Android SDK 自带那份（`~/Library/Android/sdk/cmake/4.1.2/bin`，含 ninja） |
+
+**状态**：编译已在后台启动（`build_dir=build/ohos_aarch64`，`--skip_tests`，
+`onnxruntime_BUILD_SHARED_LIB=ON`）。ONNX Runtime 体积大、耗时长，**结果下一轮取**。
 
 **hvigor / ohpm CLI 已确认可用**（HAP 壳工程可以命令行构建）：
 `/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw`、`.../tools/ohpm/bin/ohpm`。
