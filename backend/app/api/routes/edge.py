@@ -5,6 +5,7 @@
 - ``GET  /api/v1/edge/routes/stats``  端侧完成率 / 升级率 / 分布（**两个北极星指标**）
 - ``GET  /api/v1/edge/routes``        最近的路由事件（含"为什么走这边"）
 - ``POST /api/v1/edge/route-events``  外部端（Android，M2）上报自己的路由事件
+- ``GET  /api/v1/edge/policy``        下发端侧策略（L1 热修：白名单 + 签名 + 灰度 + 空间戳绑定）
 
 为什么需要一个"上报"入口
 ------------------------
@@ -21,6 +22,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.access import require_full_access
+from app.core.auth import get_current_device
+from app.core.config import get_config
+from app.core.edge_policy import build_policy, policy_secret, verify_payload
 from app.core.logging import get_logger
 from app.storage.edge_route_storage import EdgeRouteStore
 
@@ -93,3 +97,25 @@ async def report_route_event(
     if not written and body.event_id:
         return {"status": "ok", "duplicated": True, "event_id": body.event_id}
     return {"status": "ok", "duplicated": False, "event_id": body.event_id}
+
+
+@router.get("/policy")
+async def get_policy(
+    device_id: str = Depends(get_current_device),
+    rollout_percent: int = Query(100, ge=0, le=100),
+) -> dict[str, Any]:
+    """下发端侧策略（L1 热修）。
+
+    **为什么按设备鉴权**：策略里会带模型档位/工具白名单/预算，属于"这台设备该按什么跑"的配置，
+    与设备身份绑定才说得通（也便于灰度按设备分桶）。
+
+    **为什么返回体自校验**：服务端签完名再**自己验一遍**（`verify_payload`）——
+    签名写错、字段漏进签名这类问题，如果在服务端就发现，就不必等端侧来报"策略被拒"。
+    """
+    config = get_config()
+    payload = build_policy(config, rollout_percent=rollout_percent)
+    if not verify_payload(payload, policy_secret(config)):  # pragma: no cover - 防御性自检
+        raise HTTPException(status_code=500, detail="策略签名自校验失败（服务端 bug）")
+    logger.info("下发端侧策略", device_id=device_id, version=payload["version"],
+                rollout=payload["rollout"]["percent"])
+    return payload

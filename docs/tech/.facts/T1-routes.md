@@ -73,10 +73,10 @@ ASGI 入口：`backend/app/api/main.py:14`（`app = get_app()`，延迟构建）
 ## 1. 端点清单（生成区块）
 
 <!-- BEGIN GENERATED: endpoints -->
-> 本区块由 `python3 scripts/gen_facts_routes.py --write` **生成**（端点 83 个）。
+> 本区块由 `python3 scripts/gen_facts_routes.py --write` **生成**（端点 84 个）。
 > 行号来自当次代码，代码改动后请重跑脚本；**不要手工编辑本区块**。
 
-**端点合计：83 个**（与 `docs/tech/05-API-REFERENCE.md` 的 `fact:api_endpoints` 对齐）。
+**端点合计：84 个**（与 `docs/tech/05-API-REFERENCE.md` 的 `fact:api_endpoints` 对齐）。
 
 ### auth（8 个，prefix `/api/v1/auth`）
 
@@ -129,13 +129,14 @@ ASGI 入口：`backend/app/api/main.py:14`（`app = get_app()`，延迟构建）
 | POST | `/api/v1/device/refresh` | **仅设备** | `refresh` | `app/api/routes/device.py:107` |
 | DELETE | `/api/v1/device/{device_id}` | 用户/设备,用户/设备（含设备生命周期校验） | `revoke_device` | `app/api/routes/device.py:155` |
 
-### edge（3 个，prefix `/api/v1/edge`）
+### edge（4 个，prefix `/api/v1/edge`）
 
 | 方法 | 路径 | 端点级认证 | 处理函数 | 证据 |
 |---|---|---|---|---|
-| POST | `/api/v1/edge/route-events` | 用户/设备（白名单） | `report_route_event` | `app/api/routes/edge.py:81` |
-| GET | `/api/v1/edge/routes` | 用户/设备（白名单） | `list_routes` | `app/api/routes/edge.py:71` |
-| GET | `/api/v1/edge/routes/stats` | 用户/设备（白名单） | `route_stats` | `app/api/routes/edge.py:61` |
+| GET | `/api/v1/edge/policy` | **仅设备** | `get_policy` | `app/api/routes/edge.py:102` |
+| POST | `/api/v1/edge/route-events` | 用户/设备（白名单） | `report_route_event` | `app/api/routes/edge.py:85` |
+| GET | `/api/v1/edge/routes` | 用户/设备（白名单） | `list_routes` | `app/api/routes/edge.py:75` |
+| GET | `/api/v1/edge/routes/stats` | 用户/设备（白名单） | `route_stats` | `app/api/routes/edge.py:65` |
 
 ### health（3 个，prefix `/api/v1/health`）
 
