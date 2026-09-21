@@ -77,8 +77,13 @@ class ChatOrchestratorTest {
         rec: Recorder = Recorder(),
         deviceOnlyRoles: Set<String> = emptySet(),
         audit: PermissionAudit = PermissionAudit(),
+        // R10：DEVICE_ONLY 能不能执行取决于端侧端点是否本机；默认给**本机**，
+        // 因为这一批测试关心的是"升级被隐私边界拦下"，那需要一个真的能跑的端侧。
+        edgeBaseUrl: String = "http://127.0.0.1:11434/v1",
     ): Triple<ChatOrchestrator, Recorder, PermissionAudit> {
-        val router = PlaneRouter(config.copy(deviceOnlyRoles = deviceOnlyRoles))
+        val router = PlaneRouter(
+            config.copy(deviceOnlyRoles = deviceOnlyRoles, edgeBaseUrl = edgeBaseUrl),
+        )
         val tools = ToolRegistry(
             tools = listOf(
                 DeviceTool("device_time", "当前时间", run = {
@@ -190,6 +195,24 @@ class ChatOrchestratorTest {
         assertTrue(out.text.startsWith("。"))          // 端侧原样给出（宁可承认失败）
         assertEquals(0, rec.cloudCalls)                 // 云端**一次都没被调用**
         assertFalse(rec.events[0].escalated)
+    }
+
+    @Test
+    fun `device only data is not sent at all when edge endpoint is remote`() {
+        // R10：端侧端点不是本机（模拟器里的 10.0.2.2 就是开发机）→ 一个请求都不发
+        val edge = FakeEdge(pieces = listOf("这段文字绝不该出现在任何端点上"))
+        val (orch, rec, _) = orchestrator(
+            edge, deviceOnlyRoles = setOf("chat"), edgeBaseUrl = "http://10.0.2.2:11434/v1",
+        )
+        val out = orch.send("我的联系人里有谁", deviceData = true)
+
+        assertEquals(Plane.EDGE, out.plane)
+        assertFalse(out.escalated)
+        assertEquals("escalation_blocked:device_only_requires_local_runtime", out.escalateReason)
+        assertEquals("不该调用端侧", 0, edge.streamCalls + edge.completeCalls)
+        assertEquals("不该调用云端", 0, rec.cloudCalls)
+        assertEquals("不该吐出任何内容", "", out.text)
+        assertTrue("必须给用户一个可读的原因", out.error.contains("设备专属数据"))
     }
 
     // ---------- 工具调用 ----------

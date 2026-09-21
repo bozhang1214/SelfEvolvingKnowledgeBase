@@ -54,7 +54,7 @@ apps/contract/
 |---|---|---|
 | `routing.json`（10 case） | 端侧优先 / 短任务档 / 输入超预算（含 150 与 170 份重复的**预算临界**）/ 输出超预算 / `prefer_cloud` / `device_only`（角色与数据两种入口，且**压过 prefer_cloud**）/ 质量档 / 512 输出预算边界 | 端侧模型档位映射、`context_overflow` 事前改判 |
 | `signals.json`（14 case） | `empty` / `degenerate`（含「2 行相同不算、3 行相同才算」的**行数临界**）/ `low_confidence` / `tool_hallucination` / `json_invalid` / **前缀阶段排除 json_invalid** / `timeout` / 干净输出 | 长度临界（39/40 字符） |
-| `privacy.json`（8 case） | DEVICE_ONLY × 6 类信号：**信号命中但升级被拦**（含「按角色标记」与「prefer_cloud 下仍不走云」） | **R10 落地后追加**：EDGE 指向远端端点时必须拒绝 DEVICE_ONLY（`escalation_blocked:not_on_device`） |
+| `privacy.json`（13 case） | DEVICE_ONLY × 6 类信号：**信号命中但升级被拦**（含「按角色标记」与「prefer_cloud 下仍不走云」）+ **R10 已落地**：回环地址可执行、局域网 / 模拟器宿主（`10.0.2.2`）/ 尾网一律 `blocked=true` + `device_only_requires_local_runtime`，另加一条「普通数据打远端端点不该被误伤」的对照组 | 端侧端点为本机但**模型未加载**时的降级路径 |
 | `toolcall.json`（待建） | 工具调用 JSON 解析/未知工具/缺必填参数 | M4 第 2 步（去平台化）时一并建 |
 | `protocol.json`（待建） | 协议路径与字段（与 `docs/ops/16-端云协同协议.md` 同源） | 与 `check_protocol_paths.py` 合并为 N 方守卫时建 |
 | `retrieval.json`（待建） | 检索阈值与空间戳不变量（含"空间不符必须重算/拒绝"） | M4 第 3 步（搬 `shared/`）时建 |

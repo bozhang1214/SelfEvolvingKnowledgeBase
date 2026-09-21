@@ -72,7 +72,7 @@ class ContractFixturesTest {
             for (key in src.keys()) merged.put(key, src.get(key))
         }
         return EdgeRuntimeConfig(
-            edgeBaseUrl = "http://127.0.0.1:11434/v1",
+            edgeBaseUrl = merged.optString("edgeBaseUrl", "http://127.0.0.1:11434/v1"),
             sekbBaseUrl = "https://example.test/sekb",
             maxInputTokens = merged.optInt("maxInputTokens", 2048),
             maxOutputTokens = merged.optInt("maxOutputTokens", 512),
@@ -168,20 +168,33 @@ class ContractFixturesTest {
         assertSchema(doc, "sekb.contract.privacy/")
         val defaults = doc.getJSONObject("defaults")
         val cases = casesOf(doc)
-        assertTrue("privacy 夹具过少（${cases.size}），疑似被截断", cases.size >= 8)
+        assertTrue("privacy 夹具过少（${cases.size}），疑似被截断", cases.size >= 13)
 
         for (c in cases) {
             val id = c.getString("id")
             val router = PlaneRouter(configOf(defaults, c))
+            val deviceData = c.optBoolean("deviceData", false)
             val d = router.decide(
                 role = c.getString("role"),
                 messages = listOf(c.optString("text", "")),
-                deviceData = c.optBoolean("deviceData", false),
+                deviceData = deviceData,
             )
+            if (!deviceData && !c.has("deviceOnlyRoles")) {
+                // 对照组：普通数据不该被 R10 误伤（只断言这一点）
+                assertFalse("[$id] 普通数据不该被拦", d.isBlocked())
+                continue
+            }
             assertEquals("[$id] DEVICE_ONLY 必须判给端侧", Plane.EDGE, d.plane)
             assertTrue("[$id] deviceOnly 必须为 true", d.deviceOnly)
             assertFalse("[$id] DEVICE_ONLY 数据永不允许升级（硬边界）", d.escalationAllowed())
-            assertEquals("[$id] reason", PlaneRouter.REASON_DEVICE_ONLY, d.reason)
+            if (c.has("blocked")) {
+                assertEquals("[$id] blocked（是否一个请求都不发）", c.getBoolean("blocked"), d.isBlocked())
+            }
+            if (c.has("expectReason")) {
+                assertEquals("[$id] reason", c.getString("expectReason"), d.reason)
+            } else {
+                assertEquals("[$id] reason", PlaneRouter.REASON_DEVICE_ONLY, d.reason)
+            }
 
             val signals = router.evaluate(
                 text = c.optString("text", ""),
@@ -191,8 +204,12 @@ class ContractFixturesTest {
             ).sorted()
             val want = c.getJSONArray("expectSignals").let { a -> (0 until a.length()).map { a.getString(it) } }.sorted()
             assertEquals("[$id] 信号集合不一致", want, signals)
-            assertTrue("[$id] 该 case 必须真的命中升级信号（否则测不到「拦住」这件事）",
-                router.shouldEscalate(signals))
+            // 被 R10 拦下的 case：请求根本没发出去，自然没有"升级信号命中"这回事——
+            // 它要证明的是"不发"，由 blocked/reason 断言负责（编排器层面另有单测钉住"零调用"）。
+            if (!d.isBlocked()) {
+                assertTrue("[$id] 该 case 必须真的命中升级信号（否则测不到「拦住」这件事）",
+                    router.shouldEscalate(signals))
+            }
         }
     }
 

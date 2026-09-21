@@ -24,9 +24,23 @@ data class RouteDecision(
     val outputBudget: Int = 0,
     /** 数据分级为 DEVICE_ONLY：**永不出端**，即使端侧答得不好也不许升级（RFC §5.2 硬边界） */
     val deviceOnly: Boolean = false,
+    /**
+     * 不允许执行的原因（当前只有一种：DEVICE_ONLY 数据遇上了**非本机**的端侧端点）。
+     *
+     * **为什么需要这个字段**（R10，2026-09-21 才发现）：`DEVICE_ONLY` 的隐含前提是
+     * "端侧 = 本设备"，但端侧平面是按 `edgeBaseUrl` 寻址的——它可能是**局域网里的另一台机器**
+     * （Android 模拟器里就是 `10.0.2.2` = 开发机）。这种情况下的正确行为不是"照发"，而是
+     * **拒绝执行并说清原因**：数据分级说它不能出设备，而目标不是本设备。
+     *
+     * 非 null 时调用方**必须**停止，不得调用任何端点（既不端侧也不云端）。
+     */
+    val blockedReason: String? = null,
 ) {
     val isEdge: Boolean get() = plane == Plane.EDGE
     fun escalationAllowed(): Boolean = isEdge && !deviceOnly
+
+    /** 是否可以真的执行（被拦下的决策只能失败，不能发请求）。 */
+    fun isBlocked(): Boolean = blockedReason != null
 }
 
 /** 本次回答的执行位置（服务端 `execution` 字段的客户端视图）。 */

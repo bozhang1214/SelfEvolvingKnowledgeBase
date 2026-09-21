@@ -1,6 +1,6 @@
 {
   "schema": "sekb.contract.privacy/1",
-  "comment": "隐私硬边界（RFC §5.2）：DEVICE_ONLY 数据永不出设备。每个 case 都命中至少一条升级信号，但**升级必须被拦**（escalationAllowed=false）——即『宁可承认失败，也不把数据发出去』。这是端侧方案唯一的硬约束，任何一端放松这条都算失败。",
+  "comment": "隐私硬边界（RFC §5.2）：DEVICE_ONLY 数据永不出设备。每个 case 都命中至少一条升级信号，但**升级必须被拦**（escalationAllowed=false）。R10（2026-09-21）追加：**端侧端点不是本机时，连端侧都不许发**——blocked=true 表示「一个请求都不发」，reason=device_only_requires_local_runtime。没有 deviceData/deviceOnlyRoles 的 case 是对照组（普通数据可以打远端端点，不该被 R10 误伤）。",
   "defaults": {
     "maxTtftMs": 800,
     "availableTools": [
@@ -87,6 +87,63 @@
       "expectSignals": [
         "low_confidence"
       ]
+    },
+    {
+      "id": "device_only.allowed_when_edge_is_local",
+      "role": "chat",
+      "deviceData": true,
+      "edgeBaseUrl": "http://127.0.0.1:11434/v1",
+      "text": "我无法确定。",
+      "expectSignals": [
+        "low_confidence"
+      ],
+      "comment": "本机端点：可以执行，但升级仍被拦"
+    },
+    {
+      "id": "device_only.blocked_when_edge_is_remote_lan",
+      "role": "chat",
+      "deviceData": true,
+      "edgeBaseUrl": "http://192.168.1.20:11434/v1",
+      "text": "我无法确定。",
+      "expectSignals": [
+        "low_confidence"
+      ],
+      "blocked": true,
+      "expectReason": "device_only_requires_local_runtime",
+      "comment": "局域网另一台机器：不是本设备 → 不发"
+    },
+    {
+      "id": "device_only.blocked_when_edge_is_emulator_host",
+      "role": "chat",
+      "deviceData": true,
+      "edgeBaseUrl": "http://10.0.2.2:11434/v1",
+      "text": "端侧检索把索引留在设备上。",
+      "expectSignals": [],
+      "blocked": true,
+      "expectReason": "device_only_requires_local_runtime",
+      "comment": "Android 模拟器里的 10.0.2.2 是开发机——今天真实存在的配置，必须被拦"
+    },
+    {
+      "id": "device_only.blocked_when_edge_is_tailnet_host",
+      "role": "chat",
+      "deviceData": true,
+      "edgeBaseUrl": "http://100.71.24.105:11434/v1",
+      "text": "我无法确定。",
+      "expectSignals": [
+        "low_confidence"
+      ],
+      "blocked": true,
+      "expectReason": "device_only_requires_local_runtime",
+      "comment": "Tailscale 上的桌面宿主：同样不是本设备"
+    },
+    {
+      "id": "normal_data.may_use_remote_edge",
+      "role": "chat",
+      "deviceData": false,
+      "edgeBaseUrl": "http://10.0.2.2:11434/v1",
+      "text": "端侧检索把索引留在设备上。",
+      "expectSignals": [],
+      "comment": "对照组：普通数据打远端端点是正常用法，不能被 R10 误伤"
     }
   ]
 }

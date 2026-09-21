@@ -2,7 +2,7 @@
 
 > 规则：**只写跑过的命令与真实输出**。"应该能跑"不算验证；没能验的写在最后一节。
 
-> 端侧单测总量：**186**（功能 182 + 跨端契约夹具 4）<!-- fact:android_unit_cases=186 -->
+> 端侧单测总量：**191**（功能 187 + 跨端契约夹具 4）<!-- fact:android_unit_cases=191 -->
 
 环境：macOS（Apple Silicon）+ Android Studio JBR 21 + Android SDK platform 36.1 +
 AVD `Medium_Phone_API_36.1`（arm64-v8a，google_apis_playstore）。
@@ -10,6 +10,25 @@ AVD `Medium_Phone_API_36.1`（arm64-v8a，google_apis_playstore）。
 ---
 
 ## 1. 已验（可在任何机器复现）
+
+### 1.0 跨端契约夹具 + DEVICE_ONLY 的「本机」判据（R10，M4 第 1/3 步，2026-09-21）
+
+```bash
+bash scripts/android.sh test        # 191 tests, 0 failed（功能 187 + 契约 4；3–12 秒）
+```
+
+| 验的是什么 | 证据 |
+|---|---|
+| **契约夹具在跑，且能失败** | `apps/contract/{routing,signals,privacy}.json` 共 32 case，由 `ContractFixturesTest` 4 个测试逐 `id` 断言；把 `cloud.input_over_budget` 的期望从 `cloud` 改成 `edge` → **立刻 FAILED**，还原 → 回绿 |
+| **夹具不是"假绿"** | 夹具目录已登记为单测输入（`apps/android/app/build.gradle.kts` 的 `inputs.dir(contractDir)`）：**实测**未接线时改夹具不会重跑（Gradle UP-TO-DATE），接线后改夹具会红 |
+| **R10：DEVICE_ONLY + 非本机端点 = 一个请求都不发** | `PlaneRouterTest`：`10.0.2.2` / `192.168.1.20` / `100.71.24.105` / `edge-host.local` / `0.0.0.0` 全部判为**非本机** → `blockedReason=device_only_requires_local_runtime`；`127.0.0.1` / `localhost` / `[::1]` 判为本机 → 可执行（`device_only_data`） |
+| **编排器层面真的不发** | `ChatOrchestratorTest.device only data is not sent at all when edge endpoint is remote`：端侧 0 次调用、云端 0 次调用、`text=""`、`error` 里有可读原因 |
+| **普通数据不受影响** | 同一批测试里 `non device-only traffic is unaffected by endpoint locality`：普通数据打远端端点仍是 `edge_preferred`（R10 不误伤端云协同） |
+
+> ⚠️ **这会改变模拟器上的产品行为**：模拟器的 `edgeBaseUrl` 是 `10.0.2.2`（开发机）→
+> **DEVICE_ONLY 请求会被明确拒绝**（不再发给开发机上的 Ollama）。这是隐私边界的正确语义
+> （"本机"≠"局域网里的另一台机器"）；真机接入本地运行时后才会有可用的 DEVICE_ONLY 端侧推理。
+
 
 ### 1.1 纯逻辑与端云全流程单测（88 用例）
 

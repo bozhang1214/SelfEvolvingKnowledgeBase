@@ -91,6 +91,27 @@ class ChatOrchestrator(
             deviceData = deviceData,
         )
 
+        // R10：DEVICE_ONLY 数据 + 非本机端侧端点 → **一个请求都不发**（既不端侧也不云端）。
+        // 上报一条留痕，并把原因直接告诉用户——端侧方案里"说清为什么不行"比"静默降级"重要。
+        if (decision.isBlocked()) {
+            val reason = decision.blockedReason.orEmpty()
+            report(
+                decision = decision, plane = Plane.EDGE, model = "",
+                inputText = userMessage, outputText = "",
+                signals = listOf(reason), escalated = false,
+                escalateReason = "escalation_blocked:$reason",
+                latencyMillis = 0.0, role = role,
+            )
+            return ChatOutcome(
+                text = "", plane = Plane.EDGE, decision = decision,
+                signals = listOf(reason), escalated = false,
+                escalateReason = "escalation_blocked:$reason",
+                execution = localExecution(decision, "", 0.0, escalated = false, signals = listOf(reason)),
+                conversationId = conversationId,
+                error = "设备专属数据不能发往非本机端点（$reason）；本机未配置可用的端侧运行时",
+            )
+        }
+
         return if (decision.isEdge) {
             runEdge(userMessage, history, conversationId, decision, role, onToken, onThinking)
         } else {

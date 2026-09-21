@@ -25,9 +25,11 @@ class PlaneRouterTest {
         maxOutput: Int = defaults.maxOutputTokens,
         preferEdge: Boolean = true,
         deviceOnly: Set<String> = emptySet(),
+        // R10：DEVICE_ONLY 是否可执行取决于端侧端点是否**本机**，所以端点必须可注入
+        edgeBaseUrl: String = defaults.edgeBaseUrl,
     ) = PlaneRouter(
         EdgeRuntimeConfig(
-            edgeBaseUrl = defaults.edgeBaseUrl,
+            edgeBaseUrl = edgeBaseUrl,
             sekbBaseUrl = defaults.sekbBaseUrl,
             maxInputTokens = maxInput,
             maxOutputTokens = maxOutput,
@@ -68,13 +70,68 @@ class PlaneRouterTest {
 
     @Test
     fun `device only data never leaves the device`() {
-        val d = router(deviceOnly = setOf("chat")).decide("chat", listOf("我的联系人里有谁"),
-            deviceData = true)
+        // 用**本机**端点：这才是"端侧"该有的样子（10.0.2.2 是开发机，属 R10 要拦的情况）
+        val d = router(deviceOnly = setOf("chat"), edgeBaseUrl = "http://127.0.0.1:11434/v1")
+            .decide("chat", listOf("我的联系人里有谁"), deviceData = true)
         assertEquals(Plane.EDGE, d.plane)
         assertEquals("device_only_data", d.reason)
         assertTrue(d.deviceOnly)
         // 硬边界：即使端侧答得不好也不许升级（RFC §5.2）
         assertFalse(d.escalationAllowed())
+        assertFalse("本机端点不该被拦", d.isBlocked())
+    }
+
+    // ───────────── R10：DEVICE_ONLY 的"本机"判据（2026-09-21） ─────────────
+
+    @Test
+    fun `device only data is refused when edge endpoint is not this device`() {
+        // 模拟器里 edgeBaseUrl=10.0.2.2（开发机）：DEVICE_ONLY 数据**一个请求都不该发**
+        val d = router(deviceOnly = setOf("chat"), edgeBaseUrl = "http://10.0.2.2:11434/v1")
+            .decide("chat", listOf("我的联系人里有谁"), deviceData = true)
+        assertEquals(Plane.EDGE, d.plane)
+        assertEquals("device_only_requires_local_runtime", d.reason)
+        assertTrue(d.deviceOnly)
+        assertTrue("非本机端点必须被拦", d.isBlocked())
+        assertFalse(d.escalationAllowed())
+    }
+
+    @Test
+    fun `device only refusal also applies to LAN and tailnet hosts`() {
+        // 局域网 / 尾网 / 域名：一律当"非本机"（宁可拒绝，也不猜）
+        for (remote in listOf(
+            "http://192.168.1.20:11434/v1",
+            "http://100.71.24.105:11434/v1",
+            "http://edge-host.local:11434/v1",
+            "http://0.0.0.0:11434/v1",
+        )) {
+            val d = router(deviceOnly = setOf("chat"), edgeBaseUrl = remote)
+                .decide("chat", listOf("q"), deviceData = true)
+            assertTrue("$remote 应被判为非本机", d.isBlocked())
+        }
+    }
+
+    @Test
+    fun `localhost spellings count as local`() {
+        for (local in listOf(
+            "http://127.0.0.1:11434/v1",
+            "http://localhost:11434/v1",
+            "http://[::1]:11434/v1",
+            "http://127.0.0.1:11434",
+        )) {
+            val d = router(deviceOnly = setOf("chat"), edgeBaseUrl = local)
+                .decide("chat", listOf("q"), deviceData = true)
+            assertFalse("$local 应被判为本机", d.isBlocked())
+            assertEquals("device_only_data", d.reason)
+        }
+    }
+
+    @Test
+    fun `non device-only traffic is unaffected by endpoint locality`() {
+        // 普通数据打到远端端点是**正常**的（端云协同就是这么用的），不能被 R10 误伤
+        val d = router(edgeBaseUrl = "http://10.0.2.2:11434/v1").decide("chat", listOf("hi"))
+        assertEquals(Plane.EDGE, d.plane)
+        assertEquals("edge_preferred", d.reason)
+        assertFalse(d.isBlocked())
     }
 
     @Test
