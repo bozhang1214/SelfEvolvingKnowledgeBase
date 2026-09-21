@@ -97,6 +97,31 @@ object SelfTest {
                     "text=${out.text.take(40)}")
         }
 
+        // 3.4 L1 策略（M4.5）：拉取 + 验签 + 应用。没有设备凭证时如实 SKIP
+        // （策略端点按设备鉴权；本地联调需要先登录换设备 token）。
+        run {
+            val creds = container.credentialStore.load()
+            if (creds == null) {
+                record("policy_refresh", null, "无设备凭证（先登录换设备 token）→ 跳过")
+            } else {
+                val result = runCatching { container.refreshPolicy() }.getOrNull()
+                val detail = when (result) {
+                    is com.sekb.shared.policy.PolicyRefreshResult.Applied ->
+                        "version=${result.version} 已应用=${result.appliedKeys} 仅识别=${result.ignoredKeys}"
+                    is com.sekb.shared.policy.PolicyRefreshResult.Skipped -> "未应用：${result.reason}"
+                    null -> "刷新抛异常"
+                }
+                // 通过标准：**要么成功应用，要么给出明确原因**（网络/签名/灰度都不算失败——
+                // 策略是锦上添花，端侧必须能在拿不到它的情况下照常工作）
+                record("policy_refresh", result != null, detail)
+                record(
+                    "policy_rollback_guard",
+                    container.policyFetcher.rollback(container.config) is com.sekb.shared.policy.PolicyRefreshResult.Skipped,
+                    "无上一份时回滚必须干净跳过（不抛、不改状态）",
+                )
+            }
+        }
+
         // 3.5 R10（M4）：DEVICE_ONLY + 非本机端点 → 一个请求都不许发。
         // 模拟器里 edgeBaseUrl=10.0.2.2（开发机）正是"非本机"，所以这条自检应当看到**拒绝**；
         // 若哪天它变成"照发"，就是隐私硬边界被破坏——这比"功能不可用"严重得多。

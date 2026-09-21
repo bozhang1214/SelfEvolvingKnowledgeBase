@@ -2,7 +2,7 @@
 
 > 规则：**只写跑过的命令与真实输出**。"应该能跑"不算验证；没能验的写在最后一节。
 
-> 端侧单测总量：**221**（功能 187 + 契约夹具 4 + JSON 门面 11 + 格式化 5 + 端侧策略 14）<!-- fact:android_unit_cases=221 -->
+> 端侧单测总量：**231**（功能 187 + 契约夹具 4 + JSON 门面 11 + 格式化 5 + 端侧策略 24）<!-- fact:android_unit_cases=231 -->
 
 环境：macOS（Apple Silicon）+ Android Studio JBR 21 + Android SDK platform 36.1 +
 AVD `Medium_Phone_API_36.1`（arm64-v8a，google_apis_playstore）。
@@ -24,6 +24,26 @@ bash scripts/android.sh test        # 191 tests, 0 failed（功能 187 + 契约 
 | **R10：DEVICE_ONLY + 非本机端点 = 一个请求都不发** | `PlaneRouterTest`：`10.0.2.2` / `192.168.1.20` / `100.71.24.105` / `edge-host.local` / `0.0.0.0` 全部判为**非本机** → `blockedReason=device_only_requires_local_runtime`；`127.0.0.1` / `localhost` / `[::1]` 判为本机 → 可执行（`device_only_data`） |
 | **编排器层面真的不发** | `ChatOrchestratorTest.device only data is not sent at all when edge endpoint is remote`：端侧 0 次调用、云端 0 次调用、`text=""`、`error` 里有可读原因 |
 | **普通数据不受影响** | 同一批测试里 `non device-only traffic is unaffected by endpoint locality`：普通数据打远端端点仍是 `edge_preferred`（R10 不误伤端云协同） |
+
+### 1.0.5 端侧策略接线（M4.5 收尾，2026-09-21）
+
+```bash
+bash scripts/android.sh test        # 231 tests, 0 failed（新增 PolicyFetcherTest 10 条）
+```
+
+| 接线项 | 实现 | 验证 |
+|---|---|---|
+| 双槽持久化 | `device/SharedPrefsPolicyStore.kt`（与设备凭证同一个 `sekb_device` prefs；策略非机密，明文即可） | 单测（`InMemoryPolicyStore` 双槽语义 + 回滚） |
+| 拉取与应用 | `AppContainer.refreshPolicy()`：拉 → 验签 → 应用 → 落盘；**失败不改状态**只写审计 | `PolicyFetcherTest` 10 条（HTTP 错误 / 网络异常 / 签名不符 / 灰度跳过 / 第二次保存进 previous / 回滚 / 审计不含正文） |
+| 拉取时机 | `SekbApp.onCreate` → `startPolicyRefreshLoop()`：启动**异步**拉一次 + 每 6h（守护线程，失败只记日志） | 编译期接线；行为由 fetcher 单测覆盖 |
+| 阈值进检索 | `container.retriever` 的 `minScore` 取自落盘策略（`retrievalMinScore`），没有则 0.5 | `activeRetrievalMinScore()` 单测 |
+| 自检项 | `policy_refresh`（无设备凭证 → SKIP）、`policy_rollback_guard`（无上一份时必须干净跳过） | ⏳ **本轮未能 E2E**（见下） |
+
+**⚠️ 本轮 E2E 未跑通，原因与修法（已落在脚本里）**：自检第 1 项 `edge_reachable` 就是 false——
+实测宿主 Ollama **只绑 `127.0.0.1:11434`**，而当前模拟器访问不到宿主回环别名 `10.0.2.2:11434`。
+**修法（推荐，已加进 `scripts/emulator.sh`）**：起模拟器时自动 `adb reverse tcp:11434 tcp:11434`，
+并用 `-PsekbEdgeUrl=http://127.0.0.1:11434/v1` 构建（无需把 Ollama 绑到 `0.0.0.0` 暴露到局域网）。
+下一轮 E2E 应能跑满 29 项（27 + `policy_refresh` + `policy_rollback_guard`）。
 
 ### 1.0.4 端侧策略（L1 热修）校验与应用（M4.5 端侧，2026-09-21）
 

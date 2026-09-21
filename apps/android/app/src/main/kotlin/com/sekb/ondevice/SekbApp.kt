@@ -7,6 +7,10 @@ import com.sekb.shared.chat.CloudChat
 import com.sekb.shared.chat.CloudReply
 import com.sekb.shared.chat.ToolCallEval
 import com.sekb.ondevice.device.KeystoreCredentialStore
+import com.sekb.ondevice.device.SharedPrefsPolicyStore
+import com.sekb.shared.policy.PolicyAuditEntry
+import com.sekb.shared.policy.PolicyFetcher
+import com.sekb.shared.policy.PolicyRefreshResult
 import com.sekb.shared.edge.OpenAiCompatibleEdgeLlm
 import com.sekb.shared.embed.DeterministicEmbedding
 import com.sekb.shared.embed.EmbeddingProvider
@@ -52,9 +56,31 @@ class AppContainer(context: Context) {
         sekbBaseUrl = BuildConfig.DEFAULT_SEKB_BASE_URL,
         appVersion = BuildConfig.VERSION_NAME,
     )
-        private set
 
     val audit = PermissionAudit()
+
+    // ── 端侧策略（L1 热修）────────────────────────────────────────────────
+    // 双槽存储 + 拉取器；签名密钥来自构建配置（生产由部署侧注入；未配置时服务端会用派生密钥，
+    // 端侧这里保持同一来源即可——它只用于**验签**，不参与任何加密）。
+    val policyStore = SharedPrefsPolicyStore(context)
+
+    /** 最近一次策略刷新的结果与审计（自检/界面展示用；不落盘正文）。 */
+    var lastPolicyResult: PolicyRefreshResult? = null
+        private set
+    val policyAudit = mutableListOf<PolicyAuditEntry>()
+
+    val policyFetcher = PolicyFetcher(
+        transport = transport,
+        sekbBaseUrl = config.sekbBaseUrl,
+        signingKey = BuildConfig.DEFAULT_EDGE_POLICY_KEY,
+        store = policyStore,
+        audit = { entry ->
+            synchronized(policyAudit) {
+                policyAudit += entry
+                while (policyAudit.size > 50) policyAudit.removeAt(0)
+            }
+        },
+    )
 
     /**
      * 端侧嵌入实现（**可插拔**）。
@@ -101,7 +127,10 @@ class AppContainer(context: Context) {
     val knowledgeIndex = KnowledgeIndex(
         embeddingProvider, vectorStore, registry = openResult.store,
     )
-    val retriever = Retriever(embeddingProvider, vectorStore)
+    /** 检索阈值：优先用已落盘策略里的值（`retrievalMinScore`），否则用 Retriever 的默认 0.5。 */
+    private fun policyMinScore(): Double = policyFetcher.activeRetrievalMinScore() ?: 0.5
+
+    val retriever = Retriever(embeddingProvider, vectorStore, minScore = policyMinScore())
 
     /** 端侧工具（含权限闸门所需的真实权限检查）。 */
     val tools = ToolRegistry(
@@ -118,6 +147,71 @@ class AppContainer(context: Context) {
             edgeBaseUrl = edgeBaseUrl?.takeIf { it.isNotBlank() } ?: config.edgeBaseUrl,
             sekbBaseUrl = sekbBaseUrl?.takeIf { it.isNotBlank() } ?: config.sekbBaseUrl,
         )
+    }
+
+    /**
+     * 拉取并应用端侧策略（L1 热修）。
+     *
+     * **不阻塞启动**：调用方在后台线程调它；失败只是保持现状（策略是锦上添花）。
+     * 成功时把新配置写回 [config]，后续新建的编排器即按新参数跑。
+     */
+    fun refreshPolicy(): PolicyRefreshResult {
+        val creds = credentialStore.load() ?: return PolicyRefreshResult.Skipped("policy_no_device_token")
+        val result = policyFetcher.refresh(
+            deviceToken = creds.deviceToken,
+            current = config,
+            deviceId = creds.deviceId,
+        )
+        if (result is PolicyRefreshResult.Applied) {
+            config = config.copy(
+                guardChars = result.config.guardChars,
+                escalateOn = result.config.escalateOn,
+                maxInputTokens = result.config.maxInputTokens,
+                maxOutputTokens = result.config.maxOutputTokens,
+                maxTtftMs = result.config.maxTtftMs,
+                preferEdge = result.config.preferEdge,
+                models = result.config.models,
+                availableTools = result.config.availableTools,
+            )
+        }
+        lastPolicyResult = result
+        return result
+    }
+
+    /** 回滚到上一份策略（新策略把行为改坏时的止损口）。 */
+    fun rollbackPolicy(): PolicyRefreshResult {
+        val result = policyFetcher.rollback(config)
+        if (result is PolicyRefreshResult.Applied) {
+            config = result.config
+        }
+        lastPolicyResult = result
+        return result
+    }
+
+    /** 当前生效策略的版本号（0 = 还没拉到过）。 */
+    fun policyVersion(): Int = policyFetcher.activeVersion()
+
+    /**
+     * 启动策略刷新循环：**立即拉一次，之后每 [intervalHours] 小时一次**（默认 6h）。
+     *
+     * 为什么放后台线程且不 await：策略拉取要走网络，绝不能拖慢启动或让"没网就不能聊天"。
+     * 拉失败只是保持现状（[PolicyFetcher] 里已保证失败不改状态），下一轮再试。
+     */
+    fun startPolicyRefreshLoop(intervalHours: Long = 6) {
+        val worker = Thread {
+            while (true) {
+                runCatching { refreshPolicy() }
+                    .onFailure { android.util.Log.w("SEKB", "策略刷新异常：${it.message}") }
+                try {
+                    Thread.sleep(intervalHours * 3600_000L)
+                } catch (e: InterruptedException) {
+                    return@Thread
+                }
+            }
+        }
+        worker.isDaemon = true
+        worker.name = "sekb-policy-refresh"
+        worker.start()
     }
 
     fun api(): SekbApi = SekbApi(transport, config.sekbBaseUrl)
@@ -158,11 +252,14 @@ class AppContainer(context: Context) {
 }
 
 class SekbApp : Application() {
+
     lateinit var container: AppContainer
         private set
 
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        // L1 热修：启动后**异步**拉一次策略并每 6h 刷新（不阻塞启动；失败保持现状）
+        container.startPolicyRefreshLoop()
     }
 }

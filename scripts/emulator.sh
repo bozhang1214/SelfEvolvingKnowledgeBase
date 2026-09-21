@@ -60,7 +60,20 @@ if [ "${1:-}" = "--background" ]; then
         # 那时 install 会报 "Error: device is still booting"（实测踩到）。
         if "$ADB" devices | grep -q "device$" && \
            [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
-            echo "✅ 就绪：$("$ADB" devices | grep 'device$' | head -1)（boot_completed=1）"
+        # ---- 端侧端点直通（可选但推荐）------------------------------------------------
+# 背景（2026-09-21 实测）：宿主 Ollama 默认只绑 127.0.0.1，而**本机模拟器访问不到 10.0.2.2:11434**
+# （自检第 1 项 edge_reachable=false）。与其把 Ollama 绑到 0.0.0.0（会暴露到局域网），
+# 不如用 `adb reverse` 把模拟器的 11434 直通到宿主 11434——安全且不需要改 Ollama 配置。
+# 用它的构建方式：./gradlew :app:assembleDebug -PsekbEdgeUrl=http://127.0.0.1:11434/v1
+if [ -x "$ADB" ]; then
+    if "$ADB" reverse tcp:11434 tcp:11434 >/dev/null 2>&1; then
+        echo "   ↳ 已建立 adb reverse tcp:11434（端侧端点可用 127.0.0.1:11434 直通宿主）"
+    else
+        echo "   ⚠️  adb reverse 失败（不影响功能：仍可用 10.0.2.2，前提是 Ollama 绑到 0.0.0.0）"
+    fi
+fi
+
+    echo "✅ 就绪：$("$ADB" devices | grep 'device$' | head -1)（boot_completed=1）"
             echo "   后续 adb 命令请带上同一个 HOME：HOME=$HOME"
             exit 0
         fi

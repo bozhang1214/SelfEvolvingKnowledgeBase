@@ -34,7 +34,23 @@ android {
         // 端侧要连两个东西，都做成可配置（模拟器里宿主机是 10.0.2.2）：
         //   edgeBaseUrl → 本机/宿主机上的 OpenAI 兼容端点（Ollama）
         //   sekbBaseUrl → SEKB 云端（端云协同的"云"这一侧）
-        buildConfigField("String", "DEFAULT_EDGE_BASE_URL", "\"http://10.0.2.2:11434/v1\"")
+        // 端侧（宿主 Ollama）地址：模拟器默认 10.0.2.2（宿主回环别名）。
+        // 若宿主 Ollama 只绑 127.0.0.1（默认）而模拟器访问不到 10.0.2.2，用 adb reverse 直通：
+        //   adb reverse tcp:11434 tcp:11434
+        //   ./gradlew :app:assembleDebug -PsekbEdgeUrl=http://127.0.0.1:11434/v1
+        // （推荐这条路径：不必把 Ollama 绑到 0.0.0.0 暴露到局域网）
+        buildConfigField(
+            "String", "DEFAULT_EDGE_BASE_URL",
+            "\"${project.findProperty("sekbEdgeUrl") ?: "http://10.0.2.2:11434/v1"}\"",
+        )
+        // 端侧策略（L1 热修）的**验签密钥**：只用于校验服务端下发的策略包（不参与加密）。
+        // 生产由部署侧注入（与服务端 SEKB_EDGE_POLICY_SECRET 一致）；本地默认值仅用于联调，
+        // 服务端未配 SEKB_EDGE_POLICY_SECRET 时会派生同一个开发密钥。
+        // 可用 -PsekbPolicyKey=... 在构建期覆盖。
+        buildConfigField(
+            "String", "DEFAULT_EDGE_POLICY_KEY",
+            "\"${project.findProperty("sekbPolicyKey") ?: "edge-policy:dev-only"}\"",
+        )
         // 云端地址可在**构建期**覆盖（联调/UI 验收用本地后端）：
         //   ./gradlew :app:assembleDebug -PsekbBaseUrl=http://10.0.2.2:8010
         // 这样就不必在模拟器上手打地址（软键盘会遮挡下方控件，脚本点击很容易错位）。
