@@ -8,7 +8,10 @@
 > 新的路线判断、**3 天 spike 的四条验收标准**、回退条件与风险见
 > [`docs/RFC-多端跨端方案.md`](../../docs/RFC-多端跨端方案.md) §4 D2 与 §10 E2/E3。
 > **结论先说**：优先走 KMP/CMP 路线（spike 通过则复用 ~70% 逻辑），spike 失败才退回下面的路线 A。
-> 本机已具备条件：DevEco SDK **API 22** + OHOS NDK（`aarch64-unknown-linux-ohos-clang`，sysroot `aarch64-linux-ohos`）→ C/C++ 可交叉编译。
+> 本机已具备条件：DevEco SDK **API 22** + OHOS NDK（`aarch64-unknown-linux-ohos-clang`，sysroot `aarch64-linux-ohos`）。
+> **已实测**（2026-09-21）：该 clang（15.0.4 "OHOS (dev)"）能编 + 链出
+> `ELF 64-bit LSB pie executable, ARM aarch64`，解释器 `/lib/ld-musl-aarch64.so.1`（musl）——
+> 即"给鸿蒙编 C/C++ 库"这条链路是通的；但 clang 15 基线偏老，ONNX Runtime 可能要高版本补丁或降版本（spike 要撞的墙）。
 
 
 ## 本机工具链（2026-09-18 实测）
