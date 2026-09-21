@@ -16,7 +16,9 @@
 | KMP 共享层编到 iOS/macOS | ✅ | `-PsekbNativeTargets=true` 下 `:shared:compileKotlinIosSimulatorArm64` / `compileKotlinMacosArm64` 通过 |
 | framework 产出 | ✅ | `:shared:linkDebugFrameworkIosSimulatorArm64` / `linkDebugFrameworkMacosArm64` → `SharedCore.framework`（`isStatic = true`） |
 | **Swift 互操作冒烟** | ✅ | `bash scripts/ios.sh smoke` → **SMOKE OK（5/5）**：Apple 侧 HMAC/SHA256 对齐公知向量、canonical JSON 与 Python 一致、`ToolCallJson.parse` 的 sealed 类导出可用、`Fmt` 与 Android 逐字符一致 |
-| iOS App（SwiftUI + 模拟器安装） | ⏳ 下一步 | 计划用 `swiftc` 直编 iOS 模拟器目标 + 手工 `.app` 包（`simctl install`），避免手写 `.xcodeproj` |
+| **iOS App 骨架（SwiftUI）** | ✅ | `bash scripts/ios_app.sh run` → 装到 iPhone 17 Pro 模拟器并启动，日志抓到 **`SEKB_IOS_SELFTEST PASS=8 FAIL=0`**：HMAC 向量、规范化 JSON、路由决策、**R10 本机/远端两条对照**、**流式守卫零外泄**、工具调用解析、检索阈值默认值 |
+| iOS 端四个端口（NSURLSession/Keychain/ONNX/PDFKit） | ⏳ 下一步 | 补齐后自检项要与 Android 等价 |
+| iOS 真机性能 | ⏳ 等硬件 | 模拟器只验功能 |
 | 四个端口（NSURLSession/Keychain/ONNX/PDFKit） | ⏳ | 待 App 骨架跑通后补 |
 
 ```bash
