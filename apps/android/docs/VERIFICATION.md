@@ -2,7 +2,7 @@
 
 > 规则：**只写跑过的命令与真实输出**。"应该能跑"不算验证；没能验的写在最后一节。
 
-> 端侧单测总量：**207**（功能 187 + 契约夹具 4 + JSON 门面 11 + 格式化 5）<!-- fact:android_unit_cases=207 -->
+> 端侧单测总量：**221**（功能 187 + 契约夹具 4 + JSON 门面 11 + 格式化 5 + 端侧策略 14）<!-- fact:android_unit_cases=221 -->
 
 环境：macOS（Apple Silicon）+ Android Studio JBR 21 + Android SDK platform 36.1 +
 AVD `Medium_Phone_API_36.1`（arm64-v8a，google_apis_playstore）。
@@ -24,6 +24,28 @@ bash scripts/android.sh test        # 191 tests, 0 failed（功能 187 + 契约 
 | **R10：DEVICE_ONLY + 非本机端点 = 一个请求都不发** | `PlaneRouterTest`：`10.0.2.2` / `192.168.1.20` / `100.71.24.105` / `edge-host.local` / `0.0.0.0` 全部判为**非本机** → `blockedReason=device_only_requires_local_runtime`；`127.0.0.1` / `localhost` / `[::1]` 判为本机 → 可执行（`device_only_data`） |
 | **编排器层面真的不发** | `ChatOrchestratorTest.device only data is not sent at all when edge endpoint is remote`：端侧 0 次调用、云端 0 次调用、`text=""`、`error` 里有可读原因 |
 | **普通数据不受影响** | 同一批测试里 `non device-only traffic is unaffected by endpoint locality`：普通数据打远端端点仍是 `edge_preferred`（R10 不误伤端云协同） |
+
+### 1.0.4 端侧策略（L1 热修）校验与应用（M4.5 端侧，2026-09-21）
+
+```bash
+bash scripts/android.sh test        # 221 tests, 0 failed（新增 EdgePolicyTest 14 条）
+cd apps/android && KONAN_DATA_DIR=$PWD/../../.tooling/konan ./gradlew \
+  -PsekbNativeTargets=true :shared:compileKotlinIosSimulatorArm64 :shared:compileKotlinMacosArm64   # BUILD SUCCESSFUL
+```
+
+| 验的是什么 | 证据 |
+|---|---|
+| **跨语言签名一致**（最关键） | 用**服务端 Python 实现**生成签名（`38a26c8c…679d`）硬编码进测试，Kotlin 必须算出同一个——规范化 JSON（键递归排序、无空格、非 ASCII 不转义）与 HMAC 任一处不一致都会红 |
+| 公知向量 | HMAC-SHA256(`key`, "The quick brown fox…") = `f7bc83f4…a3cd8`；SHA-256("abc") = `ba7816bf…15ad` |
+| 拒绝路径 | 篡改内容 / 换密钥 → `policy_bad_signature`；空间不符 → `policy_space_mismatch:remote=…,local=…`；过期 → `policy_expired`；白名单外键 → `policy_unknown_key:<键名>`；非 JSON → `policy_not_json`（**不抛异常**） |
+| 预留字段 | `deviceProfiles` 非空也放行，但**不读取**、不进 `appliedKeys` |
+| 灰度 | 确定性（同设备同 salt 稳定命中）、30% 实际比例落在 0.15–0.45、与服务端同式（`sha256(deviceId:salt)`，**不用 Kotlin 内置 hash**） |
+| 如实区分 | `retrievalMinScore` 进 `ignoredKeys` + 专用读取口；`promptPacks` 本期后置 |
+
+> 新增端口：`core/Hmac.kt` 的 `hmacSha256Hex` / `sha256Hex`（expect + androidMain `javax.crypto`/`MessageDigest`
+> + appleMain `CCHmac`/`CC_SHA256`）。Apple 侧踩过两个 cinterop 坑并记进注释：
+> `allocArray<UByteVar>` 的索引读需要额外 import（改用 `ByteArray.usePinned` + 地址传给 C 绕开）；
+> `CC_SHA256` 要求**无符号**指针 → `reinterpret<UByteVar>()` 且需显式类型实参。
 
 ### 1.0.3 KMP 共享模块（M4 第 5 步，2026-09-21）
 

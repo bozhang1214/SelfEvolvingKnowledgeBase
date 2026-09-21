@@ -241,6 +241,9 @@ class JsonArray internal constructor(private val list: MutableList<Any?>) {
         else -> fallback
     }
 
+    /** 取第 index 个元素（任意类型；越界返回 null）。规范化 JSON 与策略读取用。 */
+    fun valueAt(index: Int): Any? = list.getOrNull(index)
+
     internal fun values(): List<Any?> = list
 
     override fun toString(): String = JsonX.toElement(this).toString()
