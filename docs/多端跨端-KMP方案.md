@@ -347,10 +347,10 @@ for await chunk in orchestrator.send(text) { /* 更新 SwiftUI 状态 */ }
 | 步 | 动作 | 验收 |
 |---|---|---|
 | 1 | **契约夹具先行**：协议/字段、6 类升级信号、隐私边界用例固化成 `apps/contract/*.json`；Android 接上 runner | ✅ **已完成**：186 测试全绿；改夹具立刻红（Gradle 输入已接线） |
-| 2 | **依赖去平台化（不建 KMP 模块）**：`org.json` 全量收敛到 `JsonX`；`HttpTransport` 拆接口/实现；`File/UUID/concurrent` 换多平台 API | Android 行为零变化（自检 28 PASS / 2 SKIP、检索数字不变） |
-| 3 | 建 `apps/shared`（KMP），把 26 个纯逻辑文件搬进 `commonMain` | ✅ **已完成（2026-09-21）**：**207 单测全绿**（app 模块单测直接测共享层代码）+ 模拟器自检 **28 PASS / 0 FAIL / 2 SKIP**；平台实现仍留在 app 模块，shared 零平台依赖。实测坑：AGP 9 禁止 `com.android.library`+KMP（须用 `com.android.kotlin.multiplatform.library`）；该插件无 `compileSdkMinor`（本机只有 android-36.1 → 仓库内 `.tooling/android-sdk` 自造 `platforms/android-36`）；native target 做成 `-PsekbNativeTargets=true` 开关 |
+| 2 | **依赖去平台化（不建 KMP 模块）**：`org.json` 全量收敛到 `JsonX`；`HttpTransport` 拆接口/实现；`File/UUID/concurrent` 换多平台 API | Android 行为零变化（自检 30 PASS / 2 SKIP、检索数字不变） |
+| 3 | 建 `apps/shared`（KMP），把 26 个纯逻辑文件搬进 `commonMain` | ✅ **已完成（2026-09-21）**：**207 单测全绿**（app 模块单测直接测共享层代码）+ 模拟器自检 **30 PASS / 0 FAIL / 2 SKIP**；平台实现仍留在 app 模块，shared 零平台依赖。实测坑：AGP 9 禁止 `com.android.library`+KMP（须用 `com.android.kotlin.multiplatform.library`）；该插件无 `compileSdkMinor`（本机只有 android-36.1 → 仓库内 `.tooling/android-sdk` 自造 `platforms/android-36`）；native target 做成 `-PsekbNativeTargets=true` 开关 |
 | 4 | 加 `iosArm64`/`iosSimulatorArm64`/`macosArm64`；iOS 侧端口实现（NSURLSession/Keychain/ONNX/PDFKit）属 M5 | ✅ **编译已通过（2026-09-21）**：`:shared:compileKotlinIosSimulatorArm64` 与 `:shared:compileKotlinMacosArm64` **BUILD SUCCESSFUL**（iOS 编译器查出并修掉 13 处平台泄漏）；⏳ framework 链接 / P1 微基准 / P3 体积待 M5 |
-| 5 | Kotlin 升到 ≥2.2.21（owner 已同意）+ AGP 9 对齐；**单独提交 + 回滚 tag** | Android 全量验证复跑：**207 测试** + 自检 28 PASS / 2 SKIP + 检索评测 |
+| 5 | Kotlin 升到 ≥2.2.21（owner 已同意）+ AGP 9 对齐；**单独提交 + 回滚 tag** | Android 全量验证复跑：**207 测试** + 自检 30 PASS / 2 SKIP + 检索评测 |
 | 6 | iOS SwiftUI 端成形（原生 UI） | 自检项与 Android 等价；P2/P4 出数 |
 | 7 | 鸿蒙 spike（3 天，四条验收见 RFC §4 D2） | 通过 → 走 ArkUI 原生 UI；不通过 → ArkTS 重写逻辑 + 契约夹具 |
 | 8 | 桌面（headless 宿主优先，GUI 见桌面审计文档） | 手机端能连上桌面宿主并跑通端侧推理，路由日志出现 `edge` 记录 |

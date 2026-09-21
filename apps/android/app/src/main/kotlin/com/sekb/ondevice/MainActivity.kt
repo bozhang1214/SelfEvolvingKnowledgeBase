@@ -54,7 +54,8 @@ class MainActivity : ComponentActivity() {
         }
         Thread {
             try {
-                val items = SelfTest.run(container, { line -> log(line) }, cloud)
+                val policy = intent?.getStringExtra("policy")
+                val items = SelfTest.run(container, { line -> log(line) }, cloud, policy)
                 log(SelfTest.summary(items))
             } catch (e: Throwable) {
                 // 必须是 Throwable：类初始化失败（ExceptionInInitializerError）与 OOM 都是 Error

@@ -38,6 +38,8 @@ import com.sekb.shared.tools.ToolRegistry
  */
 class AppContainer(context: Context) {
 
+    private val applicationContext: Context = context.applicationContext
+
     init {
         // PdfBox-Android 必须初始化一次资源加载器：它的字形表（glyphlist）等资源打包在
         // aar 的 assets 里，不 init 就找不到，抽取时抛 `ExceptionInInitializerError`
@@ -130,15 +132,38 @@ class AppContainer(context: Context) {
     /** 检索阈值：优先用已落盘策略里的值（`retrievalMinScore`），否则用 Retriever 的默认 0.5。 */
     private fun policyMinScore(): Double = policyFetcher.activeRetrievalMinScore() ?: 0.5
 
-    val retriever = Retriever(embeddingProvider, vectorStore, minScore = policyMinScore())
+    /** 检索器。**策略变更后要重建**（`minScore` 是构造参数，见 [applyPolicyToRuntime]）。 */
+    var retriever: Retriever = Retriever(embeddingProvider, vectorStore, minScore = policyMinScore())
+        private set
 
     /** 端侧工具（含权限闸门所需的真实权限检查）。 */
-    val tools = ToolRegistry(
+    /**
+     * 工具注册表。与 [retriever] **一同重建**：`KbSearchTool` 在创建时就抓住了检索器实例，
+     * 只换 retriever 不换 tools，工具里仍是旧阈值（这种「半生效」最难查）。
+     */
+    var tools: ToolRegistry = buildTools(applicationContext)
+        private set
+
+    private fun buildTools(ctx: Context) = ToolRegistry(
         // kb_search：本机知识检索（deviceOnly=true —— 本机索引里的内容按设备专属处理）
-        tools = AndroidDeviceTools.all(context) + KbSearchTool.create(retriever, deviceOnly = true),
-        checker = AndroidPermissionChecker(context),
+        tools = AndroidDeviceTools.all(ctx) + KbSearchTool.create(retriever, deviceOnly = true),
+        checker = AndroidPermissionChecker(ctx),
         audit = audit,
     )
+
+    /**
+     * 策略应用后重建「吃阈值的那两个对象」（retriever + tools）。
+     *
+     * 为什么必须重建而不是加个 setter：`minScore` 是构造参数、`KbSearchTool` 又抓住检索器实例——
+     * 留 setter 会把「改阈值不发版即生效」变成「看起来改了、实际还是老的」。
+     * 重建的只是两个轻对象：向量库与嵌入器都复用，不重新开库。
+     */
+    private fun applyPolicyToRuntime() {
+        val score = policyMinScore()
+        if (retriever.minScore == score) return          // 阈值没变就不折腾
+        retriever = Retriever(embeddingProvider, vectorStore, minScore = score)
+        tools = buildTools(applicationContext)
+    }
 
     val toolEval = ToolCallEval()
 
@@ -162,30 +187,69 @@ class AppContainer(context: Context) {
             current = config,
             deviceId = creds.deviceId,
         )
-        if (result is PolicyRefreshResult.Applied) {
-            config = config.copy(
-                guardChars = result.config.guardChars,
-                escalateOn = result.config.escalateOn,
-                maxInputTokens = result.config.maxInputTokens,
-                maxOutputTokens = result.config.maxOutputTokens,
-                maxTtftMs = result.config.maxTtftMs,
-                preferEdge = result.config.preferEdge,
-                models = result.config.models,
-                availableTools = result.config.availableTools,
-            )
-        }
+        if (result is PolicyRefreshResult.Applied) applyAppliedConfig(result.config)
         lastPolicyResult = result
         return result
+    }
+
+    /** 把「已校验通过」的策略配置写回运行时（配置 + 需要重建的对象）。 */
+    private fun applyAppliedConfig(applied: EdgeRuntimeConfig) {
+        config = config.copy(
+            guardChars = applied.guardChars,
+            escalateOn = applied.escalateOn,
+            maxInputTokens = applied.maxInputTokens,
+            maxOutputTokens = applied.maxOutputTokens,
+            maxTtftMs = applied.maxTtftMs,
+            preferEdge = applied.preferEdge,
+            models = applied.models,
+            availableTools = applied.availableTools,
+        )
+        applyPolicyToRuntime()
+    }
+
+    /**
+     * **仅供自检**：把一份策略包按正常路径离线应用（不联网），用于验证
+     * 「验签 → 应用 → 重建 retriever/tools → 阈值真的变了」这条链路。
+     *
+     * 为什么需要它：真实路径要求设备 token（自检里通常没有），而这条链路恰恰是
+     * 最容易"看起来改了、实际没生效"的地方，必须有运行时证据。
+     */
+    fun debugApplyPolicy(payloadJson: String): PolicyRefreshResult {
+        val outcome = com.sekb.shared.policy.EdgePolicy.apply(
+            payloadJson = payloadJson,
+            key = BuildConfig.DEFAULT_EDGE_POLICY_KEY,
+            current = config,
+            deviceId = "",
+            nowMillis = System.currentTimeMillis(),
+        )
+        return when (outcome) {
+            is com.sekb.shared.policy.EdgePolicy.Outcome.Rejected ->
+                PolicyRefreshResult.Skipped(outcome.reason)
+            is com.sekb.shared.policy.EdgePolicy.Outcome.Applied -> {
+                policyStore.save(payloadJson)
+                applyAppliedConfig(outcome.config)
+                PolicyRefreshResult.Applied(
+                    config = outcome.config, version = outcome.version,
+                    appliedKeys = outcome.appliedKeys, ignoredKeys = outcome.ignoredKeys,
+                )
+            }
+        }
     }
 
     /** 回滚到上一份策略（新策略把行为改坏时的止损口）。 */
     fun rollbackPolicy(): PolicyRefreshResult {
         val result = policyFetcher.rollback(config)
-        if (result is PolicyRefreshResult.Applied) {
-            config = result.config
-        }
+        if (result is PolicyRefreshResult.Applied) applyAppliedConfig(result.config)
         lastPolicyResult = result
         return result
+    }
+
+    /** **仅供自检**：清掉注入的策略并重建检索器/工具，让运行时回到本地默认（0.5）。 */
+    fun debugResetPolicy() {
+        policyStore.clear()
+        retriever = Retriever(embeddingProvider, vectorStore, minScore = 0.5)
+        tools = buildTools(applicationContext)
+        lastPolicyResult = null
     }
 
     /** 当前生效策略的版本号（0 = 还没拉到过）。 */

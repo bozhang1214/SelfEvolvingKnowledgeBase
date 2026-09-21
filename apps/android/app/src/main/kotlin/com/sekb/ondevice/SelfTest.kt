@@ -42,7 +42,27 @@ object SelfTest {
      */
     data class CloudParams(val email: String, val password: String, val sekbBaseUrl: String)
 
-    fun run(container: AppContainer, log: (String) -> Unit, cloud: CloudParams? = null): List<Item> {
+    /** 与容器使用同一个验签密钥（自检里重签第二份策略，验证回滚机制用）。 */
+    private val POLICY_KEY: String = BuildConfig.DEFAULT_EDGE_POLICY_KEY
+
+    fun run(
+        container: AppContainer,
+        log: (String) -> Unit,
+        cloud: CloudParams? = null,
+        /** 自检注入的**已签名**策略包（离线验证「应用 → 重建 → 阈值生效」；不影响产品路径）。 */
+        policyPayload: String? = null,
+    ): List<Item> {
+        // 自检用的策略包也可以**从文件读**（`files/sekb-e2e-policy.json`）：
+        // 用 intent extra 传 JSON 不可靠（am 会把 `{...:"..."}` 重新解析成 URI，实测踩过），
+        // 文件注入与 push-sample 同一套路，稳且可复现。
+        val policyFromFile = runCatching {
+            val f = java.io.File(
+                com.sekb.ondevice.SelfTestContextHolder.appContext?.filesDir,
+                "sekb-e2e-policy.json",
+            )
+            if (f.isFile) f.readText(Charsets.UTF_8) else null
+        }.getOrNull()
+        val payload = policyPayload?.takeIf { it.isNotBlank() } ?: policyFromFile
         val items = mutableListOf<Item>()
         fun record(name: String, ok: Boolean?, detail: String) {
             val status = when (ok) { true -> "PASS"; false -> "FAIL"; null -> "SKIP" }
@@ -56,7 +76,11 @@ object SelfTest {
         // 1. 端侧端点是否可达（模拟器里 10.0.2.2 = 宿主机）
         val reachable = runCatching { edge.isReachable() }.getOrDefault(false)
         record("edge_reachable", reachable, "${cfg.edgeBaseUrl} → $reachable")
-        if (!reachable) return items
+        // **不因为端侧端点不可达就中断整个自检**（2026-09-21 改）：
+        // 本地项（RAG / 策略 / 权限闸门）与网络无关，把它们一起判 FAIL 会掩盖真正的本地问题；
+        // 而依赖端侧的项本来就会各自失败（例如 edge_stream）——那才是准确的信息。
+        // 早期版本在这里 `return items`，结果"宿主 Ollama 没起"会让自检只剩一条，
+        // 连"RAG 还好不好"都答不了。
 
         // 2. 列出端侧可用模型（确认 qwen3.5 三档已 pull/导入）
         val models = runCatching {
@@ -97,32 +121,10 @@ object SelfTest {
                     "text=${out.text.take(40)}")
         }
 
-        // 3.4 L1 策略（M4.5）：拉取 + 验签 + 应用。没有设备凭证时如实 SKIP
-        // （策略端点按设备鉴权；本地联调需要先登录换设备 token）。
-        run {
-            val creds = container.credentialStore.load()
-            if (creds == null) {
-                record("policy_refresh", null, "无设备凭证（先登录换设备 token）→ 跳过")
-            } else {
-                val result = runCatching { container.refreshPolicy() }.getOrNull()
-                val detail = when (result) {
-                    is com.sekb.shared.policy.PolicyRefreshResult.Applied ->
-                        "version=${result.version} 已应用=${result.appliedKeys} 仅识别=${result.ignoredKeys}"
-                    is com.sekb.shared.policy.PolicyRefreshResult.Skipped -> "未应用：${result.reason}"
-                    null -> "刷新抛异常"
-                }
-                // 通过标准：**要么成功应用，要么给出明确原因**（网络/签名/灰度都不算失败——
-                // 策略是锦上添花，端侧必须能在拿不到它的情况下照常工作）
-                record("policy_refresh", result != null, detail)
-            }
-            // 回滚守卫与"有没有凭证"无关：无上一份时必须干净跳过（不抛、不改状态）
-            record(
-                "policy_rollback_guard",
-                container.policyFetcher.rollback(container.config)
-                    is com.sekb.shared.policy.PolicyRefreshResult.Skipped,
-                "无上一份时回滚必须干净跳过（不抛、不改状态）",
-            )
-        }
+        // 3.4 L1 策略（M4.5）：**放到自检最后做**（见文件末尾的 runPolicyChecks）。
+        // 为什么挪到后面：注入的策略会把检索阈值改掉（这正是要验证的），
+        // 而 RAG 那几项就在后面——先注入会让它们"因为阈值被抬高"而失败，
+        // 掩盖了 RAG 本身的真实状态。测量工具不能在测量前改变被测对象。
 
         // 3.5 R10（M4）：DEVICE_ONLY + 非本机端点 → 一个请求都不许发。
         // 模拟器里 edgeBaseUrl=10.0.2.2（开发机）正是"非本机"，所以这条自检应当看到**拒绝**；
@@ -374,6 +376,12 @@ object SelfTest {
         // ---------- 云端四项（协议 E2E：登录 → 接入 → 聊天 → 上报） ----------
         if (cloud == null) {
             record("cloud_login", null, "未提供账号（--es email/--es password）")
+
+        // ── L1 策略检查（放最后：它会临时改阈值，之后必须清理）─────────────────
+        // 通过标准：**要么成功应用，要么给出明确原因**（网络/签名/灰度都不算失败——
+        // 策略是锦上添花，端侧必须能在拿不到它的情况下照常工作）。
+        runPolicyChecks(container, ::record, payload)
+
             return items
         }
         container.updateConfig(sekbBaseUrl = cloud.sekbBaseUrl)
@@ -434,6 +442,85 @@ object SelfTest {
             cloudStats?.entries?.take(4)?.joinToString(" ") { "${it.key}=${it.value}" } ?: "无")
 
         return items
+    }
+
+    /**
+     * L1 策略的运行时检查（自检专用）。
+     *
+     * 三件事，顺序不能乱：
+     * 1. 网络路径：有设备凭证才试 `refreshPolicy()`（无凭证则 SKIP，与 cloud_login 同理）；
+     * 2. **应用 → 重建 → 阈值生效**：用注入的签名策略验证 `retriever.minScore` 真的变了
+     *    （这是"策略只写进配置、没进构造参数"最容易出错的点）；
+     * 3. **回滚真的能回去**：再应用一份不同的策略（同一密钥重签），回滚后阈值必须回到上一份；
+     *    最后**清理注入的策略**，让后续自检与产品路径回到本地默认。
+     */
+    private fun runPolicyChecks(
+        container: AppContainer,
+        record: (String, Boolean?, String) -> Unit,
+        payload: String?,
+    ) {
+        // 1) 网络路径
+        val creds = container.credentialStore.load()
+        if (creds == null) {
+            record("policy_refresh", null, "无设备凭证（先登录换设备 token）→ 跳过")
+        } else {
+            val result = runCatching { container.refreshPolicy() }.getOrNull()
+            val detail = when (result) {
+                is com.sekb.shared.policy.PolicyRefreshResult.Applied ->
+                    "version=${result.version} 已应用=${result.appliedKeys} 仅识别=${result.ignoredKeys}"
+                is com.sekb.shared.policy.PolicyRefreshResult.Skipped -> "未应用：${result.reason}"
+                null -> "刷新抛异常"
+            }
+            record("policy_refresh", result != null, detail)
+        }
+
+        if (payload.isNullOrBlank()) {
+            record("policy_apply_rebuild", null, "未注入策略包（files/sekb-e2e-policy.json）→ 跳过")
+            record("policy_rollback_restores_threshold", null, "同上")
+            record("policy_threshold_wired", null, "同上")
+            return
+        }
+
+        // 2) 应用 → 重建 → 阈值生效
+        val before = container.retriever
+        val applied = runCatching { container.debugApplyPolicy(payload) }.getOrNull()
+        val after = container.retriever
+        val scoreInPayload = com.sekb.shared.policy.EdgePolicy.retrievalMinScore(payload) ?: 0.5
+        // 通过标准是「阈值正确」；`重建`只在阈值确实变化时才是必要条件——
+        // 若上一轮已把同一份策略落盘（before 已经是 0.7），不重建才是对的（幂等）。
+        val changed = kotlin.math.abs(before.minScore - scoreInPayload) > 1e-9
+        record(
+            "policy_apply_rebuild",
+            applied is com.sekb.shared.policy.PolicyRefreshResult.Applied &&
+                kotlin.math.abs(after.minScore - scoreInPayload) < 1e-9 &&
+                (!changed || before !== after),
+            "应用=${(applied as? com.sekb.shared.policy.PolicyRefreshResult.Applied)?.version} " +
+                "阈值 ${before.minScore} → ${after.minScore}（期望 $scoreInPayload）" +
+                "重建=${before !== after}（阈值有变化=$changed）",
+        )
+        record(
+            "policy_threshold_wired",
+            kotlin.math.abs(container.retriever.minScore - scoreInPayload) < 1e-9,
+            "检索器阈值=${container.retriever.minScore}（策略=$scoreInPayload）",
+        )
+
+        // 3) 回滚：应用第二份（把阈值再抬高一点，同一密钥重签）→ 回滚必须回到上一份
+        val secondScore = if (scoreInPayload >= 0.9) 0.6 else 0.9
+        val second = com.sekb.shared.core.JsonObject.parse(payload)!!
+            .put("policy", com.sekb.shared.core.JsonObject().put("retrievalMinScore", secondScore))
+        second.put("signature", com.sekb.shared.policy.EdgePolicy.signatureOf(second, POLICY_KEY))
+        val appliedSecond = runCatching { container.debugApplyPolicy(second.toString()) }.getOrNull()
+        val rolled = container.rollbackPolicy()
+        record(
+            "policy_rollback_restores_threshold",
+            appliedSecond is com.sekb.shared.policy.PolicyRefreshResult.Applied &&
+                rolled is com.sekb.shared.policy.PolicyRefreshResult.Applied &&
+                kotlin.math.abs(container.retriever.minScore - scoreInPayload) < 1e-9,
+            "先应用到 $secondScore，回滚后阈值=${container.retriever.minScore}（期望 $scoreInPayload）",
+        )
+
+        // 4) 清理：清掉注入的策略并重建，别让自检影响产品路径
+        container.debugResetPolicy()
     }
 
     fun summary(items: List<Item>): String {

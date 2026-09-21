@@ -61,7 +61,11 @@ class Retriever(
      * 换嵌入模型/换语料都必须**重新标定**：不同模型的余弦可比区间完全不同
      * （确定性桩在 0.2–0.6 量级）。
      */
-    private val minScore: Double = 0.5,
+    /**
+     * 召回阈值。**公开只读**：自检要能断言「策略下发的阈值确实生效了」
+     * （而不是只写进配置、没进构造参数）。
+     */
+    val minScore: Double = 0.5,
     /** 云端向量空间（用于判断能否跨端融合；默认取服务端口径） */
     private val cloudSpace: EmbeddingSpace = EmbeddingSpace.SERVER,
     private val nowMillis: () -> Long = { com.sekb.shared.core.nowMillis() },

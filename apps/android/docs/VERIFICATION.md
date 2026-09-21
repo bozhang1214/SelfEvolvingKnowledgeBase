@@ -3,6 +3,8 @@
 > 规则：**只写跑过的命令与真实输出**。"应该能跑"不算验证；没能验的写在最后一节。
 
 > 端侧单测总量：**231**（功能 187 + 契约夹具 4 + JSON 门面 11 + 格式化 5 + 端侧策略 24）<!-- fact:android_unit_cases=231 -->
+>
+> 模拟器自检：**PASS=30 FAIL=0 SKIP=2**（两个 SKIP = `cloud_login` 与 `policy_refresh`，都缺前置条件）
 
 环境：macOS（Apple Silicon）+ Android Studio JBR 21 + Android SDK platform 36.1 +
 AVD `Medium_Phone_API_36.1`（arm64-v8a，google_apis_playstore）。
@@ -24,6 +26,40 @@ bash scripts/android.sh test        # 191 tests, 0 failed（功能 187 + 契约 
 | **R10：DEVICE_ONLY + 非本机端点 = 一个请求都不发** | `PlaneRouterTest`：`10.0.2.2` / `192.168.1.20` / `100.71.24.105` / `edge-host.local` / `0.0.0.0` 全部判为**非本机** → `blockedReason=device_only_requires_local_runtime`；`127.0.0.1` / `localhost` / `[::1]` 判为本机 → 可执行（`device_only_data`） |
 | **编排器层面真的不发** | `ChatOrchestratorTest.device only data is not sent at all when edge endpoint is remote`：端侧 0 次调用、云端 0 次调用、`text=""`、`error` 里有可读原因 |
 | **普通数据不受影响** | 同一批测试里 `non device-only traffic is unaffected by endpoint locality`：普通数据打远端端点仍是 `edge_preferred`（R10 不误伤端云协同） |
+
+### 1.0.6 L1 阈值生效与回滚（运行时证据，2026-09-21）
+
+```bash
+# 1) 生成一份**已签名**策略（空间戳要与端侧 config 一致）
+python3 - <<'PY' > /tmp/policy.json   # 内容见下方"实测输出"
+# 2) 推进 app 私有目录（与 push-sample 同一套路；intent 传 JSON 不可靠，实测被 am 重新解析成 URI）
+bash scripts/android.sh push-policy /tmp/policy.json
+# 3) 跑自检
+adb shell am force-stop com.sekb.ondevice
+adb shell am start -n com.sekb.ondevice/.MainActivity --ez selftest true
+```
+
+实测输出（模拟器）：
+
+```
+[PASS] policy_apply_rebuild — 应用=777 阈值 0.5 → 0.7（期望 0.7）重建=true（阈值有变化=true）
+[PASS] policy_threshold_wired — 检索器阈值=0.7（策略=0.7）
+[PASS] policy_rollback_restores_threshold — 先应用到 0.9，回滚后阈值=0.7（期望 0.7）
+[PASS] rag_retrieve — 命中=doc-rag 分=0.690 嵌入=14ms 检索=3ms
+自检汇总：PASS=30 FAIL=0 SKIP=2
+```
+
+这条证据回答的是"**改阈值不发版即生效**"：策略里的 `retrievalMinScore=0.7` 应用后，
+`container.retriever.minScore` 真的从 0.5 变成 0.7（**并且是新实例**——`KbSearchTool` 抓住旧实例，
+所以 retriever 与 tools 必须一起重建）。
+
+**过程中暴露并修掉的两个真问题**：
+1. **自检里的注入策略污染了后续检查**：策略块原本在 RAG 项之前，阈值被抬到 0.7 后
+   `rag_retrieve`/`rag_tool_search`（分数 0.645/0.690）全部失败——**测量工具不能在测量前改变被测对象**。
+   修法：策略检查挪到自检**最后**，且结束后 `debugResetPolicy()` 清理（清存储 + 按默认 0.5 重建）。
+2. **`edge_reachable=false` 会中断整个自检**（早期 `return items`）：宿主 Ollama 没起时只剩一条结果，
+   连"本地 RAG 还好不好"都答不了。改为**非致命**：记录 FAIL 但继续跑本地项。
+3. 顺带：intent 传 JSON 被 `am` 重新解析（`dat=issuedAt:`）→ 改为**文件注入**（`push-policy`）。
 
 ### 1.0.5 端侧策略接线（M4.5 收尾，2026-09-21）
 

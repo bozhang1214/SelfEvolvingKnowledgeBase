@@ -82,6 +82,20 @@ for task in "$@"; do
                        ${SEKB_SEKB_URL:+-PsekbBaseUrl="$SEKB_SEKB_URL"} \
                        ${SEKB_EDGE_URL:+-PsekbEdgeUrl="$SEKB_EDGE_URL"} ;;
         install)   ./gradlew :app:installDebug --console=plain $MINOR_FLAG ;;
+        push-policy)
+            # 自检用的**已签名**策略包（离线验证「应用→重建→阈值生效→回滚」）。
+            # 生成方式见 README/VERIFICATION：用服务端 edge_policy 的 canonical+HMAC 签一份，
+            # 空间戳必须与端侧 config 一致（否则会（正确地）被 policy_space_mismatch 拒掉）。
+            PKG="com.sekb.ondevice"
+            DEST="/data/data/${PKG}/files/sekb-e2e-policy.json"
+            ADB="${ANDROID_SDK_ROOT}/platform-tools/adb"
+            require_device "$ADB"
+            POLICY_FILE="${1:-}"
+            [ -n "$POLICY_FILE" ] || { echo "用法：bash scripts/android.sh push-policy <policy.json>" >&2; exit 2; }
+            [ -f "$POLICY_FILE" ] || { echo "找不到策略文件：$POLICY_FILE" >&2; exit 2; }
+            cat "$POLICY_FILE" | "$ADB" shell "run-as ${PKG} sh -c 'cat > ${DEST}'"
+            echo "✅ 策略已写入 $DEST"
+            "$ADB" shell "run-as ${PKG} ls -la files/sekb-e2e-policy.json" ;;
         push-sample)
             # 端侧 RAG 导入 E2E 用的样本文档：写进 App 内部 filesDir（App 自己能读，无需存储权限）
             PKG="com.sekb.ondevice"
