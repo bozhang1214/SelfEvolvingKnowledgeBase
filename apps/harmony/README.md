@@ -284,4 +284,39 @@ HarmonyOS 的 MindSpore Lite 平台绑定，它是**系统能力**（`libmindspo
    `mirrors.huaweicloud.com/mindspore/` 可达（HTTP 200），但页面是 JS 门户、没有直链目录，
    下一轮需要另外找 MindSpore Lite 工具包的分发地址。
 
+---
+
+## ⚠️ 模型转换：工具链已打通，但 `.ms` **运行时 build 失败**（2026-09-22，未解决）
+
+上一节说"找不到 converter"，本轮找到了并**全部验证过**；但接着撞到一个更深的问题。
+
+工具链（`bash scripts/model_to_ms.sh fetch|rewrite|convert|check`）：
+
+| 步骤 | 结果 |
+|---|---|
+| 下载 MindSpore Lite 2.7.0 **Linux-aarch64** 包（含 converter） | ✅ 60.8MB，**sha256 与官方公布值完全一致** |
+| 为什么不用 macOS 版 | 官方**没有 macOS 版 converter**（只有 Linux-x86_64 / aarch64 / Windows） |
+| 为什么不用 `--platform linux/amd64` | 会去拉不存在的镜像并 403；**aarch64 包与宿主同为 arm64，在本地已有容器里原生执行**（无 Rosetta） |
+| 图重写：去掉 converter 不认的 `IsNaN` | ✅ 4 处 `Where(IsNaN(softmax), 0, softmax)`（=`nan_to_num`，本模型里是死代码）被短路；**onnxruntime 证明改写前后逐位相同（最大差 0.000e+00，4 种输入形状）** |
+| `converter_lite` | ✅ `CONVERT RESULT SUCCESS:0`，产出 `.ms` 94.8MB，魔数 **`MSL2`** |
+| **`benchmark` 实际加载运行** | ❌ **失败** |
+
+**两条失败路径（都试过，失败点不同）**：
+
+| 转换方式 | 结果 |
+|---|---|
+| 动态 shape（不带 `--inputShape`） | 转换成功，但 `benchmark` 加载时 `FindBackendKernel return nullptr, name: /m/Flatten, type: Flatten` → 典型的"上游动态形状没解析出来、下游算子形状未知、拿不到 kernel" |
+| 固定 shape（`--inputShape="input_ids:1,512;..."`） | **转换阶段**就失败：`SaveGraph] Convert to meta graph failed` |
+
+**所以"鸿蒙端侧嵌入"的模型依赖目前是未打通的**，不是"差一个下载链接"。三条可选路径（按性价比）：
+
+1. 把 ONNX 里那段**动态掩码展开子图**（`Shape`/`ConstantOfShape`/`Range`/`Gather` 链）改写成静态等价形式，
+   再走固定 shape 转换——与本轮已验证的 `IsNaN` 重写是同一思路，但工作量大得多；
+2. 放弃 MindSpore Lite，回到**社区版 OHOS ONNX Runtime**（原方案，需找到预编译产物）；
+3. 按 RFC §4 D2 退**路线 B（ArkTS 重写 + 契约夹具）**。
+
+**要强调的是**：第 3 条(运行时)与第 4 条本来也要等设备/签名，所以这个模型问题**不是当前唯一的卡点**，
+但它决定了 M7 走 MindSpore Lite 还是退路线 B，需要 owner 拍板（见汇报）。
+
+
 
