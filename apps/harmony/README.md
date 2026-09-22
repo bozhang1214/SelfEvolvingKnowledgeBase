@@ -193,3 +193,55 @@ HarmonyOS 的 MindSpore Lite 平台绑定，检查 `$(KONAN_DATA_DIR)` 得到三
 > 按方案 §4 D2：**四条全通才进 M7**；任一不过就退路线 B（ArkTS 重写 + 契约夹具）。
 > 当前判断：第 2 条已过；第 1 条下一轮试（独立构建编 `libkn.so` + 一个最小 HAP 经 NAPI 调用）；
 > 第 3/4 条需要外部条件（镜像 / 华为账号）。
+
+---
+
+## ✅ spike 第 1 条（构建 + 链接层面）通过（2026-09-22）
+
+HAP 壳工程落在 `apps/harmony/spike/hapshell/`（从 DevEco 自带模板派生，不是手写 pbxproj 那类冒险做法），
+一条命令构建并自检：
+
+```bash
+bash scripts/harmony_spike.sh kn    # 编 KMP 产物 libkn.so（ohosArm64 真机 + ohosX64 模拟器）
+bash scripts/harmony_spike.sh hap   # 编 HAP + 验证 NAPI↔KMP 引用
+bash scripts/harmony_spike.sh all   # 两者
+```
+
+**产物**：`entry-default-unsigned.hap` 4.8M（未签名，符合预期）。
+
+**验证口径要说清楚**——本条只证明到"**产物齐备且 NAPI↔KMP 引用成立**"，
+"能装能起 + 真的调通"属于第 4 条。脚本对每个 ABI 做三个缺一不可的断言：
+
+| 断言 | 为什么必须 | 实测 |
+|---|---|---|
+| `libs/<abi>/libknspike.so` 存在 | NAPI 模块真的编出来了 | ✅ arm64-v8a / x86_64 都有 |
+| 同包内有 `libs/<abi>/libkn.so` | KMP 产物**真的进了 HAP**，而不是只拷到工程目录 | ✅ 两 ABI 都有 |
+| `libknspike.so` 里 `sekb_spike_ping`/`sekb_spike_echo_len` 是 **`U`（undefined）** | 说明它不自己实现，而是**加载期由 libkn.so 解析**——这才叫接上了 | ✅ 两 ABI 各 2/2 |
+
+调用链：ArkTS `import knspike from 'libknspike.so'` → NAPI 模块 `knspike`
+→ `entry/src/main/cpp/napi_init.cpp` → `libkn.so` 里的 C 符号。
+符号名由 Kotlin 侧 `@CName` 钉死（见 `knspike/.../Spike.kt`），C++ 侧只需声明一致、**不需要 Kotlin 头文件**。
+`pages/Index.ets` 把两个数字显示在屏幕上——装上去一眼能分辨"应用起没起"和"调没调到 KMP"。
+
+### 三个「不这么做就跑不起来」的坑（都在 `scripts/harmony_spike.sh` 注释里）
+
+| 坑 | 症状 | 解法 |
+|---|---|---|
+| hvigor 默认写 `~/.hvigor` | 受限沙箱里直接 `EPERM: operation not permitted, mkdir '~/.hvigor/project_caches/...'` | `HVIGOR_USER_HOME` 指到仓库内 `.tooling/`（与 `scripts/android.sh` 同一思路：**构建状态不落仓库外**） |
+| hvigor 会 `npm install -g pnpm` | `npm ERR! code EPERM ... ~/.npm/_cacache` | `HOME` + `npm_config_cache/prefix/userconfig` 一并指到仓库内。**只在脚本内覆盖 HOME**——签名那步要用真实 HOME 找 `~/.ohos` |
+| `PackageHap` 需要 JDK | `Unable to locate a Java Runtime`，而且失败发生在 native 编译**成功之后**，极易误判成编译问题 | `JAVA_HOME=$DEVECO/jbr/Contents/Home` |
+
+另外两个实测细节：`EXTERN_C_START/END` **不在** NAPI 头里（`grep` 无匹配），要自己定义；
+Kotlin `String` 参数在 C 侧就是 `const char*`（以生成的 `libkn_api.h` 为准，不需要 KString 包装）。
+
+### 第 4 条仍然卡在签名上（附已核实的账号状态）
+
+owner 的华为开发者账号**已登录且实名认证已完成**（DevEco 日志 2026-09-22 16:57:07
+`LoginSuccessListener: Whether a developer has completed real-name authentication: true`）。
+但**登录 ≠ 有签名材料**：实测本机 `~/.ohos/config/` 不存在、全盘找不到任何 `.p12/.cer/.p7b`。
+证书与 Profile 是"按工程"申请的，需要在 DevEco 里对一个工程点一次
+`Project Structure → Signing Configs → Automatically generate signature`（凭据全程留在 IDE，不经手 Agent）。
+
+安装目标也不具备：本机**没有任何鸿蒙模拟器镜像**（只有 `tools/emulator` 可执行文件）；
+真机可以走 USB + `hdc`。两条路都需要 owner 操作一次。
+

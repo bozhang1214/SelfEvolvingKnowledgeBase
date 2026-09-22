@@ -1,0 +1,12 @@
+# HAP 工程的构建产物不入库。
+# 用**嵌套 .gitignore**而不是改根 .gitignore：根 .gitignore 是多人共用的热点文件
+# （本仓库此刻就有人正在改它），嵌套文件的冲突面为零。
+/entry/build/
+# libkn.so 由 `bash scripts/harmony_spike.sh kn` 从 KMP 产物拷贝而来，
+# 属于可再生的构建产物 → 不入库（fresh clone 先跑一次 kn 即可）。
+/entry/libs/
+/.hvigor/
+/.idea/
+/oh_modules/
+/build/
+/entry/.cxx/

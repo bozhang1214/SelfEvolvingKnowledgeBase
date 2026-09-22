@@ -1,0 +1,29 @@
+{
+  "apiType": "stageMode",
+  "buildOption": {
+    // 编 NAPI 模块（libknspike.so），它在 CMake 里链上 KMP 产物 libkn.so
+    "externalNativeOptions": {
+      "path": "./src/main/cpp/CMakeLists.txt",
+      "arguments": "",
+      "cppFlags": "",
+      // 两个 ABI 都编：arm64-v8a = 真机，x86_64 = 模拟器
+      "abiFilters": ["arm64-v8a", "x86_64"]
+    }
+  },
+  "buildOptionSet": [
+    {
+      "name": "release",
+      "arkOptions": {
+        "obfuscation": {
+          "ruleOptions": {
+            "enable": false,
+            "files": ["./obfuscation-rules.txt"]
+          }
+        }
+      }
+    }
+  ],
+  "targets": [
+    { "name": "default" }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "app": {
+    // ⚠️ 故意留空：spike 阶段只要求**能构建出 HAP**，不要求签名安装
+    // （安装需要 owner 华为开发者账号在 DevEco 里点一次"自动签名"，材料才会落到本机）。
+    // 本轮验证的是"KMP 产物被 HAP 通过 NAPI 调用"这一条，它不需要签名。
+    "signingConfigs": [],
+    "products": [
+      {
+        "name": "default",
+        // 本机 SDK：API 22 / 6.0.2.130（见 sdk/default/openharmony/native/oh-uni-package.json）
+        "compatibleSdkVersion": "6.0.2(22)",
+        "targetSdkVersion": "6.0.2(22)",
+        "runtimeOS": "HarmonyOS"
+      }
+    ],
+    "buildModeSet": [
+      { "name": "debug" },
+      { "name": "release" }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        { "name": "default", "applyToProducts": ["default"] }
+      ]
+    }
+  ]
+}
