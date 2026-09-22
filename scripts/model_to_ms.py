@@ -179,6 +179,54 @@ def remove_noop_flatten(model: onnx.ModelProto) -> tuple[onnx.ModelProto, int]:
     return model, len(bypass) + len(additions)
 
 
+def inline_constants(model: onnx.ModelProto) -> tuple[onnx.ModelProto, int]:
+    """把 `Constant` **节点**内联成 `initializer`（标准图规范化）。
+
+    ## 为什么这一步能解 `/m/ConstantOfShape`
+
+    路线①第 2 轮的目标就是它。`/m/ConstantOfShape` 的形状推导失败
+    （`GetKernelExec] /m/ConstantOfShape infershape failed`），而它吃的是一个
+    `Constant` **节点**的输出。`Constant` 属于"节点"，要等常量折叠那一趟才变成可用的常量；
+    而 `ConstantOfShape` 的 infershape 发生在那之前 → 顺序不保证就推不出来。
+    直接把它变成 `initializer`（图中一等的常量）就没有这个先后依赖了。
+
+    这是 ONNX 生态里公认的规范化（ORT/TVM/MNN 转换前都会做），不是为本模型特判。
+    """
+    g = model.graph
+    existing = {x.name for x in g.initializer}
+    graph_outputs = {o.name for o in g.output}
+    additions, drop = [], set()
+    for n in g.node:
+        if n.op_type != "Constant" or len(n.output) != 1:
+            continue
+        out = n.output[0]
+        if out in existing or out in graph_outputs:
+            continue
+        val = None
+        for a in n.attribute:
+            if a.name == "value":
+                val = numpy_helper.to_array(a.t)
+            elif a.name == "value_float":
+                val = np.array(a.f, dtype=np.float32)
+            elif a.name == "value_int":
+                val = np.array(a.i, dtype=np.int64)
+            elif a.name == "value_floats":
+                val = np.array(list(a.floats), dtype=np.float32)
+            elif a.name == "value_ints":
+                val = np.array(list(a.ints), dtype=np.int64)
+        if val is None:
+            continue
+        additions.append(numpy_helper.from_array(val, out))
+        drop.add(n.name)
+    if not drop:
+        return model, 0
+    kept = [n for n in g.node if n.name not in drop]
+    del g.node[:]
+    g.node.extend(kept)
+    g.initializer.extend(additions)
+    return model, len(drop)
+
+
 def known_shape(model: onnx.ModelProto, name: str) -> list | None:
     """尽量拿到某个张量的形状：图输入 / 初始化器，或沿 `Cast`/`Identity` 回溯。
 
@@ -430,6 +478,9 @@ def main() -> int:
         print("   （静态化模式：容差自动放宽到 1e-5，主判据改为 CLS 余弦）")
     if args.static:
         b, s = (int(x) for x in args.static.lower().split("x"))
+        print("③.45 内联 Constant → initializer（解 /m/ConstantOfShape 的形状推导）")
+        new_model, n_const = inline_constants(new_model)
+        print(f"   内联 {n_const} 个 Constant 节点")
         print(f"③.5 静态化：固定为 batch={b} seq={s}，并把 Shape(x) 替换成常量")
         new_model, n_shape = make_static(new_model, batch=b, seq=s)
         print(f"   替换掉 {n_shape} 个 Shape 节点")
