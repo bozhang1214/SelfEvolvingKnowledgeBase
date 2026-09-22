@@ -15,6 +15,10 @@ import SharedCore
 /// 跑一遍自检并把结果打出来（供启动时与按钮共用）。
 @discardableResult
 func runAndReportSelfTest() -> [CheckResult] {
+    // 起始标记：抓日志时以**最后一个标记**为界，避免把上一次运行的条目混进来
+    // （实测踩到过：同一窗口里两次运行，日志里同时有上一次的 FAIL 和这一次的 PASS，
+    //  看上去像"同一轮自相矛盾"）。`scripts/ios_app.sh` 会按这个标记裁剪。
+    report("SEKB_IOS_SELFTEST === RUN START ===")
     let results = runSharedSelfTest()
     let pass = results.filter { $0.ok == true }.count
     let fail = results.filter { $0.ok == false }.count
@@ -232,15 +236,71 @@ func runSharedSelfTest() -> [CheckResult] {
     }
 
     // 7.8) **检索链路（RAG）**：chunking → 嵌入 → 向量库 → 检索 → 阈值。
-    //      嵌入**用共享层的确定性桩**（与 Android 在"ONNX 模型缺失"时的回退同一条路）：
-    //      它证明的是"iOS 上整条检索链路能跑"，而**不是**"端侧真模型可用"——
-    //      真模型需要 ONNX Runtime iOS / CoreML（端口③，见 apps/ios/README.md 的缺口记录）。
+    //
+    //      嵌入**优先用端侧真模型（ONNX Runtime + bge-small-zh）**，找不到模型才退回
+    //      共享层的确定性桩——与 Android 的 `SekbApp` 完全同一套优先级，这样
+    //      「自检项与 Android 等价」才是真的等价，而不是"两端各自跑各的"。
     // Kotlin 的默认参数不导出 → 桩嵌入的两个参数也要显式给（否则 init() 被标记 unavailable）
     let stubSpace = EmbeddingSpace(id: "stub-hash@256", dim: 256)
-    let provider = DeterministicEmbedding(space: stubSpace, isOnDevice: true)
+    var provider: EmbeddingProvider = DeterministicEmbedding(space: stubSpace, isOnDevice: true)
+    var providerLabel = "确定性桩（未找到 ONNX 模型）"
+
+    // 7.9) **M5 端口③：端侧真嵌入（ONNX Runtime C API）**
+    out.append(.init(name: "embed_model_dirs", ok: true,
+                     detail: OrtBgeEmbedding.diagnostics().prefix(150).description))
+    if let modelDir = OrtBgeEmbedding.resolveDir() {
+        do {
+            // 空间戳随实际加载的模型变：fp32 与云端同空间；**int8 必须换成量化戳**
+            // （量化向量余弦只有 ~0.96–0.97，用同一个戳就是两套向量混算，RFC §18.1）
+            let isInt8 = modelDir.path.contains("-int8")
+            let spaceId = isInt8 ? OrtBgeEmbedding.INT8_SPACE_ID : EmbeddingSpace.companion.SERVER_SPACE_ID
+            let onnx = try OrtBgeEmbedding(modelDir: modelDir, spaceId: spaceId)
+            provider = onnx
+            providerLabel = "ONNX \(spaceId)"
+
+            // 加载成功 + 空间戳正确（这一条同时证明 ORT 静态库真的链进来并能建会话）
+            out.append(.init(name: "embed_onnx_session",
+                             ok: onnx.lastError == nil && onnx.space.dim == 512,
+                             detail: "模型=\(isInt8 ? "int8" : "fp32") 空间=\(spaceId) 维度=\(onnx.space.dim)"))
+
+            // 语义合理性：两段**无关**文本的余弦必须明显小于 1。
+            // 若所有向量都一样，检索会"任何问题都命中同一篇且余弦=1.000"——表象像检索 bug，
+            // 根因在嵌入层（Android 侧实测踩到过：输入张量/掩码构造错）。
+            let vA = onnx.embedOne(text: "端侧推理为什么省电")
+            let vB = onnx.embedOne(text: "北京今天多云转晴，适合骑行")
+            // Kotlin `object` 在 Swift 里是 `X.shared`（不是 companion）
+            let cosAB = VectorMath.shared.cosine(a: vA, b: vB)
+            let norms = [vA, vB].map { v -> Double in
+                var s = 0.0
+                for i in 0..<v.size { s += Double(v.get(index: i)) * Double(v.get(index: i)) }
+                return s.squareRoot()
+            }
+            out.append(.init(name: "embed_onnx_sanity",
+                             ok: onnx.lastError == nil && cosAB < 0.95 && norms.allSatisfy { abs($0 - 1.0) < 0.01 },
+                             detail: "无关文本余弦=\(String(format: "%.3f", cosAB))（应明显 <1）" +
+                                 " L2范数=\(norms.map { String(format: "%.4f", $0) }.joined(separator: "/"))（应为 1）"))
+
+            // 同一文本两次嵌入必须**逐位相同**（确定性）：批处理路径与单条路径不能分叉
+            let again = onnx.embedOne(text: "端侧推理为什么省电")
+            var maxDiff = 0.0
+            for i in 0..<min(vA.size, again.size) {
+                maxDiff = max(maxDiff, abs(Double(vA.get(index: i) - again.get(index: i))))
+            }
+            out.append(.init(name: "embed_onnx_deterministic", ok: maxDiff < 1e-6,
+                             detail: "两次嵌入最大逐位差=\(String(format: "%.2e", maxDiff))"))
+        } catch {
+            out.append(.init(name: "embed_onnx_session", ok: false, detail: "\(error)".prefix(180).description))
+        }
+    } else {
+        out.append(.init(name: "embed_onnx_session", ok: false,
+                         detail: "未找到模型目录（把 model.onnx + vocab.txt 放进 bundle 或 Documents/models/）"))
+    }
+
     let vecStore = InMemoryVectorStore(space: provider.space)   // 注意别与上面的 Keychain store 重名
     let index = KnowledgeIndex(provider: provider, store: vecStore, maxChars: 512,
                                overlapChars: 64, registry: nil, nowMillis: { 0 })
+    out.append(.init(name: "rag_provider", ok: true,
+                     detail: "嵌入=\(providerLabel) 本机计算=\(provider.isOnDevice)"))
 
     let ingest = index.ingest(
         sourceId: "doc-rag",
@@ -282,6 +342,28 @@ func runSharedSelfTest() -> [CheckResult] {
     out.append(.init(name: "rag_device_only_gate",
                      ok: denied.hits.isEmpty && denied.reason.contains("device_only"),
                      detail: denied.reason.isEmpty ? "闸门没拦" : denied.reason))
+
+    // 7.10) **检索评测（RFC §18.4 的验收：命中率 + 延迟）**
+    //
+    //       这是"两端数字一致"的**主证据**：评测集、切分、检索、阈值全在共享层，
+    //       两端只换嵌入实现——如果嵌入真的同空间，[RetrievalEvalRunnerReport.line]
+    //       的输出就应当与 Android `--ez evalrag` 的同一阈值行一致。
+    //       `line()` 是共享层格式化的，所以两端的字符串可以直接diff。
+    let evalRunner = RetrievalEvalRunner(provider: provider,
+                                         corpus: RetrievalEvalSet.shared.corpus,
+                                         questions: RetrievalEvalSet.shared.questions)
+    let evalBuilt = evalRunner.buildIndex()
+    if let evalIndex = evalBuilt.first, let evalStore = evalBuilt.second {
+        // Kotlin 的默认参数不导出 → thresholds 必须显式传，这里就是 Android 默认的那组
+        var lines: [String] = []
+        for t in [0.2, 0.3, 0.4, 0.5, 0.6] {
+            lines.append(evalRunner.run(threshold: t, index: evalIndex, store: evalStore, topK: 3).line())
+        }
+        out.append(.init(name: "rag_eval_calibrate", ok: !lines.isEmpty,
+                         detail: "\(providerLabel) | " + lines.joined(separator: " || ")))
+    } else {
+        out.append(.init(name: "rag_eval_calibrate", ok: false, detail: "buildIndex 返回空"))
+    }
 
     // 8) **网络端口（NSURLSession）**：真的发一次请求。
     //    iOS 模拟器共享宿主机网络，所以 `127.0.0.1` 就是宿主（与 Android 的 10.0.2.2 对应）。

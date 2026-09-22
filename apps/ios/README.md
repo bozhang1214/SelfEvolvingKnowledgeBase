@@ -20,7 +20,7 @@
 | **iOS 端口①：传输（NSURLSession）** | ✅ | `apps/ios/App/UrlSessionTransport.swift`：实现共享层 `HttpTransport`（同步语义用信号量、SSE 用 `URLSessionDataDelegate` 逐行回调）。自检实测：`transport_get_host_ollama — code=200 bytes=3474`、`transport_stream_lines — code=200 行数=9`；**iOS 自检 10 PASS / 0 FAIL** |
 | **iOS 端口②：凭证（Keychain）** | ⚠️ 实现完成 / 往返未验 | `apps/ios/App/KeychainCredentialStore.swift` 实现共享层 `CredentialStore`（接口与 `CredentialCodec` 本轮**一起搬进共享层**，两端同一格式）。自检：空库→nil ✅、清理→nil ✅、轮换规则（共享层 `needsRotation`）✅；**往返 SKIP 且原因明确**：手搓未签名 `.app` 调 Keychain 返回 **-34018 errSecMissingEntitlement**，而 ad-hoc 签名（带任何 entitlements）会让模拟器 SpringBoard **拒绝启动**——两条路互斥。需真实 Xcode 工程 + 签名身份或真机时补验；entitlements 文件已备好在 `apps/ios/App/Sekb.entitlements` |
 | **检索链路（RAG）** | ✅ | 分块 → 嵌入 → 向量库 → 检索 → 阈值 → 隐私闸门，**全部走共享层代码**。自检：`rag_ingest`（1 切片，空间 `stub-hash@256`）、`rag_retrieve`（命中 0.244）、`rag_threshold_refuses`（`below_threshold:最高分=0.180<0.99`）、`rag_device_only_gate`（`device_only_requires_on_device_embedding`）；**iOS 自检 20 PASS / 0 FAIL / 1 SKIP** |
-| iOS 端口③：嵌入（ONNX） | 🟡 产物已到手，接线待做（2026-09-22） | ORT iOS xcframework **已下载成功**（来源不在 GitHub，见下方"端口③ 调研结论"）；剩余工作是链接 + 用已有 int8 ONNX 模型跑真嵌入并重标阈值 |
+| **iOS 端口③：嵌入（ONNX Runtime）** | ✅ | `apps/ios/App/OrtBgeEmbedding.swift`：ORT **C** API（Android 走 Java API，这是两端唯一的实现差异）。自检：`embed_onnx_session`（模型=fp32 空间=`BAAI/bge-small-zh-v1.5@512` 维度=512）、`embed_onnx_sanity`（无关文本余弦 **0.244**、L2 范数 **1.0000/1.0000**）、`embed_onnx_deterministic`（两次嵌入逐位差 **0.00e+00**）；`rag_retrieve` 首条分 **0.630**。**iOS 自检 26 PASS / 0 FAIL / 1 SKIP** |
 | **iOS 端口④：PDF（PDFKit）** | ✅ | `apps/ios/App/PdfExtractor.swift`：与 Android 同一套**四类结果**（有文本 / 无文本层 / 加密 / 解析失败）+ 先判 `%PDF` 魔数 + 40 万字符上限。自检实测：`pdf_extract_text_layer — 页数=1 字符=78`（**与 Android 端同一份样本的 78 字符/1 页完全一致**）、`pdf_extract_no_text_layer`、`pdf_extract_rejects_non_pdf`；**iOS 自检 13 PASS / 0 FAIL** |
 | iOS 真机性能 | ⏳ 等硬件 | 模拟器只验功能 |
 | 四个端口（NSURLSession/Keychain/ONNX/PDFKit） | ⏳ | 待 App 骨架跑通后补 |
@@ -121,11 +121,42 @@ curl -L -o ort-c-1.20.0.zip https://download.onnxruntime.ai/pod-archive-onnxrunt
 CocoaPods 系产物真实托管在 `download.onnxruntime.ai`，Maven 系在 `repo1.maven.org`/镜像，
 两者都与 GitHub 无关。另外 `curl` 查这类 CDN 必须带 `-L`。
 
-#### 仍未完成的部分
+#### 接线结果（2026-09-22，已完成）
 
-本轮之前已用共享层的**确定性桩嵌入**打通整条检索链路（与 Android 在"ONNX 模型缺失"时**同一条代码路径**），
-证明 iOS 上 RAG 的结构、阈值语义与隐私闸门都成立。**剩余**：把 xcframework 真正链进 App、
-用已有的 int8 ONNX 模型（`apps/android` 那份，23.9MB）跑真嵌入，并按新空间**重标阈值**。
+`apps/ios/App/OrtBgeEmbedding.swift` + `apps/ios/App/SekbOrtBridge.h`（桥接头只做
+`#import <onnxruntime/onnxruntime_c_api.h>`），`scripts/ios_app.sh` 负责 `-F <模拟器切片>
+-framework onnxruntime -lc++ -import-objc-header …` 并把模型拷进 bundle。
+
+踩到的三个坑（都写进了代码注释，避免重犯）：
+
+| 坑 | 症状 | 根因 |
+|---|---|---|
+| **`AllocatorFree` 顺序反了** | 报"ONNX 模型出现了未预期的输入："（名字是空的），向量全零 | 先 `AllocatorFree(cName)` 再 `String(cString: cName)` → **读已释放内存**。必须**先转字符串、后释放** |
+| **`embed` 失败返回空数组** | App **当场崩溃**：`EXC_BREAKPOINT`，栈顶 `__SwiftNativeNSArrayWithContiguousStorage._objectAt` ← `Kotlin_NSArrayAsKList_get` ← `KnowledgeIndex.ingest` | 共享层 `ingest` 会**按切片数索引**嵌入结果；Swift 返回短列表 → Kotlin 侧下标越界。且 `EmbeddingProvider.embed` 在 Kotlin 里**没有 throws**，Swift 无法抛错 → 只能返回**同数量的零向量**（余弦 0 → 必然不命中，安全失败）并置 `lastError` |
+| **`OrtStatus` 是不完整类型** | 编译报 `cannot find type 'OrtStatus' in scope` | 该头文件只用 `OrtStatus*`、从不定义结构体 → Swift 侧映射为 `OpaquePointer`；`OrtAllocator*` 反而是具体类型 |
+
+#### 验收：评测数字与 Android **逐项一致**（RFC §4.5-F 的"同一张表"）
+
+```
+Android（apps/android/docs/RETRIEVAL-EVAL.md，真机 fp32）
+阈值=0.40  Hit@1=26/30( 87%)  Hit@3=30/30  MRR=0.928  误召回=0/3(  0%)  嵌入均 38ms(p95 57ms)  检索均 0.5ms
+iOS（模拟器 fp32，on-device ONNX）
+阈值=0.40  Hit@1=26/30( 87%)  Hit@3=30/30  MRR=0.928  误召回=0/3(  0%)  嵌入均  2ms(p95  3ms)  检索均 0.1ms
+```
+
+| 阈值 | Hit@1 | Hit@3 | MRR | 误召回 | 两端一致 |
+|---|---|---|---|---|---|
+| 0.20 | 26/30 (87%) | 30/30 | 0.928 | 3/3 (100%) | ✅ |
+| 0.30 | 26/30 (87%) | 30/30 | 0.928 | 2/3 (67%) | ✅ |
+| 0.40 | 26/30 (87%) | 30/30 | 0.928 | **0/3** | ✅ |
+| 0.50 | 26/30 (87%) | 29/30 | 0.911 | 0/3 | ✅ |
+| 0.60 | 24/30 (80%) | 24/30 | 0.800 | 0/3 | ✅ |
+
+**五个阈值的排序指标全部逐项相同**，说明两端嵌入确实在**同一个语义空间**
+（换实现若悄悄换了空间，Hit@1 会变而不会"恰好一致"）。**唯一差异是延迟**——
+模拟器跑在 M5 Pro 宿主上（2ms），Android 那组是真机（38ms）；
+iOS 真机性能仍在缺口表里（等硬件），不能拿模拟器数字充当真机结论。
+
 
 
 ## 与 SEKB 的契约
