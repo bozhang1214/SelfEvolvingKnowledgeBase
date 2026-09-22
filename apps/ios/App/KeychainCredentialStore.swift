@@ -22,6 +22,13 @@ final class KeychainCredentialStore: CredentialStore {
     /// 手搓 `.app`（未签名）时的典型症状）
     private(set) var lastStatus: OSStatus = errSecSuccess
 
+    /// **写**那一步的 OSStatus。
+    ///
+    /// 为什么必须单独记：macOS 上第一次跑自检时，`keychain_roundtrip` 报了
+    /// `OSStatus=-25300`（errSecItemNotFound）——那是**读**的状态，只说明"没读到"，
+    /// 完全没说清是"没写进去"还是"读的条件对不上"。两个状态分开记，一次就能定位。
+    private(set) var lastSaveStatus: OSStatus = errSecSuccess
+
     init(service: String = "tech.bos-studio.sekb.credentials") {
         self.service = service
     }
@@ -47,9 +54,18 @@ final class KeychainCredentialStore: CredentialStore {
         SecItemDelete(baseQuery() as CFDictionary)
         var query = baseQuery()
         query[kSecValueData as String] = data
-        // 仅本机、解锁后可读：凭证是设备身份，不需要同步到 iCloud 或换机迁移
+        // 仅本机、解锁后可读：凭证是设备身份，不需要同步到 iCloud 或换机迁移。
+        //
+        // ⚠️ macOS 上**不能设这一项**（两条路都实测过，都不通，见 apps/mac/README.md）：
+        //   · 设 `kSecAttrAccessible` 但不声明数据保护钥匙串 → macOS 落传统钥匙串，该项无效；
+        //   · 声明 `kSecUseDataProtectionKeychain` → 写入直接 `-34018 errSecMissingEntitlement`，
+        //     因为数据保护钥匙串要求 `keychain-access-group` entitlement，而它需要真实 team ID，
+        //     ad-hoc 签名给不了。
+        // 所以 macOS 走传统登录钥匙串、不设 accessible；iOS 保持数据保护钥匙串语义。
+        #if !os(macOS)
         query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        lastStatus = SecItemAdd(query as CFDictionary, nil)
+        #endif
+        lastSaveStatus = SecItemAdd(query as CFDictionary, nil)
     }
 
     func clear() {

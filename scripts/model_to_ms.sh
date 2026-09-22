@@ -9,7 +9,7 @@
 #   bash scripts/model_to_ms.sh check      # 用 benchmark 实际加载运行 .ms（这一步目前**失败**，见下）
 #   bash scripts/model_to_ms.sh all        # fetch + rewrite + convert + check
 #
-# ⚠️ 写 shell 时注意：`$VAR（` 这种"变量紧挨全角括号"的写法，bash 会把全角括号的
+# ⚠️ 写 shell 时注意：「`$` + 变量名 + 全角标点」这种"变量紧挨全角括号"的写法，bash 会把全角括号的
 # 首字节当成变量名的一部分，报 `VAR\xef: unbound variable`（本脚本与 scripts/ios_app.sh
 # 都实测踩过）。**一律写 `${VAR}`**。
 #
@@ -78,7 +78,7 @@ fetch() {
 }
 
 rewrite() {
-    [ -f "$SRC_ONNX" ] || { echo "❌ 缺 $SRC_ONNX（先跑 bash scripts/fetch_embedding_model.sh）" >&2; return 1; }
+    [ -f "$SRC_ONNX" ] || { echo "❌ 缺 ${SRC_ONNX}（先跑 bash scripts/fetch_embedding_model.sh）" >&2; return 1; }
     "$PY" "$ROOT/scripts/model_to_ms.py" "$SRC_ONNX" "$WORK/work/bge-small-zh-v1.5-ms.onnx" || return 1
 }
 

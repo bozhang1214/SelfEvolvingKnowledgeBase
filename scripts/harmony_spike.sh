@@ -120,7 +120,7 @@ verify_mindspore() {
     local ok=0
     for target in ohosArm64 ohosX64; do
         local so="$SPIKE/knspike/build/bin/$target/debugShared/libkn.so"
-        [ -f "$so" ] || { echo "❌ 缺少 $so（先跑 kn）" >&2; ok=1; continue; }
+        [ -f "$so" ] || { echo "❌ 缺少 ${so}（先跑 kn）" >&2; ok=1; continue; }
         echo "-- $target"
         # a) 探针函数导出成功 → 平台 klib 真的编译链接过了
         if [ "$("$nm" -D --defined-only "$so" 2>/dev/null | grep -cE 'sekb_spike_mindspore')" -ge 1 ]; then
@@ -134,7 +134,7 @@ verify_mindspore() {
         if [ "$n_oh" -ge 5 ]; then
             echo "   ✅ $n_oh 个 OH_AI_* 为 undefined（运行时由系统提供）"
         else
-            echo "   ❌ OH_AI_* undefined 数量=$n_oh（预期 ≥5）" >&2; ok=1
+            echo "   ❌ OH_AI_* undefined 数量=${n_oh}（预期 ≥5）" >&2; ok=1
         fi
         # c) DT_NEEDED 必须点名 libmindspore_lite_ndk.so：证明 .def 里的 linkerOpts 真的生效
         if "$re" -d "$so" 2>/dev/null | grep -q 'libmindspore_lite_ndk.so'; then
