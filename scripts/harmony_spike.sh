@@ -107,9 +107,54 @@ verify_link() {
     echo "      本脚本只证明到「产物齐备且 NAPI↔KMP 引用成立」——不要把这两件事混为一谈。"
 }
 
+verify_mindspore() {
+    echo
+    echo "── 验证：MindSpore Lite 是否真能用（spike 第 3 条的可行性）──"
+    # 背景：原方案要"自建 ONNX Runtime for OHOS"，实测方向错误——Kotlin/Native 的 OHOS 工具链
+    # **已预置** HarmonyOS 的 MindSpore Lite 平台绑定（`platformDef/ohos_*/MindSpore.def`，
+    # `package = platform.MindSporeLiteKit.MindSpore`、`linkerOpts = -lmindspore_lite_ndk`），
+    # 所以不需要碰 GitHub、也不需要往 HAP 里塞几十 MB 的 .so。
+    local nm="$DEVECO/sdk/default/openharmony/native/llvm/bin/llvm-nm"
+    local re
+    re="$(dirname "$nm")/llvm-readelf"
+    local ok=0
+    for target in ohosArm64 ohosX64; do
+        local so="$SPIKE/knspike/build/bin/$target/debugShared/libkn.so"
+        [ -f "$so" ] || { echo "❌ 缺少 $so（先跑 kn）" >&2; ok=1; continue; }
+        echo "-- $target"
+        # a) 探针函数导出成功 → 平台 klib 真的编译链接过了
+        if [ "$("$nm" -D --defined-only "$so" 2>/dev/null | grep -cE 'sekb_spike_mindspore')" -ge 1 ]; then
+            echo "   ✅ 导出 sekb_spike_mindspore_*"
+        else
+            echo "   ❌ 没找到 sekb_spike_mindspore_* 导出" >&2; ok=1
+        fi
+        # b) OH_AI_* 必须是 **weak undefined**（w）：说明由系统在加载期提供，而不是我们自己实现
+        local n_oh
+        n_oh="$("$nm" -D --undefined-only "$so" 2>/dev/null | grep -cE 'OH_AI_')"
+        if [ "$n_oh" -ge 5 ]; then
+            echo "   ✅ $n_oh 个 OH_AI_* 为 undefined（运行时由系统提供）"
+        else
+            echo "   ❌ OH_AI_* undefined 数量=$n_oh（预期 ≥5）" >&2; ok=1
+        fi
+        # c) DT_NEEDED 必须点名 libmindspore_lite_ndk.so：证明 .def 里的 linkerOpts 真的生效
+        if "$re" -d "$so" 2>/dev/null | grep -q 'libmindspore_lite_ndk.so'; then
+            echo "   ✅ DT_NEEDED 含 libmindspore_lite_ndk.so（linkerOpts 生效）"
+        else
+            echo "   ❌ DT_NEEDED 里没有 libmindspore_lite_ndk.so" >&2; ok=1
+        fi
+    done
+    [ "$ok" = "0" ] || return 1
+    echo
+    echo "✅ spike 第 3 条的**可行性**成立（编译 + 链接层面）。"
+    echo "   ⚠️ 仍未完成：① 真跑嵌入需要有设备/模拟器（只有运行期才验证得了）；"
+    echo "      ② MindSpore Lite 只吃 .ms（头文件里 OH_AI_MODELTYPE 只有 MINDIR），"
+    echo "         还要把 bge-small-zh 从 ONNX 用 converter_lite 转一次——本机与 DevEco 里都**没有**该工具。"
+}
+
 case "$ACTION" in
     kn)   build_kn ;;
     hap)  build_hap && verify_link ;;
     all)  build_kn && build_hap && verify_link ;;
-    *) echo "用法：bash scripts/harmony_spike.sh [kn|hap|all]" >&2; exit 2 ;;
+    mindspore) build_kn && verify_mindspore ;;
+    *) echo "用法：bash scripts/harmony_spike.sh [kn|hap|all|mindspore]" >&2; exit 2 ;;
 esac

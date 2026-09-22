@@ -245,3 +245,43 @@ owner 的华为开发者账号**已登录且实名认证已完成**（DevEco 日
 安装目标也不具备：本机**没有任何鸿蒙模拟器镜像**（只有 `tools/emulator` 可执行文件）；
 真机可以走 USB + `hdc`。两条路都需要 owner 操作一次。
 
+---
+
+## ✅ spike 第 3 条：可行性成立（编译 + 链接层面，2026-09-22）
+
+```bash
+bash scripts/harmony_spike.sh mindspore    # 编 libkn.so + 断言 MindSpore Lite 可用
+```
+
+**结论：鸿蒙端侧嵌入根本不需要自建 ONNX Runtime。** Kotlin/Native 的 OHOS 工具链**已预置**
+HarmonyOS 的 MindSpore Lite 平台绑定，它是**系统能力**（`libmindspore_lite_ndk.so` 由系统镜像提供），
+比往 HAP 里塞几十 MB 的 ONNX Runtime 省得多。
+
+三条断言（每个 OHOS 目标各一遍），都在 `libkn.so` 产物上实测：
+
+| 断言 | 含义 | 实测 |
+|---|---|---|
+| 导出 `sekb_spike_mindspore_*` | 平台 klib 真的编译链接过了 | ✅ arm64 / x64 |
+| 5 个 `OH_AI_*` 为 **undefined（`w`）** | 不自己实现，运行时由系统解析 | ✅ 两目标各 5 个 |
+| `DT_NEEDED` 含 `libmindspore_lite_ndk.so` | `.def` 里的 `linkerOpts` 真的生效 | ✅ 两目标 |
+
+### 两个实测细节
+
+- `package = platform.MindSporeLiteKit.MindSpore`（来自工具链 `konan/platformDef/ohos_*/MindSpore.def`）。
+  这是**平台库**：**不需要**在 `build.gradle.kts` 里写 `cinterops`，直接 `import` 即可；
+  但所有 `OH_AI_*` 都要 `@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)`（第一次编译就报这个）。
+- `OH_AI_ContextDestroy` 吃的是**句柄的地址**（`OH_AI_ContextHandle*`），不是句柄本身——
+  要 `memScoped { alloc<COpaquePointerVar>() }` 先放进可寻址存储。`OH_AI_TensorHandleArray`
+  是 `{ size_t handle_num; OH_AI_TensorHandle *handle_list; }`。
+
+### 仍未完成（两条，都不是"再写点代码"能解决的）
+
+1. **真跑嵌入需要有设备/模拟器**——只有运行期才验证得了 `OH_AI_*` 到底解析得到、模型跑得动。
+   与第 4 条同一个卡点。
+2. **模型格式**：头文件里 `OH_AI_MODELTYPE` **只有 `MINDIR`（`.ms`）**，没有 ONNX。
+   所以要把 bge-small-zh 从 ONNX 用 `converter_lite` 转一次；而**本机与 DevEco 里都没有这个工具**
+   （`find DevEco-Studio.app -iname '*converter*'` 无结果）。
+   `mirrors.huaweicloud.com/mindspore/` 可达（HTTP 200），但页面是 JS 门户、没有直链目录，
+   下一轮需要另外找 MindSpore Lite 工具包的分发地址。
+
+
