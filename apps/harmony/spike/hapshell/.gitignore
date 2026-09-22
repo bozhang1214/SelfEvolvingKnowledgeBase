@@ -13,3 +13,4 @@
 # native 构建（BuildNativeWithCmake）自动生成的 clang 工具配置
 .clangd
 .clang-tidy
+/entry/.preview/
