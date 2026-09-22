@@ -20,7 +20,7 @@
 | **iOS 端口①：传输（NSURLSession）** | ✅ | `apps/ios/App/UrlSessionTransport.swift`：实现共享层 `HttpTransport`（同步语义用信号量、SSE 用 `URLSessionDataDelegate` 逐行回调）。自检实测：`transport_get_host_ollama — code=200 bytes=3474`、`transport_stream_lines — code=200 行数=9`；**iOS 自检 10 PASS / 0 FAIL** |
 | **iOS 端口②：凭证（Keychain）** | ⚠️ 实现完成 / 往返未验 | `apps/ios/App/KeychainCredentialStore.swift` 实现共享层 `CredentialStore`（接口与 `CredentialCodec` 本轮**一起搬进共享层**，两端同一格式）。自检：空库→nil ✅、清理→nil ✅、轮换规则（共享层 `needsRotation`）✅；**往返 SKIP 且原因明确**：手搓未签名 `.app` 调 Keychain 返回 **-34018 errSecMissingEntitlement**，而 ad-hoc 签名（带任何 entitlements）会让模拟器 SpringBoard **拒绝启动**——两条路互斥。需真实 Xcode 工程 + 签名身份或真机时补验；entitlements 文件已备好在 `apps/ios/App/Sekb.entitlements` |
 | **检索链路（RAG）** | ✅ | 分块 → 嵌入 → 向量库 → 检索 → 阈值 → 隐私闸门，**全部走共享层代码**。自检：`rag_ingest`（1 切片，空间 `stub-hash@256`）、`rag_retrieve`（命中 0.244）、`rag_threshold_refuses`（`below_threshold:最高分=0.180<0.99`）、`rag_device_only_gate`（`device_only_requires_on_device_embedding`）；**iOS 自检 20 PASS / 0 FAIL / 1 SKIP** |
-| iOS 端口③：嵌入（ONNX/CoreML） | ❌ 缺口（已调研） | 见下方"端口③ 调研结论" |
+| iOS 端口③：嵌入（ONNX） | 🟡 产物已到手，接线待做（2026-09-22） | ORT iOS xcframework **已下载成功**（来源不在 GitHub，见下方"端口③ 调研结论"）；剩余工作是链接 + 用已有 int8 ONNX 模型跑真嵌入并重标阈值 |
 | **iOS 端口④：PDF（PDFKit）** | ✅ | `apps/ios/App/PdfExtractor.swift`：与 Android 同一套**四类结果**（有文本 / 无文本层 / 加密 / 解析失败）+ 先判 `%PDF` 魔数 + 40 万字符上限。自检实测：`pdf_extract_text_layer — 页数=1 字符=78`（**与 Android 端同一份样本的 78 字符/1 页完全一致**）、`pdf_extract_no_text_layer`、`pdf_extract_rejects_non_pdf`；**iOS 自检 13 PASS / 0 FAIL** |
 | iOS 真机性能 | ⏳ 等硬件 | 模拟器只验功能 |
 | 四个端口（NSURLSession/Keychain/ONNX/PDFKit） | ⏳ | 待 App 骨架跑通后补 |
@@ -90,20 +90,43 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 当前选择保住"能启动"（其余自检都依赖它），因此 iOS 自检采用**三态**（PASS/FAIL/**SKIP**，
 与 Android 侧自检同口径）："没验"既不算过、也不算失败，原因写进详情。
 
-### 端口③（端侧嵌入）调研结论（2026-09-21，未完成，原因具体）
+### 端口③（端侧嵌入）调研结论（2026-09-21 调研，**2026-09-22 解决**）
 
 | 方案 | 现状 | 结论 |
 |---|---|---|
 | 宿主 Ollama 嵌入（`HostOllamaEmbedding`） | 宿主**没有装任何嵌入模型**（`/api/tags` 只有 qwen3.5/deepseek/llama2 等对话模型） | 需先拉一个嵌入模型；而本机到 ollama registry 的国际链路此前实测不可用（`scripts/edge_m0_setup.sh` 记录了 ModelScope 绕行方案） |
-| ONNX Runtime iOS（`onnxruntime-objc`/`-c`） | ❌ **被网络卡死（2026-09-21 实测）**：GitHub Release 直连 `onnxruntime-objc-1.20.0.zip` → **HTTP 000（不可达）**；CocoaPods CDN 可达（200）但 podspec 的 source 仍指向 GitHub；Maven（aliyun 镜像）只有 `onnxruntime`（JVM）与 `-android`，**没有 iOS 产物**；本机也未装 CocoaPods、无本地缓存 | 两条可行路径：① 在有 GitHub 访问的机器上取回 ORT iOS xcframework（或配代理）；② 用 `coremltools` 把 bge-small 转 **Core ML**（需 pip 装 coremltools，且转换后要**重标阈值**——空间变了） |
-| Core ML（把 bge-small 转 coreml） | 需要 `coremltools` 转换环境 + 模型转换验证 | 更重，且转换后要重新标定阈值（空间变了） |
+| ONNX Runtime iOS（`onnxruntime-c`） | ✅ **2026-09-22 解决** | 见下方"来源订正" |
+| Core ML（把 bge-small 转 coreml） | 需要 `coremltools` 转换环境 + 模型转换验证 | 不再需要：ORT 已到手，Core ML 只作为将来"用 ANE 加速"的可选优化 |
 
-**因此本轮的可验证范围**：把**整条检索链路**用共享层的确定性桩嵌入打通（与 Android 在"ONNX 模型缺失"
-时的回退**同一条代码路径**），证明 iOS 上 RAG 的结构、阈值语义与隐私闸门都成立；
-"端侧真模型"仍记为缺口，下一步在下列三条里选一条（建议按序）：
-① 装 CocoaPods → `onnxruntime-objc` → 用**已有的 int8 ONNX 模型**（`apps/android` 那份，23.9MB）跑真嵌入；
-② 若 ORT iOS 不可得，先用宿主嵌入（先解决嵌入模型获取问题）；
-③ 最后才是 Core ML 转换（成本最高，且要重标阈值）。
+#### 来源订正（2026-09-22）——**ORT 的 iOS 产物不在 GitHub 上**
+
+2026-09-21 的结论「ORT iOS 被网络卡死」是**误判**：当时只试了 GitHub Release（`github.com` 实测 HTTP 000），
+就推断唯一来源是 GitHub。实际查 CocoaPods 规格库后真相是：
+
+```bash
+# CocoaPods CDN 会 301 到 jsdelivr，用 -L 跟随（不带 -L 会看到 301 而误以为失败）
+h=$(echo -n onnxruntime-c | md5 -q)   # 3aa95c6f…，规格库按名字 md5 的前 3 个字符分片
+curl -sL "https://cdn.cocoapods.org/Specs/${h:0:1}/${h:1:1}/${h:2:1}/onnxruntime-c/1.20.0/onnxruntime-c.podspec.json"
+# → source.http = https://download.onnxruntime.ai/pod-archive-onnxruntime-c-1.20.0.zip
+curl -L -o ort-c-1.20.0.zip https://download.onnxruntime.ai/pod-archive-onnxruntime-c-1.20.0.zip
+```
+
+- 该 URL 实测 **HTTP 200 / 44,218,716 B**，**完全绕开 GitHub**，也不需要装 CocoaPods；
+- 落盘 `.tooling/ort-ios/`（构建状态，不入库），sha256 `50891a8aadd17d4811acb05ed151ba6c394129bb3ab14e843b0fc83a48d450ff`；
+- `onnxruntime.xcframework` **三个切片齐全**：`ios-arm64`(真机 33M)、`ios-arm64_x86_64-simulator`(模拟器 71M)、
+  `macos-arm64_x86_64`（**顺带解锁 M8 Mac 端**）；
+- `nm -gU` 确认模拟器切片导出 `_OrtGetApiBase`，头文件 `ORT_API_VERSION 20` 与 1.20.0 匹配 → 可直接链接。
+
+**经验（写在这里避免重犯）**：判断"某产物被墙"之前，先确认**唯一来源**是不是 GitHub——
+CocoaPods 系产物真实托管在 `download.onnxruntime.ai`，Maven 系在 `repo1.maven.org`/镜像，
+两者都与 GitHub 无关。另外 `curl` 查这类 CDN 必须带 `-L`。
+
+#### 仍未完成的部分
+
+本轮之前已用共享层的**确定性桩嵌入**打通整条检索链路（与 Android 在"ONNX 模型缺失"时**同一条代码路径**），
+证明 iOS 上 RAG 的结构、阈值语义与隐私闸门都成立。**剩余**：把 xcframework 真正链进 App、
+用已有的 int8 ONNX 模型（`apps/android` 那份，23.9MB）跑真嵌入，并按新空间**重标阈值**。
+
 
 ## 与 SEKB 的契约
 

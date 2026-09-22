@@ -58,11 +58,12 @@ iOS 能通过 Kotlin Multiplatform 共用纯逻辑，**鸿蒙不能**。所以�
 | 3 | `ohosArm64` = **真机**（arm64-v8a）；**模拟器 / x86_64 开发机需额外启用 `ohosX64`** | 本机模拟器是 x86_64 → 必须同时启用 `ohosX64`，否则产物装不进模拟器 |
 | 4 | 版本门槛：JDK 17+、Gradle 8+、DevEco Studio **6.0.0+**、HarmonyOS SDK **API 17+** | 本机：SDK **API 22**（6.0.2.130）✅、OHOS NDK ✅、DevEco tools（hvigor/llvm/node）✅、JDK 有 21 与 JBR（17+ ✅） |
 
-**另外两处网络现实**（与 M5 端口③ 同类）：spike 第 3 条要自建 ONNX Runtime，而 ORT 源码在 **GitHub（本机不可达，实测 HTTP 000）**——
-可能的绕行是社区在 AtomGit/GitCode 上的 OHOS 移植镜像（如 `code.ruyicommunity.cn` 的 onnxruntime 移植分支），**待验证**。
+**一处网络现实**：~~spike 第 3 条要自建 ONNX Runtime，而 ORT 源码在 GitHub（本机不可达）~~ ——
+**2026-09-22 已作废**：改为用系统自带的 **MindSpore Lite**（Kotlin/Native OHOS 工具链已预置绑定），
+不必碰 GitHub，详见下文"✅ 2026-09-22 转折"。
 
 **结论**：spike 第 1/2 条（KMP 产物 + kotlinx 库在 ohos 上可解析）**可以试**；
-第 3 条受 ORT 源码获取影响（需先找镜像）；
+第 3 条**改用 MindSpore Lite 后不再受网络影响**（待实测）；
 **第 4 条需要 owner 的华为开发者账号**（DevEco 模拟器登录 + 应用签名）。
 按方案 §4 D2 的规矩：**四条全通才进 M7，任一不过就退路线 B（ArkTS 重写 + 契约夹具）**。
 
@@ -122,7 +123,9 @@ ohosX64   { /* 模拟器/x86_64 用 */ }
 AGP 8.11.2（sample 用 AGP 8；**我们现有 Android 构建是 AGP 9** → spike 必须用**独立 Gradle 构建**，
 否则会把已验证的 Android 基线搅乱）。
 
-**spike 第 3 条（ONNX Runtime 自建）：🟡 找到可用镜像，源码已开始拉取（2026-09-21）**
+**spike 第 3 条（自建推理运行时）：⚠️ 该方向已于 2026-09-22 作废，改为 MindSpore Lite（见下文"✅ 2026-09-22 转折"）。以下保留为过程记录。**
+
+**~~spike 第 3 条（ONNX Runtime 自建）：🟡 找到可用镜像，源码已开始拉取（2026-09-21）~~**
 
 | 候选源 | 实测 |
 |---|---|
@@ -155,14 +158,30 @@ AGP 8.11.2（sample 用 AGP 8；**我们现有 Android 构建是 AGP 9** → spi
 | 网络 | github.com 在本机 **HTTP 000（不可达）**，与 M5 端口③（ORT iOS）是**同一堵墙** |
 | 镜像仓库 | 不含任何预编译 `libonnxruntime.so`（只有移植补丁与构建脚本） |
 
-**三条可行路径**（都需要外部条件）：
-1. 在**能访问 GitHub 的机器**上编译 OHOS aarch64 版 `libonnxruntime.so`，再把产物取回本机；
-2. 找**已编译好的 OHOS 版 libonnxruntime.so**（社区 release / AtomGit·GitCode 的制品），直接链接；
-3. 给本机配代理，让 Gradle/CMake 能拉 GitHub（这一步会同时解开 M5 端口③ 的阻塞）。
+**✅ 2026-09-22 转折：鸿蒙端侧嵌入根本不需要 ONNX Runtime —— 用系统自带的 MindSpore Lite**
 
-**按方案 §4 D2**：spike 要"四条全通"才进 M7。当前 **第 2 条 ✅、第 1 条编译半段 ✅**；
-第 3 条与第 1 条的"装设备"半段，以及第 4 条，都卡在**外部条件**（网络 / 华为开发者账号）上——
-这属于需要 owner 决策的阻塞，不再继续消耗轮次硬撞。
+上面整段"自建 `libonnxruntime.so`"的努力**方向错了**。Kotlin/Native 的 OHOS 工具链里**已经预置**了
+HarmonyOS 的 MindSpore Lite 平台绑定，检查 `$(KONAN_DATA_DIR)` 得到三条实证：
+
+| 证据（均在 `.tooling/konan/`） | 内容 |
+|---|---|
+| `kotlin-native-prebuilt-…/konan/platformDef/ohos_arm64/MindSpore.def`（`ohos_x64` 同） | `package = platform.MindSporeLiteKit.MindSpore`、`linkerOpts = -lmindspore_lite_ndk`、`headers = mindspore/{status,types,context,data_type,model,format,tensor}.h` |
+| `…/klib/platform/ohos_arm64/org.jetbrains.kotlin.native.platform.MindSpore` | **预编译 cinterop klib**，可直接 `import platform.MindSpore.*`，无需自己写 cinterop |
+| `dependencies/sysroot-ohos-aarch64-6.0.2.640-04/usr/{include/mindspore,lib/*-ohos/libmindspore_lite_ndk.so}` | 头文件 + 三个 ABI 的链接桩（`arm-linux-ohos` / `aarch64-linux-ohos` / `x86_64-linux-ohos`，各 8.8K） |
+
+- 桩的**符号已确认**：`llvm-nm -D` 列出全部 `OH_AI_*`（`OH_AI_ContextCreate/SetThreadNum`、
+  `OH_AI_CreateNNRTDeviceInfoByName`、`OH_AI_Model*`、`OH_AI_Tensor*` …），且所有符号地址相同（`0x2a1c`）
+  —— 典型的**导入桩**，**真实现由鸿蒙系统镜像在运行期提供**（与 `libace_napi.z.so` 同理）。
+- **好处不只是"绕过 GitHub"**：MindSpore Lite 是 HarmonyOS 的**系统能力**，不像 ORT 那样要往
+  HAP 里塞几十 MB 的 `.so`，包体与 §2 插件化议题都更省。代价是要把 bge-small-zh 从 ONNX 转成
+  `.ms`（需 `converter_lite` 宿主机工具，另需确认），以及**`ohosX64` 模拟器上系统是否带这个库待实测**。
+
+**由此修订 spike 第 3 条的验收口径**：原写"ONNX Runtime 自建跑通嵌入"。**改为"在鸿蒙上跑通端侧嵌入"**，
+运行时用 **MindSpore Lite（系统能力）**；这条改动的理由是工程性的（省包体、免 GitHub、官方支持），
+且**不改变对上层共享层的契约**——`apps/shared` 的 `embed/` 只依赖"给文本返回定长归一化向量"，
+换运行时只影响向量空间，按 RFC 既有做法**重标阈值**即可。**这是需要 owner 确认的方案微调**（见汇报）。
+
+**第 1 条"装设备"半段与第 4 条仍然需要外部条件**：鸿蒙应用必须签名才能安装，签名要 DevEco 登录华为开发者账号。
 
 **hvigor / ohpm CLI 已确认可用**（HAP 壳工程可以命令行构建）：
 `/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw`、`.../tools/ohpm/bin/ohpm`。
