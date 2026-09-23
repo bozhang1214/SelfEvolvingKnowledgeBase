@@ -21,7 +21,7 @@ bash scripts/android.sh test        # 191 tests, 0 failed（功能 187 + 契约 
 
 | 验的是什么 | 证据 |
 |---|---|
-| **契约夹具在跑，且能失败** | `apps/contract/{routing,signals,privacy}.json` 共 32 case，由 `ContractFixturesTest` 4 个测试逐 `id` 断言；把 `cloud.input_over_budget` 的期望从 `cloud` 改成 `edge` → **立刻 FAILED**，还原 → 回绿 |
+| **契约夹具在跑，且能失败** | `apps/contract/{routing,signals,privacy}.json` 共 **37** case（routing 10 + signals 14 + privacy 13，按各文件 `cases` 数组实点），由 `ContractFixturesTest` 4 个测试逐 `id` 断言；把 `cloud.input_over_budget` 的期望从 `cloud` 改成 `edge` → **立刻 FAILED**，还原 → 回绿 |
 | **夹具不是"假绿"** | 夹具目录已登记为单测输入（`apps/android/app/build.gradle.kts` 的 `inputs.dir(contractDir)`）：**实测**未接线时改夹具不会重跑（Gradle UP-TO-DATE），接线后改夹具会红 |
 | **R10：DEVICE_ONLY + 非本机端点 = 一个请求都不发** | `PlaneRouterTest`：`10.0.2.2` / `192.168.1.20` / `100.71.24.105` / `edge-host.local` / `0.0.0.0` 全部判为**非本机** → `blockedReason=device_only_requires_local_runtime`；`127.0.0.1` / `localhost` / `[::1]` 判为本机 → 可执行（`device_only_data`） |
 | **编排器层面真的不发** | `ChatOrchestratorTest.device only data is not sent at all when edge endpoint is remote`：端侧 0 次调用、云端 0 次调用、`text=""`、`error` 里有可读原因 |
