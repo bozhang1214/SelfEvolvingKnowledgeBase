@@ -96,3 +96,90 @@ related: [docs/tech/09-OBSERVABILITY]
 - [x] BOSS 直聘：登录（扫码）已打通
 - [ ] BOSS 直聘：采集（搜索接口 sign 签名逆向）—— 跟踪项，见上
 - [ ] 京东社招：需逆向 sign（暂缓，建议手动粘贴 JD）
+- [x] **BOSS / 智联：浏览器采集插件（路线 C，2026-09-22 新增）** —— 半自动、人工触发，见下
+
+---
+
+## 路线 C：浏览器采集插件（BOSS / 智联）
+
+> **背景**：BOSS 的 `sign` 逆向工作量大且会被风控升级打断；实测也确认 **BOSS / 智联 / 前程无忧
+> 都没有可用的免登录 JSON 接口**（与开源项目 [ai-job-search-cn](https://github.com/rockbenben/ai-job-search-cn)
+> 的实测结论一致）。
+> 所以改为**读「你自己浏览器里已经渲染好的页面」**——不碰接口签名，也不新增风控暴露。
+
+### 脚本与位置
+
+`scripts/sekb-job-collector.user.js`（油猴脚本，Tampermonkey / Violentmonkey 均可）。
+
+装法：浏览器装 Tampermonkey → 新建脚本 → 粘贴该文件内容 → 保存。
+
+### 为什么它比逆向签名安全
+
+| | 逆向 `sign` | 本插件 |
+|---|---|---|
+| 发出的请求 | 新增大量接口请求 | **0**（只读 DOM） |
+| 风控暴露 | 高（code:37 / `_security_check`） | 与人打开页面等价（`read` 类操作，间隔为 0） |
+| BOSS 改版 | 签名算法失效 → 整条链路挂 | 选择器失效 → 改几行选择器 |
+| 维护成本 | 高（跟混淆 JS 斗） | 低 |
+
+参考实测：`rockbenben/ai-job-search-cn` 的 `workflows/reference/cdp-portals.md` 里，
+`read`（纯读 DOM）的间隔要求是 **0 秒**，而 `navigate` ≥8 秒、`fetch` ≥4 秒。
+
+### 用法（三步）
+
+1. 在 BOSS / 智联**手动搜索、翻页**（跟平时找工作一样）；
+2. 每看完一页，点右下角面板的「**采集当前页**」（把这一页已渲染的职位收进本机）；
+3. 采够了点「**导出 JSON**」（或「复制 JSON」）→ 到 SEKB「职位收集」页导入该 JSON。
+
+采集记录存在浏览器 `localStorage`，跨页累积，可随时「清空」。
+
+### 支持站点与选择器（实测来源：cdp-portals.md，2026-08）
+
+| 站点 | 入口 | 卡片选择器 | 字段选择器 |
+|---|---|---|---|
+| **BOSS 直聘** | `zhipin.com/web/geek/jobs` | `.job-card-wrap`（**不是** `.job-card-wrapper`） | `.job-name` / `.company-name` / `.salary` / `.job-area`；链接 `a[href*="/job_detail/"]` |
+| **智联招聘** | `zhaopin.com/recommend`、`zhaopin.com/sou/*` | `.joblist-box__item.clearfix` | `.jname` / `.cname` / `.sal` / `.shrink-0`（城市·区）/ `.dc`（行业）/ `.tag`；链接 `a[href*="jobdetail"]` |
+
+> 站点改版时**先失效的是精确类名**，脚本对每个字段都配了退化选择器；若整体失效，
+> 按上表更新选择器即可（脚本里 `ADAPTERS` 一处定义）。
+
+### 已知边界
+
+- **列表页拿不到 JD 全文**（`jd_text` 为空）——导入后可在 SEKB 侧用「刷新 JD」补，或做批量分析时按需抓取；
+- **半自动**：需要人手点「采集当前页」，不翻页、不轮询（这是设计选择，不是缺陷）；
+- **撞到验证码/风控提示就停手**，别硬闯（账号安全铁律见 cdp-portals.md）。
+
+### 配套的 SEKB 侧改动
+
+`backend/app/services/job_service.py` 的 `parse_job_files` 现在**支持结构化 JSON**：
+`.json` 文件走 `_parse_json_jobs`（兼容 `{"jobs":[...]}` 与裸数组，字段名宽容：
+`title`/`position`、`job_url`/`url`、`jd_text`/`jd`），**保留公司/薪资/城市/链接**；
+坏 JSON 退回文本解析（文件名为标题），不会整条丢掉。
+
+---
+
+## 渠道调研结论：脉脉
+
+**结论：不接入**（无免登录数据源）。
+
+实测 `maimai.cn` 首页：web 端是**B 端企业服务**（人才银行 / 人才智库 / 数字营销 / 拓客通 /
+专家网络 / 企业号）+ 职场社区；面向求职者的职位搜索在 **App / 登录态**内，**web 端没有
+公开的职位列表页**。另外：
+
+- 脉脉自己的招聘用的是飞书 ATS（`maimai.jobs.feishu.cn`）——那是**脉脉在招人**，不是职位库；
+- 开源项目 ai-job-search-cn 的渠道实测表里**没有脉脉**（它覆盖 BOSS / 智联 / 前程无忧 / 猎聘）。
+
+若将来你愿意在**登录后**提供脉脉职位页的具体 URL 与 DOM 结构，可以照 BOSS/智联 同样的方式
+在 `ADAPTERS` 里加一个适配器（脚本已按「一站一适配器」组织，加站点不用改主流程）。
+
+## 渠道调研结论：智联招聘
+
+**结论：可用，走浏览器**（已在本轮接入插件）。
+
+- **无免登录 JSON 接口**（实测：接口返回 200「成功」但 `results:[]` 恒为空，是给爬虫的假响应）；
+- **浏览器渠道可用**：`/recommend` 与 `/sou/…` 页均未被 robots 禁（只禁 `/user/*` `/source/*`
+  `/install/*` `/data/*` 与带 `utm_*` 参数的 URL）；
+- **登录后的两个入口都按账号「求职期望」过滤**：`/recommend` 精确到区（实测 20/20 命中），
+  `/sou/jl<城市码>/kw<关键词编码>/p<页码>` 城市码必须在 `jl` 段（上海 = `538`；命中率
+  `/sou/jl538/kw…/p1` 20/20 vs `?kw=…&city=538` 2/20）；
+- 所以**建议先在智联站内设好「求职期望」**，再打开 `/recommend` 采，结果最对口。
