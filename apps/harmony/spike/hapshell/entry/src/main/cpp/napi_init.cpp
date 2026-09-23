@@ -23,6 +23,12 @@
 //    不是某些资料说的"必须有 KString 包装"——以生成的 `libkn_api.h` 为准。
 extern "C" int32_t sekb_spike_ping();
 extern "C" int32_t sekb_spike_echo_len(const char* text);
+// MindSpore Lite 自检（见 knspike/.../MindSporeProbe.kt）：
+//   > 0 = 成功，值是输出张量元素数（期望 262144 = 1*512*512）
+//   < 0 = 失败，负值是 MsStep 里的步骤码
+extern "C" int32_t sekb_spike_mindspore_selftest(const char* model_path);
+// 输出向量首元素的粗量化值（|v[0]|*1e6）——证明"数据真的流过来了"，而不是全零也过
+extern "C" int32_t sekb_spike_mindspore_first_float(const char* model_path);
 
 static napi_value Ping(napi_env env, napi_callback_info /*info*/) {
     napi_value out = nullptr;
@@ -52,11 +58,41 @@ static napi_value EchoLen(napi_env env, napi_callback_info info) {
     return out;
 }
 
+// 取一个字符串参数（NAPI 的固定套路：先问长度、再取内容）
+static std::string ArgString(napi_env env, napi_callback_info info, bool* ok) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) { *ok = false; return {}; }
+    size_t len = 0;
+    napi_get_value_string_utf8(env, args[0], nullptr, 0, &len);
+    std::string buf(len + 1, '\0');
+    napi_get_value_string_utf8(env, args[0], buf.data(), buf.size(), &len);
+    buf.resize(len);
+    *ok = true;
+    return buf;
+}
+
+#define SEKB_STR_FN(cname, fn)                                                        \
+    static napi_value cname(napi_env env, napi_callback_info info) {                   \
+        bool ok = false;                                                              \
+        std::string p = ArgString(env, info, &ok);                                     \
+        napi_value out = nullptr;                                                     \
+        napi_create_int32(env, ok ? fn(p.c_str()) : -1, &out);                        \
+        return out;                                                                   \
+    }
+
+SEKB_STR_FN(MsSelfTest, sekb_spike_mindspore_selftest)
+SEKB_STR_FN(MsFirstFloat, sekb_spike_mindspore_first_float)
+
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
         {"ping", nullptr, Ping, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"echoLen", nullptr, EchoLen, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // 真机日入口：传 .ms 的**真实文件路径**，返回元素数（>0）或步骤码（<0）
+        {"msSelfTest", nullptr, MsSelfTest, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"msFirstFloat", nullptr, MsFirstFloat, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

@@ -14,3 +14,5 @@
 .clangd
 .clang-tidy
 /entry/.preview/
+# 由 scripts/harmony_spike.sh hap 放进来的模型（94MB 构建产物）
+/entry/src/main/resources/rawfile/*.ms

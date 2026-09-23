@@ -30,6 +30,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEVECO="${DEVECO_HOME:-/Applications/DevEco-Studio.app/Contents}"
 SPIKE="$ROOT/apps/harmony/spike"
 HAP_PROJ="$SPIKE/hapshell"
+# `.ms` 的产地（scripts/model_to_ms.sh 的输出目录）——两个脚本共用这一个路径约定
+MS_WORK="$ROOT/.tooling/mindspore-lite/work"
 
 export NODE_HOME="$DEVECO/tools/node"
 export PATH="$NODE_HOME/bin:$PATH"
@@ -66,6 +68,18 @@ build_kn() {
 
 build_hap() {
     echo "── 2/2 构建 HAP（hvigor）──"
+    # 把 `.ms` 作为 rawfile 打进包：App 首次启动时复制到私有目录再交给 OH_AI_ModelBuildFromFile
+    # （那个 API 要的是**文件系统路径**，rawfile 不是路径）。这样真机日不需要手工 push，
+    # 也不会踩 /data/local/tmp 之类的权限坑；代价是 HAP 会大到 ~100MB（spike 阶段可接受）。
+    local ms="$MS_WORK/bge-static.ms"
+    local raw="$HAP_PROJ/entry/src/main/resources/rawfile"
+    if [ -f "$ms" ]; then
+        mkdir -p "$raw"
+        cp "$ms" "$raw/bge-small-fixed512.ms"
+        echo "   已放入模型 rawfile（$(du -h "$ms" | cut -f1)）"
+    else
+        echo "   ⚠️ 没找到 ${ms} —— 先跑 bash scripts/model_to_ms.sh all；HAP 会**不带模型**（界面会显示失败步骤码）"
+    fi
     ( cd "$HAP_PROJ" && "$DEVECO/tools/hvigor/bin/hvigorw" \
         assembleHap --mode module -p product=default --no-daemon ) || return 1
 }
@@ -92,13 +106,20 @@ verify_link() {
         [ -f "$spike_so" ] || { echo "❌ $abi: 缺 libknspike.so" >&2; ok=1; continue; }
         [ -f "$kn_so" ]    || { echo "❌ $abi: HAP 里没有 libkn.so（KMP 产物没进包）" >&2; ok=1; continue; }
         local undef
-        undef="$("$nm" -D --undefined-only "$spike_so" 2>/dev/null | grep -cE 'sekb_spike_(ping|echo_len)')"
-        if [ "$undef" = "2" ]; then
-            echo "   ✅ $abi: libknspike.so 引用 sekb_spike_ping/echo_len（undefined，由同包 libkn.so 解析）"
+        # 现在 HAP 侧用到 4 个 KMP 入口（2 个链路探针 + 2 个 MindSpore 真机日入口）——
+        # 断言数量要与真实依赖一致，否则校验比依赖弱，将来漏接一个符号也发现不了。
+        undef="$("$nm" -D --undefined-only "$spike_so" 2>/dev/null | grep -cE 'sekb_spike_(ping|echo_len|mindspore_selftest|mindspore_first_float)')"
+        if [ "$undef" = "4" ]; then
+            echo "   ✅ $abi: libknspike.so 引用 4 个 KMP 入口（undefined，由同包 libkn.so 解析）"
         else
-            echo "   ❌ $abi: 只找到 $undef/2 个 KMP 符号引用" >&2; ok=1
+            echo "   ❌ $abi: 只找到 $undef/4 个 KMP 符号引用" >&2; ok=1
         fi
     done
+    if unzip -l "$hap" 2>/dev/null | grep -q 'rawfile/bge-small-fixed512.ms'; then
+        echo "   ✅ 模型 rawfile 在包内（真机首启会复制到应用私有目录）"
+    else
+        echo "   ⚠️ 包里没有模型 rawfile —— 真机日界面会直接显示失败步骤码（先跑 scripts/model_to_ms.sh all）"
+    fi
     rm -rf "$tmp"
     [ "$ok" = "0" ] || return 1
     echo
@@ -145,10 +166,12 @@ verify_mindspore() {
     done
     [ "$ok" = "0" ] || return 1
     echo
-    echo "✅ spike 第 3 条的**可行性**成立（编译 + 链接层面）。"
-    echo "   ⚠️ 仍未完成：① 真跑嵌入需要有设备/模拟器（只有运行期才验证得了）；"
-    echo "      ② MindSpore Lite 只吃 .ms（头文件里 OH_AI_MODELTYPE 只有 MINDIR），"
-    echo "         还要把 bge-small-zh 从 ONNX 用 converter_lite 转一次——本机与 DevEco 里都**没有**该工具。"
+    echo "✅ spike 第 3 条的**构建层面**成立。"
+    echo "   产物已导出真机日入口：sekb_spike_mindspore_selftest / sekb_spike_mindspore_first_float"
+    echo "   （HAP 侧对应 NAPI 方法 msSelfTest / msFirstFloat，由 pages/Index.ets 调用并显示）。"
+    echo "   ⚠️ 仍未完成：**真机运行期**——只有装到设备上才验证得了 \`.ms\` 能否加载并算出向量。"
+    echo "      模型已转好（scripts/model_to_ms.sh all → 静态 .ms）；宿主机 benchmark 加载它会卡死，"
+    echo "      所以这一项只能靠真机判定（见 apps/harmony/README.md）。"
 }
 
 case "$ACTION" in

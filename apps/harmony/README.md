@@ -320,3 +320,49 @@ HarmonyOS 的 MindSpore Lite 平台绑定，它是**系统能力**（`libmindspo
 
 
 
+
+---
+
+## 🎯 真机日操作清单（2026-09-23 已就绪：装包即出结果）
+
+设备调试顺延到次日，所以把"真机日要做的事"提前做完了——**现在只需要装包、看屏幕**，
+不需要现场写代码或查 API。
+
+```bash
+bash scripts/harmony_spike.sh hap    # 一条命令：编 KMP → 编 HAP（含 .ms rawfile）→ 自检断言
+# 随后用 hdc 装到手机（签名材料就位后）
+```
+
+**已接好的链路**（每一环都有产物级证据）：
+
+```
+ArkTS (pages/Index.ets)
+  └─ NAPI 方法 msSelfTest / msFirstFloat / ping / echoLen     ← libknspike.so
+       └─ 4 个 @CName C 符号（undefined，加载期由同包 libkn.so 解析）  ← libkn.so
+            └─ MindSpore Lite C API（16 个 OH_AI_* undefined）        ← 系统 libmindspore_lite_ndk.so
+```
+
+**模型是随包分发的**：`scripts/harmony_spike.sh hap` 会把 `.ms`（94.8MB）放进
+`entry/src/main/resources/rawfile/`，App 首次启动复制到私有目录再交给 `OH_AI_ModelBuildFromFile`
+（那个 API 要的是**文件系统路径**，rawfile 不是路径）。**因此真机日不需要手工 push**，
+也不会踩 `/data/local/tmp` 之类的权限坑。代价是 HAP 涨到 **96MB**（spike 阶段可接受）。
+
+### 屏幕上三行结果怎么读
+
+| 界面项 | 期望 | 不是这个值说明什么 |
+|---|---|---|
+| `sekb_spike_ping() = 42` | **42** | 链路没通（NAPI/KMP/加载任一处）。**这一项与模型无关**，先把它弄绿 |
+| `输出元素数=262144` | **262144** = 1×512×512 | 负数是**失败步骤码**，按值定位：`-1` context 空、`-2` model 空、`-3` build 失败（`.ms` 不被接受/路径不对）、`-4` 没有输入、`-5` 输入不是 int64（拿错模型）、`-6` predict 失败（算子跑不动）、`-7` 没有输出、`-8` 输出太小 |
+| `\|v[0]\|×1e6 = <非零>` | 非零 | 为 0 说明"形状对但**数据没流过来**"——全零也能通过上一项，所以这一项是必要的第二判据 |
+
+> 这两项一起才能说"**`.ms` 在设备上真的能加载并算出东西**"，也就是 spike 第 3 条的运行期验收。
+> 它同时决定 M7 的路线：**能跑 → MindSpore Lite；不能跑 → 立刻转路线③（ArkTS + 契约夹具）**。
+
+### 还没做的（等上面绿了再做，避免白做）
+
+`src/ohosMain/kotlin-pending/MindSporeBgeEmbedding.kt`（**不参与编译**）是完整的
+`EmbeddingProvider` 实现（CLS pooling + L2 归一化 + 空间戳，与 Android/iOS 逐点对齐）。
+它没接进来的原因很具体：spike 的 Gradle 构建是**独立**的，**不含 `:shared`**，
+要接就得先给 `ohosMain` 补共享层的 `actual` 端口（`Clock`/`Hmac`/`Digests`）——
+那是 M7 的活。**顺序上应该先确认模型能跑**（上面的清单），再花这个成本；
+否则一旦转路线③，这份 Kotlin 就白写了。
