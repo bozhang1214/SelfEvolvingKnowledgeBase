@@ -48,6 +48,14 @@ _JD_RE = re.compile(r'<dd data-selector="job-intro-content">(.*?)</dd>', re.S)
 _JD_CONCURRENCY = int(os.getenv("SEKB_JOB_JD_CONCURRENCY", "2"))
 # 单次调用最多补全多少条 JD（超出部分留空，可用 refresh_job_jd 按需补）
 _JD_MAX_PER_CALL = int(os.getenv("SEKB_JOB_JD_MAX", "20"))
+# 是否抓猎聘详情页补 JD。**默认关闭**，原因（2026-09-24 实测）：
+# 猎聘详情页已改为**纯客户端渲染** —— `/job/<id>.shtml` 返回 1.3KB 的 JS 跳转壳
+# （`window.$CONFIG.pcUrl` → `wow.liepin.com/…`），跳转目标也是 3KB 空壳
+# （`<div id="main-container">` + JS bundle）。纯 requests 不执行 JS，因此**抽取恒为 0**：
+# 集内 49 条猎聘职位 `jd_text` 非空率 **0/49**（同期大厂官方站是 100%）。
+# 也就是说这个功能在为 0 收益消耗「每关键词最多 20 次」的受限请求 —— 纯浪费且徒增风控风险。
+# 若将来猎聘恢复 SSR，或改用浏览器渲染，把 SEKB_JOB_JD_FETCH 设为 1 即可开回。
+_JD_FETCH_ENABLED = os.getenv("SEKB_JOB_JD_FETCH", "0").strip().lower() not in ("0", "false", "no", "")
 
 
 def _fetch_sync(keyword: str, city: str, page: int, limit: int) -> list[dict[str, Any]]:
@@ -170,13 +178,25 @@ def _fetch_jd(link: str, cookies: dict[str, str]) -> str:
 def _fetch_jds(jobs: list[dict[str, Any]], cookies: dict[str, str]) -> list[dict[str, Any]]:
     """抓取职位 JD 文本回填到 ``jd_text``。
 
-    **这里是请求量放大器**，所以做了三重克制：
+    **默认直接返回**（``_JD_FETCH_ENABLED`` 为 0）——原因见该常量注释：猎聘详情页
+    已改为纯客户端渲染，纯 requests 抽取恒为 0，抓了纯属浪费请求。
+
+    开启时**这里是请求量放大器**，所以做了三重克制：
     1. 并发数默认 2（原 6）；
     2. 每次请求前过 ``source_guard`` 的详情页最小间隔（默认 1.0s）；
     3. 单次调用最多补全 ``_JD_MAX_PER_CALL`` 条（原为不限），其余留给
        :func:`refresh_job_jd` 按需补——分页扫描不需要把每一页的 JD 都拉全。
     """
     if not jobs:
+        return jobs
+    if not _JD_FETCH_ENABLED:
+        # 默认不抓：详情页是 JS 渲染，纯 requests 抽取恒为 0（见 _JD_FETCH_ENABLED 注释）。
+        # 这里显式记一条日志，避免"为什么 jd_text 是空的"再次成为需要排查的谜题。
+        logger.info(
+            "猎聘 JD 补全已跳过（详情页为 JS 渲染，抽取恒为 0；"
+            "如需开启设 SEKB_JOB_JD_FETCH=1）",
+            total=len(jobs),
+        )
         return jobs
     guard = get_source_guard()
     targets = jobs[:_JD_MAX_PER_CALL]
@@ -205,6 +225,10 @@ def _fetch_jds(jobs: list[dict[str, Any]], cookies: dict[str, str]) -> list[dict
 async def refresh_job_jd(job_url: str, source: str) -> str:
     """刷新单个职位的 JD（重新抓详情页），仅支持猎聘；返回 JD 文本（失败返回空串）。"""
     if source != "猎聘" or not job_url:
+        return ""
+
+    if not _JD_FETCH_ENABLED:
+        logger.info("猎聘 JD 刷新已跳过（详情页为 JS 渲染，抽取恒为 0）", url=job_url)
         return ""
 
     guard = get_source_guard()

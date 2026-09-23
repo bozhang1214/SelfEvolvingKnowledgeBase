@@ -350,6 +350,7 @@ def test_fetch_jds_caps_detail_requests(guard: SourceGuard, monkeypatch: pytest.
     """详情页是请求量放大器 → 单次调用封顶，超出部分留空按需补。"""
     from app.agents.job import fetcher
 
+    monkeypatch.setattr(fetcher, "_JD_FETCH_ENABLED", True)
     monkeypatch.setattr(fetcher, "_JD_MAX_PER_CALL", 3)
     called: list[str] = []
 
@@ -380,3 +381,31 @@ async def test_refresh_job_jd_skipped_during_cooldown(guard: SourceGuard, monkey
 
     assert await fetcher.refresh_job_jd("https://x/job/1", "猎聘") == ""
     assert called == [], "熔断期不应发起详情页请求"
+
+
+def test_fetch_jds_disabled_by_default(guard: SourceGuard, monkeypatch: pytest.MonkeyPatch):
+    """默认**不抓**猎聘详情页：JS 渲染导致抽取恒为 0，抓了纯属浪费受限请求。"""
+    from app.agents.job import fetcher
+
+    monkeypatch.setattr(fetcher, "_JD_FETCH_ENABLED", False)
+    called: list[str] = []
+    monkeypatch.setattr(fetcher, "_fetch_jd", lambda link, cookies: called.append(link) or "jd")
+
+    jobs = [{"job_url": f"u{i}"} for i in range(5)]
+    out = fetcher._fetch_jds(jobs, {})
+
+    assert called == [], "默认关闭时不应发起任何详情页请求"
+    assert all("jd_text" not in j for j in out)
+    assert out == jobs
+
+
+@pytest.mark.asyncio
+async def test_refresh_job_jd_disabled_by_default(guard: SourceGuard, monkeypatch: pytest.MonkeyPatch):
+    from app.agents.job import fetcher
+
+    monkeypatch.setattr(fetcher, "_JD_FETCH_ENABLED", False)
+    called: list[str] = []
+    monkeypatch.setattr(fetcher, "_fetch_jd", lambda link, cookies: called.append(link) or "jd")
+
+    assert await fetcher.refresh_job_jd("https://x/job/1", "猎聘") == ""
+    assert called == []
