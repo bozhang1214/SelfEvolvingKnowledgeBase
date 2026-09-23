@@ -7,7 +7,9 @@ Cookie + X-Xsrf-Token + X-Fscp-* 网关头 POST」两步流程，且请求体需
 表单字段（缺字段会返回 flag=0 code=-1400）。
 
 采用 requests.Session（同步）在线程池中执行，保证两次请求复用同一会话 Cookie
-（这是接口正常返回的关键）。任何一步失败都降级为空列表，不阻断整个招聘分析流程。
+（这是接口正常返回的关键）。任何一步失败都降级为空列表，不阻断整个招聘分析流程
+——**例外**：被风控明确拒绝（`flag != 1`）时抛 :class:`SourceBlockedError`，
+由采集编排的熔断器接管（详见 ``source_guard`` 模块的说明）。
 
 使用方式：
     from app.agents.job.fetcher import LiepinJobFetcher
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import os
 import re
 import uuid
 from typing import Any
@@ -24,6 +27,7 @@ from urllib.parse import quote
 
 import requests
 
+from app.agents.job.source_guard import SourceBlockedError, get_source_guard
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -38,7 +42,12 @@ _UA = (
 
 # 详情页 JD 容器：<dd data-selector="job-intro-content">岗位职责...</dd>
 _JD_RE = re.compile(r'<dd data-selector="job-intro-content">(.*?)</dd>', re.S)
-_JD_CONCURRENCY = 6  # 详情页抓取并发数（过大易被猎聘限流）
+# 详情页抓取并发数：**这是请求量放大器**——列表接口 2 次请求，详情页却是「每职位 1 次」。
+# 原值 6 配 40 条职位 = 单关键词 ~42 次请求，一轮 22 关键词扫描近 2000 次，是 2026-09-23
+# 猎聘 IP 被风控封禁的主因。故默认降到 2，并叠加 source_guard 的详情页最小间隔。
+_JD_CONCURRENCY = int(os.getenv("SEKB_JOB_JD_CONCURRENCY", "2"))
+# 单次调用最多补全多少条 JD（超出部分留空，可用 refresh_job_jd 按需补）
+_JD_MAX_PER_CALL = int(os.getenv("SEKB_JOB_JD_MAX", "20"))
 
 
 def _fetch_sync(keyword: str, city: str, page: int, limit: int) -> list[dict[str, Any]]:
@@ -106,11 +115,12 @@ def _fetch_sync(keyword: str, city: str, page: int, limit: int) -> list[dict[str
     payload = resp.json()
 
     if payload.get("flag") != 1:
-        logger.warning(
-            "猎聘搜索返回异常", keyword=keyword,
-            code=payload.get("code"), msg=payload.get("msg"),
-        )
-        return []
+        # flag=0 且无 code/msg 是猎聘的**风控裸拒绝**（浏览器会 302 到验证码页）。
+        # 必须抛出去让熔断器接管——此前只记 warning 返回空列表，导致被拒后
+        # 剩余关键词继续猛打，把"临时标记"升级成"持续封禁"。
+        reason = f"flag={payload.get('flag')} code={payload.get('code')} msg={payload.get('msg')}"
+        logger.warning("猎聘搜索被风控拒绝", keyword=keyword, reason=reason)
+        raise SourceBlockedError("猎聘", reason)
 
     data = payload.get("data") or {}
     inner = data.get("data") if isinstance(data, dict) else {}
@@ -158,18 +168,37 @@ def _fetch_jd(link: str, cookies: dict[str, str]) -> str:
 
 
 def _fetch_jds(jobs: list[dict[str, Any]], cookies: dict[str, str]) -> list[dict[str, Any]]:
-    """并发抓取所有职位的 JD 文本，回填到 job 的 jd_text。"""
+    """抓取职位 JD 文本回填到 ``jd_text``。
+
+    **这里是请求量放大器**，所以做了三重克制：
+    1. 并发数默认 2（原 6）；
+    2. 每次请求前过 ``source_guard`` 的详情页最小间隔（默认 1.0s）；
+    3. 单次调用最多补全 ``_JD_MAX_PER_CALL`` 条（原为不限），其余留给
+       :func:`refresh_job_jd` 按需补——分页扫描不需要把每一页的 JD 都拉全。
+    """
     if not jobs:
         return jobs
-    links = [j.get("job_url") or "" for j in jobs]
+    guard = get_source_guard()
+    targets = jobs[:_JD_MAX_PER_CALL]
+    skipped = len(jobs) - len(targets)
+
+    def _one(link: str) -> str:
+        if not link:
+            return ""
+        guard.wait_detail("猎聘")  # 详情页节流（同步路径）
+        return _fetch_jd(link, cookies)
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=_JD_CONCURRENCY) as pool:
-        jds = list(pool.map(lambda link: _fetch_jd(link, cookies) if link else "", links))
+        jds = list(pool.map(_one, [j.get("job_url") or "" for j in targets]))
     filled = 0
-    for j, jd in zip(jobs, jds):
+    for j, jd in zip(targets, jds):
         if jd:
             j["jd_text"] = jd
             filled += 1
-    logger.info("猎聘职位 JD 补全完成", total=len(jobs), filled=filled)
+    logger.info(
+        "猎聘职位 JD 补全完成",
+        total=len(jobs), capped=len(targets), skipped=skipped, filled=filled,
+    )
     return jobs
 
 
@@ -178,7 +207,14 @@ async def refresh_job_jd(job_url: str, source: str) -> str:
     if source != "猎聘" or not job_url:
         return ""
 
+    guard = get_source_guard()
+    # 熔断冷却期内不刷新——否则它会成为绕过守卫的后门
+    if guard.open_remaining("猎聘") > 0:
+        logger.info("猎聘处于熔断冷却期，跳过 JD 刷新", url=job_url)
+        return ""
+
     def _do() -> str:
+        guard.wait_detail("猎聘")
         s = requests.Session()
         s.get(_LIEPIN_HOME, headers={"User-Agent": _UA, "Accept-Language": "zh-CN,zh;q=0.9"}, timeout=10)
         return _fetch_jd(job_url, s.cookies.get_dict())
@@ -264,6 +300,9 @@ class LiepinJobFetcher:
             jobs = await asyncio.to_thread(_fetch_sync, keyword, city, page, limit)
             logger.info("猎聘职位采集成功", keyword=keyword, count=len(jobs))
             return jobs
+        except SourceBlockedError:
+            # 明确被风控 → 不降级为空列表，交给熔断器
+            raise
         except Exception as e:  # noqa: BLE001
             logger.warning("猎聘职位采集失败", keyword=keyword, error=str(e)[:200])
             return []

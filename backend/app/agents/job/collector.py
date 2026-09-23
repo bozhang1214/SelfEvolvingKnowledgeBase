@@ -31,6 +31,7 @@ from typing import Any
 import httpx
 
 from app.agents.job.fetcher import LiepinJobFetcher, filter_jobs
+from app.agents.job.source_guard import SourceBlockedError, get_source_guard
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -240,7 +241,28 @@ class JobCollector:
     async def _safe_fetch(
         self, source: Any, keyword: str, page: int, limit: int
     ) -> tuple[str, list[dict[str, Any]]]:
+        """单个源的采集入口：**所有源都必须走这里**，节流与熔断才不会被绕过。
+
+        顺序刻意是「先查熔断 → 再节流 → 再调用」：
+
+        1. **熔断优先**：冷却期内直接短路返回，**一个网络请求都不发**——这是
+           2026-09-23 猎聘封禁事故的直接教训（被拒后剩余关键词继续猛打，
+           把临时标记升级成持续封禁）；
+        2. **节流**：同一源两次请求之间强制最小间隔（通用招聘平台更严）；
+        3. 被风控**明确拒绝**（:class:`SourceBlockedError`）→ 计数并可能熔断；
+           普通异常 → 只记 warning，不影响其它源。
+        """
         name = getattr(source, "name", source.__class__.__name__)
+        guard = get_source_guard()
+
+        remaining = guard.open_remaining(name)
+        if remaining > 0:
+            logger.info(
+                "采集源熔断冷却中，跳过本轮", source=name, remaining_s=round(remaining)
+            )
+            return name, []
+
+        await guard.wait_source(name)
         try:
             # 浏览器源需要城市参数（BOSS 用它拼查询词、智联用它取城市码，否则永远只采北京）
             if isinstance(source, _BrowserSource):
@@ -249,10 +271,15 @@ class JobCollector:
                 )
             else:
                 jobs = await source.fetch(keyword=keyword, page=page, limit=limit)
-            return name, jobs or []
+        except SourceBlockedError as e:
+            guard.record_blocked(name, e.reason)
+            return name, []
         except Exception as e:  # noqa: BLE001
             logger.warning("采集源失败", source=name, error=str(e)[:150])
             return name, []
+
+        guard.record_success(name)
+        return name, jobs or []
 
     @staticmethod
     def _dedup(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
