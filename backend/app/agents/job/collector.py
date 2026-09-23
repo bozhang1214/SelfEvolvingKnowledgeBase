@@ -59,13 +59,19 @@ def split_keywords(keyword: str) -> list[str]:
     return out
 
 
-class BossBrowserSource:
-    """BOSS 直聘采集源：调用通用浏览器服务（sekb-browser）。
+class _BrowserSource:
+    """浏览器采集源基类：调用通用浏览器服务（sekb-browser）的 ``/scrape``。
 
-    需要先在浏览器服务里导入 BOSS Cookie 或完成扫码登录；未登录时采集返回空列表。
+    子类只需给出 ``name`` / ``site``。浏览器服务侧按 ``site`` 路由到对应站点的采集器
+    （当前注册了 ``boss`` / ``zhaopin``）。
+
+    - **登录态**：BOSS 需要导入 Cookie 或扫码登录；**智联免登录可用**（只有其 `/recommend`
+      页需要登录）。两者未登录/服务不可达时都**静默降级为空列表**，不阻断其它源。
+    - 超时给到 90s：浏览器要启动 Chromium + 导航 + 等渲染，比普通 HTTP 源慢一个量级。
     """
 
-    name = "BOSS直聘"
+    name = ""
+    site = ""
 
     def __init__(self, base_url: str = "http://browser:1300") -> None:
         self._base_url = base_url
@@ -79,11 +85,11 @@ class BossBrowserSource:
             # 内部服务鉴权（S12）：浏览器服务持有登录 Cookie，需带 X-Internal-Token
             token = os.getenv("BROWSER_INTERNAL_TOKEN", "").strip()
             headers = {"X-Internal-Token": token} if token else {}
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=90) as client:
                 resp = await client.post(
                     f"{self._base_url}/scrape",
                     json={
-                        "site": "boss",
+                        "site": self.site,
                         "keyword": keyword.strip(),
                         "city": city,
                         "page": page,
@@ -92,16 +98,36 @@ class BossBrowserSource:
                     headers=headers,
                 )
                 if resp.status_code != 200:
-                    logger.warning("BOSS 浏览器服务返回非 200", status=resp.status_code)
+                    logger.warning(
+                        "浏览器采集服务返回非 200", site=self.site, status=resp.status_code
+                    )
                     return []
                 jobs = resp.json().get("jobs") or []
                 for j in jobs:
                     j.setdefault("source", self.name)
                 return jobs
         except Exception as e:  # noqa: BLE001
-            # 浏览器服务不可达或未启动时静默降级
-            logger.warning("BOSS 浏览器服务调用失败", error=str(e)[:150])
+            # 浏览器服务不可达、未启动、或站点未登录时静默降级
+            logger.warning("浏览器采集服务调用失败", site=self.site, error=str(e)[:150])
             return []
+
+
+class BossBrowserSource(_BrowserSource):
+    """BOSS 直聘采集源（需登录：导入 Cookie 或扫码）。"""
+
+    name = "BOSS直聘"
+    site = "boss"
+
+
+class ZhaopinBrowserSource(_BrowserSource):
+    """智联招聘采集源（**免登录可用**）。
+
+    城市码由浏览器服务放在 `jl` 路径段（见 `browser-service/app.py` 的
+    ``ZHAOPIN_CITY_CODES``）；未收录的城市会被跳过而非静默采到外地岗。
+    """
+
+    name = "智联招聘"
+    site = "zhaopin"
 
 
 def _load_sources() -> list[Any]:
@@ -128,6 +154,7 @@ def _load_sources() -> list[Any]:
             MokahrSource(org_slug="dji", site_id=170070, name="大疆"),
             MokahrSource(org_slug="high-flyer", site_id=140576, name="DeepSeek"),
             BossBrowserSource(),  # 需先导入 BOSS Cookie/扫码登录，未登录时返回空
+            ZhaopinBrowserSource(),  # 智联免登录可用
         ]
     except ImportError as e:  # noqa: BLE001
         logger.warning("多源采集模块未就绪，仅使用猎聘", error=str(e))
@@ -215,8 +242,8 @@ class JobCollector:
     ) -> tuple[str, list[dict[str, Any]]]:
         name = getattr(source, "name", source.__class__.__name__)
         try:
-            # BOSS 浏览器服务需要城市参数才能采对应城市（否则永远只采北京）
-            if isinstance(source, BossBrowserSource):
+            # 浏览器源需要城市参数（BOSS 用它拼查询词、智联用它取城市码，否则永远只采北京）
+            if isinstance(source, _BrowserSource):
                 jobs = await source.fetch(
                     keyword=keyword, page=page, limit=limit, city=self._city
                 )

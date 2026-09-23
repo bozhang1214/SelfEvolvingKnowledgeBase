@@ -16,9 +16,11 @@ import asyncio
 import hmac
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -375,8 +377,109 @@ async def _scrape_boss(pw, cookie_header: str, params: dict) -> list[dict]:
         await browser.close()
 
 
+# 智联招聘城市码（放 `jl` 路径段）。**只收录已实测验证的码**——因为去掉 `jl` 段会退化成
+# 通用职位页并混入外地岗，静默采错城市比采不到更糟。
+#
+# 验证方法（改这个表前请先跑一遍）：`/sou/jl<码>/?kw=FDE` 打开后，页面标题应为
+# 「「FDE招聘 2026年<城市>FDE招聘信息」」，且 `.joblist-box__item.clearfix` 有卡片。
+# 2026-09-23 实测：530=北京 ✅；538/763/765/653/801/635/736/854/639/531/551 全部 0 卡片
+# （即这些码在 `jl` 段无效，不是这些城市），**未验证出其它城市的码，故不收录**。
+ZHAOPIN_CITY_CODES: dict[str, str] = {
+    "北京": "530",
+}
+
+
+async def _card_text(card: Any, selector: str) -> str:
+    """取卡片内某选择器的文本（不存在返回空串）。"""
+    el = await card.query_selector(selector)
+    return (await el.inner_text()).strip() if el else ""
+
+
+@_register_scraper("zhaopin")
+async def _scrape_zhaopin(pw, cookie_header: str, params: dict) -> list[dict]:
+    """智联招聘采集：**免登录可用**（只有 `/recommend` 需要登录）。
+
+    URL 形式是这里的关键（踩过一次坑）：**城市码必须在 `jl` 路径段，关键词放 `kw` query** ——
+
+        https://www.zhaopin.com/sou/jl530/?kw=<URL 编码关键词>
+          → 302 到 /sou/jl530/kw<站点自编码>/p1
+
+    站点会**自己完成关键词编码**（`FDE`→`kw01300H008K`、`前沿部署`→`kwA96MPFSGT1VN4`），
+    所以调用方不需要知道编码规则，中文关键词同样可用。
+    反之若把城市写成 `city=530` query（早期文档记的形式），会掉到通用页并混入外地岗。
+
+    Cookie 可选：未登录也能返回结果；带 Cookie 时结果更贴合账号「求职期望」。
+    """
+    keyword = (params.get("keyword") or "").strip()
+    city = (params.get("city") or "").strip()
+    try:
+        limit = int(params.get("limit") or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    if not keyword:
+        return []
+    code = ZHAOPIN_CITY_CODES.get(city)
+    if city and not code:
+        _log(f"智联：未收录城市码 city={city}，跳过采集（避免采到外地岗）")
+        return []
+
+    url = (
+        f"https://www.zhaopin.com/sou/jl{code}/?kw={quote(keyword)}"
+        if code
+        else f"https://www.zhaopin.com/sou/?kw={quote(keyword)}"
+    )
+    browser = await pw.chromium.launch(headless=True)
+    context = await browser.new_context(locale="zh-CN", user_agent=_UA)
+    if cookie_header:
+        await context.add_cookies(
+            _parse_cookie_header(cookie_header, "https://www.zhaopin.com")
+        )
+    page = await context.new_page()
+    jobs: list[dict] = []
+    try:
+        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
+        # 站点会 302 到 /sou/jl…/kw…/p1 后再渲染卡片。无结果不是错误，所以超时只降级不抛。
+        try:
+            await page.wait_for_selector(".joblist-box__item.clearfix", timeout=20000)
+        except Exception:  # noqa: BLE001
+            _log(f"智联：未等到职位卡片 keyword={keyword} city={city}")
+        await page.wait_for_timeout(1200)
+        cards = await page.query_selector_all(".joblist-box__item.clearfix")
+        for card in cards[:limit]:
+            title = await _card_text(card, ".jobinfo__name")
+            if not title:
+                continue
+            link = await card.query_selector('a[href*="jobdetail"]')
+            href = (await link.get_attribute("href")) if link else ""
+            if href.startswith("http://"):
+                href = "https://" + href[7:]
+            # 地点在第一个 other-info-item 的 span 里（其后是经验、学历）
+            loc_el = await card.query_selector(".jobinfo__other-info-item span")
+            job_id = ""
+            m = re.search(r"/([A-Za-z0-9]+)\.htm", href)
+            if m:
+                job_id = m.group(1)
+            jobs.append(
+                {
+                    "job_id": job_id,
+                    "title": title,
+                    "company": await _card_text(card, ".companyinfo__name"),
+                    "salary": await _card_text(card, ".jobinfo__salary"),
+                    "city": (await loc_el.inner_text()).strip() if loc_el else city,
+                    "job_url": href,
+                    "jd_text": "",
+                    "source": "智联招聘",
+                }
+            )
+        _log(f"智联采集完成 keyword={keyword} city={city} count={len(jobs)}")
+        return jobs
+    finally:
+        await browser.close()
+
+
 def _parse_cookie_header(cookie_header: str, url: str) -> list[dict]:
     from urllib.parse import urlparse
+
     domain = urlparse(url).netloc
     cookies = []
     for part in cookie_header.split(";"):
