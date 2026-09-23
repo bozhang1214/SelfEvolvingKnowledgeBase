@@ -8,6 +8,14 @@
 返回归一化职位字典（title/company/salary/city/job_url/jd_text/source）。
 单个源失败不影响整体（降级为空列表并记录 warning）。
 
+``keyword`` 支持**多关键词**：用英文逗号 ``,``（或中文 `，`）分隔，采集时逐词抓取后合并去重。
+这让「一条搜索」能覆盖同义/近义岗位族（如 ``FDE,前沿部署,前向部署``），
+报告因此更全面，用户在前端也只需维护一条搜索。
+
+.. warning::
+   分隔符**不能用 ``|``**——``job_cache.parse_key()`` 用 ``|`` 切分存储键来取 keyword，
+   关键词里含 ``|`` 会把键解析错位（keyword/city/薪资 全部串位）。
+
 使用方式：
     from app.agents.job.collector import JobCollector
     collector = JobCollector(city="北京", min_salary_k=50)
@@ -26,6 +34,29 @@ from app.agents.job.fetcher import LiepinJobFetcher, filter_jobs
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# 多关键词分隔符：英文逗号为主，兼容中文逗号。**不可用 ``|``**（见模块 docstring）。
+_KEYWORD_SEPARATORS = (",", "，")
+
+
+def split_keywords(keyword: str) -> list[str]:
+    """把 ``keyword`` 拆成关键词列表（去空白、去重、保序、丢弃空项）。
+
+    单关键词输入原样返回单元素列表，因此旧调用方行为完全不变。
+    """
+    text = (keyword or "").strip()
+    if not text:
+        return []
+    for sep in _KEYWORD_SEPARATORS:
+        text = text.replace(sep, "\x00")
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in text.split("\x00"):
+        term = part.strip()
+        if term and term not in seen:
+            seen.add(term)
+            out.append(term)
+    return out
 
 
 class BossBrowserSource:
@@ -142,31 +173,38 @@ class JobCollector:
     async def fetch_all(
         self, keyword: str, page: int = 0, limit: int = 20
     ) -> dict[str, Any]:
-        """并行采集各源，合并去重 + 客户端筛选，返回汇总。"""
-        keyword = (keyword or "").strip()
-        if not keyword:
-            return {"sources": {}, "count": 0, "jobs": []}
+        """按关键词（可多个，逗号分隔）并行采集各源，合并去重 + 客户端筛选。
 
-        results = await asyncio.gather(
-            *[self._safe_fetch(s, keyword, page, limit) for s in self._sources]
-        )
+        多关键词时**逐词**采集（每个词仍是各源并行），而不是把所有词×源一次性并发——
+        避免对招聘站点瞬时压力过大。合并后统一去重，因此同义词重复命中的岗位只留一条。
+        """
+        keywords = split_keywords(keyword)
+        if not keywords:
+            return {"sources": {}, "count": 0, "jobs": []}
 
         per_source: dict[str, dict[str, int]] = {}
         merged: list[dict[str, Any]] = []
-        for name, jobs in results:
-            filtered = filter_jobs(
-                jobs, city=self._city, min_salary_k=self._min_salary_k
+        for term in keywords:
+            results = await asyncio.gather(
+                *[self._safe_fetch(s, term, page, limit) for s in self._sources]
             )
-            # 通用平台（猎聘/BOSS）排除大厂公司
-            if name in self._GENERAL_BOARDS and self._exclude:
-                filtered = exclude_big_tech(filtered, self._exclude)
-            per_source[name] = {"raw": len(jobs), "count": len(filtered)}
-            merged.extend(filtered)
+            for name, jobs in results:
+                filtered = filter_jobs(
+                    jobs, city=self._city, min_salary_k=self._min_salary_k
+                )
+                # 通用平台（猎聘/BOSS）排除大厂公司
+                if name in self._GENERAL_BOARDS and self._exclude:
+                    filtered = exclude_big_tech(filtered, self._exclude)
+                slot = per_source.setdefault(name, {"raw": 0, "count": 0})
+                slot["raw"] += len(jobs)
+                slot["count"] += len(filtered)
+                merged.extend(filtered)
 
         merged = self._dedup(merged)
         logger.info(
             "多源职位采集完成",
             keyword=keyword,
+            keywords=keywords,
             sources=len(self._sources),
             total=len(merged),
         )
