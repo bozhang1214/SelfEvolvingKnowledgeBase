@@ -12,14 +12,6 @@
 > 端云协同 M0–M3（`docs/RFC-端云协同与端侧Agent.md` / 实施记录）已于 2026-09-20 暂停存档，
 > 真机到货后从实施记录 §0 的恢复指引继续。
 
-> ⚠️ **2026-09-23 服务器手工同步（pull 前必读）**：为立即修正线上职位分析的用户画像，
-> `prompt/job/README.md` 已**手工同步**到服务器 checkout
-> （`/opt/self-evolving-kb/SelfEvolvingKnowledgeBase/prompt/job/README.md`，内容 = 本仓库 `c36af06` 版本，
-> md5 `ec734afc3c5bf9a23222f3bad8455cf9`；原文件备份在服务器 `/tmp/README.md.before-sync`）。
-> 因此服务器 checkout 的该文件是**脏的**——**下次 `git pull` 前先执行**
-> `git checkout -- prompt/job/README.md`，否则 pull 会被 "local changes would be overwritten" 挡住。
-> 待 `c36af06` 正式推送 + 部署后，本条即可删除。
-
 > 注：2026-09-15 的 JobCopilot P1–P7、招聘分析、科技资讯告警接线与限流读写分离
 > 等轮次均已收工（详情见 `docs/CHANGELOG.md`）。
 >
