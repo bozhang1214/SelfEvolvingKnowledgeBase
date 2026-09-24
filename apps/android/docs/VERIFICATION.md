@@ -681,6 +681,16 @@ adb logcat -s SEKB_SELFTEST:V      # ⚠️ 必须实时抓：本机日志刷得
 1. **流式前缀不丢字**——逐字符喂入真实回答，每个前缀解析后可见字符必须与原文一致；
 2. **解析器不抛异常**——它每帧跑在 UI 线程上。
 
+### 真机截图（同目录 `screenshots/`）
+
+| 文件 | 内容 |
+|---|---|
+| `ui-before-debug.png` | **改造前**：裸 URL / 裸设备 ID / 原始文档名 / 端点与账号输入框 / 审计指标，全在聊天首页 |
+| `ui-after-chat-empty.png` | 改造后 · 聊天首页：状态一句话 + 圆点、示例问题、底部输入栏 |
+| `ui-after-chat-markdown.png` | 改造后 · 真实问答：Markdown 标题/项目符号/代码块/分隔线渲染正确 + 流式提示 |
+| `ui-after-documents.png` | 改造后 · 本机知识库：文档卡片（名称 / N 个片段 / 可读体积）+ 导入 FAB |
+| `ui-after-settings.png` | 改造后 · 设置：账号与设备 / 连接 / 隐私与权限 / 关于 四个分组 |
+
 ### 验证
 
 - `bash scripts/android.sh test` → **244 用例 / 0 失败**（新增 13 条 `MarkdownTest`）。
