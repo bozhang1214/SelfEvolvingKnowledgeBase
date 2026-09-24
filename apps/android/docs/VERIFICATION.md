@@ -592,3 +592,46 @@ adb logcat -d -s SEKB_SELFTEST:I
 - 设备凭证存储（Keystore AES-GCM）与网络客户端**只做了 JVM 可验的部分**：
   Keystore 本身、真实 SSE 连接、真实 Ollama 调用都必须在模拟器上验（见 §2）。
 - 未做：Compose UI、Android 运行时装配（把上面这些接起来）、约束解码开关的对比实验。
+
+---
+
+## 1.1 **Android 真机验收**（2026-09-24，华为 Mate 40 Pro / HarmonyOS 4.2）
+
+> 背景：RFC 的风险项 **R8「无真机」** 一直是缺口（性能结论只能靠模拟器外推）。
+> owner 的手机（`NOH-AN00`，HarmonyOS 4.2 = **Android 12 基座**）可用作 Android 真机——
+> 它**不能**跑鸿蒙 NEXT 的 HAP（见 RFC §10 E13），但**能装能跑 Android APK**。
+
+装法与模拟器同一套，只是端侧端点要改成 `adb reverse` 直通（`10.0.2.2` 在真机上不存在）：
+
+```bash
+adb reverse tcp:11434 tcp:11434
+adb shell settings put global verifier_verify_adb_installs 0   # 视机型需要
+bash scripts/android.sh push-model
+SEKB_EDGE_URL=http://127.0.0.1:11434/v1 bash scripts/android.sh install
+adb shell am start -n com.sekb.ondevice/.MainActivity --ez selftest true
+adb logcat -s SEKB_SELFTEST:V      # ⚠️ 必须实时抓：本机日志刷得快，等 2 分钟再 -d 会被挤掉
+```
+
+**自检结果：`PASS=20 FAIL=1 SKIP=7`**（`FAIL` 见下，是自检逻辑缺陷而非产品缺陷）。
+
+**真机性能数字（RFC §7「真机验收」要的那几个）**：
+
+| 指标 | 真机实测 | 对照 |
+|---|---|---|
+| 端侧 LLM 首字延迟（TTFT） | **81 ms**（`plane=edge`，真实生成 44 字符） | 端到端参考 119 ms（M1） |
+| 端侧嵌入 | **3 ms / 条**（ONNX int8，512 维） | 评测集均值曾记 38 ms（不同机型/口径） |
+| 端侧检索 | **3 ms** | — |
+| 检索命中 | `doc-rag` 分 **0.690**；无关文本余弦 0.283 | 模拟器 0.690（一致） |
+| SQLite 持久化 | **启动时已有=3 块** → 跨进程存活 | — |
+| 工具调用 JSON | `{"tool":"device_time","args":{}}` 合法 | — |
+
+**两条实测踩到的坑（都已修）**：
+
+1. **`scripts/android.sh` 的 `install` 分支不传 `-P` 属性** → `SEKB_EDGE_URL=... install` 被**静默忽略**，
+   `installDebug` 复用旧 BuildConfig（仍是 `10.0.2.2`），真机上表现是"端侧全部连不上"，
+   而错误信息里看不到"环境变量没生效"。已改为 assemble/install 共用同一组 `PROP_FLAGS`。
+2. **`privacy_device_only_local_gate` 的 `calls == 0` 被当成两分支共同前置条件** →
+   本机端点下编排器**正确地**执行了 DEVICE_ONLY（`calls=1`）却判 FAIL。
+   后果很严重：这条自检**只能在非本机端点通过**，所以在模拟器（`10.0.2.2`）上一直是
+   "**因为错误的原因通过**"，R10「本机允许执行」那一半**从未被真正跑到过**。
+   已改为按端点分档断言（本机：`calls ≥ 1` 且升级仍被拒；非本机：`calls == 0` 且拒绝且无输出）。

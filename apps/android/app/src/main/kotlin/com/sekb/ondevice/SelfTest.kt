@@ -154,13 +154,19 @@ object SelfTest {
         }.getOrNull()
         val edgeIsLocal = PlaneRouter.isLocalEndpoint(cfg.edgeBaseUrl)
         val refuseReason = "escalation_blocked:${PlaneRouter.REASON_DEVICE_ONLY_NOT_LOCAL}"
-        val gateOk = blockedOut != null && blockedEdge.calls == 0 &&
+        // ⚠️ `calls == 0` **不能**当两分支的共同前置条件——它只在"非本机端点"下成立。
+        // 本机端点（真机用 `adb reverse` + `127.0.0.1` 时就是这种）**应当**执行 DEVICE_ONLY，
+        // 这正是 R10 的后半句语义。原来写成共同条件后，这条自检**只能在非本机端点通过**：
+        // 在模拟器（10.0.2.2）上一直"因为错误的原因通过"，而"本机允许执行"那一半从未被真正跑到。
+        // 实测踩到：2026-09-24 用真机（Mate 40 Pro）第一次跑自检，此处报 FAIL。
+        val gateOk = blockedOut != null &&
             if (edgeIsLocal) {
-                // 本机端点：允许执行（但仍不许升级）
-                blockedOut.escalateReason != refuseReason
+                // 本机端点：**应当**走端侧（calls ≥ 1 才算真的在本机算了），但仍不许升级到云端
+                blockedEdge.calls >= 1 && blockedOut.escalateReason.startsWith("escalation_blocked:")
             } else {
-                // 非本机端点（模拟器就是这种）：必须拒绝，且不能吐出任何内容
-                blockedOut.escalateReason == refuseReason && blockedOut.text.isEmpty()
+                // 非本机端点（模拟器就是这种）：必须拒绝，一个请求都不发、不吐出任何内容
+                blockedEdge.calls == 0 &&
+                    blockedOut.escalateReason == refuseReason && blockedOut.text.isEmpty()
             }
         record(
             "privacy_device_only_local_gate", gateOk,

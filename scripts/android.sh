@@ -74,14 +74,28 @@ require_device() {
     fi
 }
 
+# ⚠️ 构建期 `-P` 属性必须在 **assemble 与 install 两条路径上都传**。
+# 曾经的 bug：只有 `assemble` 传了 `-PsekbEdgeUrl`，而 `install` 没传 —— 于是
+#   `SEKB_EDGE_URL=http://127.0.0.1:11434/v1 bash scripts/android.sh install`
+# 会被**静默忽略**（installDebug 复用上一次的 BuildConfig，仍是 `10.0.2.2`），
+# 真机上表现为"端侧全部连不上"，而错误信息里根本看不到"你的环境变量没生效"。
+# 这是实测踩到的（2026-09-24 真机第一次跑自检，5 个 edge_* 全 FAIL）。
+PROP_FLAGS=()
+[ -n "${SEKB_SEKB_URL:-}" ] && PROP_FLAGS+=("-PsekbBaseUrl=$SEKB_SEKB_URL")
+[ -n "${SEKB_EDGE_URL:-}" ] && PROP_FLAGS+=("-PsekbEdgeUrl=$SEKB_EDGE_URL")
+if [ ${#PROP_FLAGS[@]} -gt 0 ]; then
+    echo "（构建期属性：${PROP_FLAGS[*]}）"
+fi
+
 STATUS=0
 for task in "$@"; do
     case "$task" in
         test)      ./gradlew :app:testDebugUnitTest --console=plain $MINOR_FLAG ;;
         assemble)  ./gradlew :app:assembleDebug --console=plain $MINOR_FLAG \
-                       ${SEKB_SEKB_URL:+-PsekbBaseUrl="$SEKB_SEKB_URL"} \
-                       ${SEKB_EDGE_URL:+-PsekbEdgeUrl="$SEKB_EDGE_URL"} ;;
-        install)   ./gradlew :app:installDebug --console=plain $MINOR_FLAG ;;
+                       ${PROP_FLAGS[@]+"${PROP_FLAGS[@]}"} ;;
+        # install 与 assemble 传**同一组**属性：只传一边是上面那个 bug 的根源
+        install)   ./gradlew :app:installDebug --console=plain $MINOR_FLAG \
+                       ${PROP_FLAGS[@]+"${PROP_FLAGS[@]}"} ;;
         push-policy)
             # 自检用的**已签名**策略包（离线验证「应用→重建→阈值生效→回滚」）。
             # 生成方式见 README/VERIFICATION：用服务端 edge_policy 的 canonical+HMAC 签一份，
