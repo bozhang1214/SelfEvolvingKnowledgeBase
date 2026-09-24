@@ -29,6 +29,15 @@ data class Bubble(
     val escalated: Boolean = false,
     /** 这次回答引用到的本机检索来源（端侧 RAG 的可追溯性：答对答错都要能看出处） */
     val sources: List<RetrievalSources.Source> = emptyList(),
+    /**
+     * 路由阶段的原因码（如 `edge_preferred` / `input_over_edge_budget(600>512)`）。
+     *
+     * 为什么要**挂在气泡上**而不是只留一个全局"最近决策"：用户看到"已上云（端侧不达标）"时，
+     * 问的是"**这一条**为什么上云"。全局字段只反映最后一次，往上翻就没了依据。
+     */
+    val reason: String = "",
+    /** 升级阶段的原因码（如 `degenerate` / `timeout`）；未升级为空。与 [reason] 分开存，才能分别解释。 */
+    val escalateReason: String = "",
 )
 
 /** UI 状态（单一数据源，避免散在各处的 mutable 字段）。 */
@@ -276,18 +285,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { st ->
                     val last = st.bubbles.lastOrNull()
                     val sources = RetrievalSources.parse(result.toolResults)
+                    val reasonLine = decisionLine(result)
                     val patched = if (last != null && !last.fromUser) {
                         st.bubbles.dropLast(1) +
                             last.copy(text = result.text, execution = result.execution,
-                                escalated = result.escalated, sources = sources)
+                                escalated = result.escalated, sources = sources,
+                                reason = result.decision.reason,
+                                escalateReason = result.escalateReason)
                     } else {
-                        st.bubbles + Bubble(false, result.text, result.execution, result.escalated, sources)
+                        st.bubbles + Bubble(false, result.text, result.execution, result.escalated,
+                            sources, result.decision.reason, result.escalateReason)
                     }
                     st.copy(
                         busy = false, thinking = "", bubbles = patched, audit = stats,
                         toolEvalSummary = container.toolEval.summary(),
-                        lastReason = result.decision.let { d -> "${d.plane.wire} · ${d.reason}" } +
-                            if (result.escalated) " · 升级：${result.escalateReason}" else "",
+                        lastReason = reasonLine,
                         error = result.error,
                     )
                 }
@@ -309,6 +321,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         container.audit.clear()
         container.toolEval.reset()
         refreshAudit()
+    }
+
+    /**
+     * 把一次结果压成"平面 · 原因"一行。
+     *
+     * `clientEscalated` 必须单独看：服务端回传的 `execution.escalated` 只统计**服务端内部**的升级，
+     * 而端侧宿主自己失败后改道云端这件事服务端并不知道——只看服务端字段会把
+     * "客户端刚因为端侧不可用改道"显示成平平无奇的"云端完成"。
+     */
+    private fun decisionLine(result: com.sekb.shared.chat.ChatOutcome): String {
+        val head = "${result.decision.plane.wire} · ${result.decision.reason}"
+        val tail = when {
+            result.escalated && result.escalateReason.isNotEmpty() -> " · ${result.escalateReason}"
+            else -> ""
+        }
+        return head + tail
     }
 
     companion object {

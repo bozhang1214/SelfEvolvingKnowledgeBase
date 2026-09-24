@@ -59,6 +59,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -347,20 +349,53 @@ private fun ExecutionBadge(bubble: Bubble) {
     val isEdge = bubble.execution?.primaryPlane == Plane.EDGE.wire
     val color = if (isEdge) SekbColors.OnDeviceGreen else SekbColors.CloudGold
     val model = bubble.execution?.model?.takeIf { it.isNotEmpty() }
-    Row(
-        modifier = Modifier.padding(top = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            if (isEdge) Icons.Filled.PhoneAndroid else Icons.Filled.Cloud,
-            contentDescription = null, tint = color, modifier = Modifier.size(12.dp),
+
+    // 徽章必须能自己解释"为什么"：只给"已上云（端侧不达标）"这种结论，
+    // 用户（正确地）会追问"我的数据出去了吗、为什么"——而这正是端侧产品的核心承诺。
+    var open by remember(bubble.reason, bubble.escalateReason) { mutableStateOf(false) }
+    // 与徽章**同源**的事实（isEdge 来自 execution.primaryPlane）——不能从 decision.plane 推，
+    // 否则升级场景下解释会与徽章互相打脸（第一版就是这么错的）
+    val explain = remember(bubble.reason, bubble.escalateReason, isEdge, bubble.escalated) {
+        PlaneExplain.outcome(
+            completedOnDevice = isEdge,
+            escalated = bubble.escalated || (bubble.execution?.escalated ?: 0) > 0,
+            decisionReason = bubble.reason,
+            escalateReason = bubble.escalateReason,
         )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            badge + (model?.let { " · $it" } ?: ""),
-            fontSize = 11.sp,
-            color = color,
-        )
+    }
+
+    Column(modifier = Modifier.padding(top = 4.dp)) {
+        Row(
+            modifier = Modifier.clickable(enabled = explain.isNotEmpty()) { open = !open },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (isEdge) Icons.Filled.PhoneAndroid else Icons.Filled.Cloud,
+                contentDescription = null, tint = color, modifier = Modifier.size(12.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                badge + (model?.let { " · $it" } ?: ""),
+                fontSize = 11.sp,
+                color = color,
+            )
+            if (explain.isNotEmpty()) {
+                Icon(
+                    if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (open) "收起原因" else "为什么",
+                    tint = color,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
+        if (open && explain.isNotEmpty()) {
+            Text(
+                explain,
+                fontSize = 11.sp,
+                color = SekbColors.TextSecondary,
+                modifier = Modifier.padding(top = 3.dp, start = 16.dp),
+            )
+        }
     }
 }
 
