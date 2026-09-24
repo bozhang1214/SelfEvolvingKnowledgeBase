@@ -612,18 +612,26 @@ adb shell am start -n com.sekb.ondevice/.MainActivity --ez selftest true
 adb logcat -s SEKB_SELFTEST:V      # ⚠️ 必须实时抓：本机日志刷得快，等 2 分钟再 -d 会被挤掉
 ```
 
-**自检结果：`PASS=20 FAIL=1 SKIP=7`**（`FAIL` 见下，是自检逻辑缺陷而非产品缺陷）。
+**自检结果（最终）：`PASS=28 FAIL=0 SKIP=4`** ✅
+
+> 过程：首次真机运行是 `PASS=20 FAIL=1 SKIP=7`，那 1 个 `FAIL` 经查是**自检逻辑缺陷**
+> （见下第 2 条）而非产品缺陷；修复并重装后复跑得 `28/0/4`，`FAIL` 归零。
+> 剩余 4 个 `SKIP` 全部是**缺前置条件**：`cloud_login`（缺账号）、
+> `policy_apply_rebuild` / `policy_rollback_restores_threshold` / `policy_threshold_wired`（缺注入的策略包）。
+> 其中 `policy_refresh — 未应用：policy_bad_signature` 反而是 **PASS**：L1 策略的验签**正确拒绝了坏签名**。
 
 **真机性能数字（RFC §7「真机验收」要的那几个）**：
 
 | 指标 | 真机实测 | 对照 |
 |---|---|---|
-| 端侧 LLM 首字延迟（TTFT） | **81 ms**（`plane=edge`，真实生成 44 字符） | 端到端参考 119 ms（M1） |
-| 端侧嵌入 | **3 ms / 条**（ONNX int8，512 维） | 评测集均值曾记 38 ms（不同机型/口径） |
+| 端侧 LLM 首字延迟（TTFT） | **81–277 ms**（`plane=edge`；随模型冷/热状态波动） | 端到端参考 119 ms（M1） |
+| 端侧嵌入 | **3–5 ms / 条**（ONNX int8，512 维） | 评测集均值曾记 38 ms（不同机型/口径） |
 | 端侧检索 | **3 ms** | — |
 | 检索命中 | `doc-rag` 分 **0.690**；无关文本余弦 0.283 | 模拟器 0.690（一致） |
 | SQLite 持久化 | **启动时已有=3 块** → 跨进程存活 | — |
 | 工具调用 JSON | `{"tool":"device_time","args":{}}` 合法 | — |
+| PDF 抽取 | **78 字符 / 1 页**（开头 `On-device RAG keeps the index…`） | **与 iOS/macOS 同一份样本的 78 字符一致** |
+| 文档删除不误清全库 | `rag_delete_file` 文档数 4→3、剩余切片=3；`rag_pdf_delete` 同上 | — |
 
 **两条实测踩到的坑（都已修）**：
 
