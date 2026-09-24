@@ -7,8 +7,9 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.sekb.ondevice.ui.ChatScreen
+import com.sekb.ondevice.ui.AppShell
 import com.sekb.ondevice.ui.ChatViewModel
+import com.sekb.ondevice.ui.theme.SekbTheme
 
 /** 唯一 Activity：装配 ViewModel 与界面，不放业务逻辑。 */
 class MainActivity : ComponentActivity() {
@@ -32,10 +33,11 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            MaterialTheme {
-                Surface {
+            // 主题在 SekbTheme 里定：主色对齐网页端（AntD 蓝），并定义"本机/云端"语义色
+            SekbTheme {
+                Surface(color = MaterialTheme.colorScheme.background) {
                     val vm: ChatViewModel = viewModel()
-                    ChatScreen(vm)
+                    AppShell(vm)
                 }
             }
         }

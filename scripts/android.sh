@@ -17,6 +17,22 @@
 # 依赖：JDK 17+（优先用 Android Studio 自带 JBR）、Android SDK。
 set -euo pipefail
 
+# 真机安装要用 adb（脚本其余部分只走 gradle，不需要它）
+# ⚠️ 这里**不能**用 `find ... -name adb`：`.tooling/android-sdk/platform-tools` 是软链接，
+# 而 find 默认不跟随符号链接 → 结果是空字符串，接着报
+# `line 166: : command not found`（实测踩到，且错误信息完全指不到真正原因）。
+# 直接给路径、再兜底到本机 Android SDK。
+if [ -z "${ADB_BIN:-}" ]; then
+    for _cand in \
+        "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.tooling/android-sdk/platform-tools/adb" \
+        "$HOME/Library/Android/sdk/platform-tools/adb"; do
+        if [ -x "$_cand" ]; then ADB_BIN="$_cand"; break; fi
+    done
+fi
+if [ -z "${ADB_BIN:-}" ]; then
+    echo "❌ 找不到 adb：请设 ADB_BIN，或跑一次 scripts/android.sh test 生成 .tooling/android-sdk" >&2
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$ROOT/apps/android"
 
@@ -74,6 +90,88 @@ require_device() {
     fi
 }
 
+# ============================================================
+# 真机安装：自动越过华为的安装确认框
+# ============================================================
+# 背景（实测，2026-09-24 华为 Mate 40 Pro / HarmonyOS 4.2）：
+# `adb install` 会在设备侧弹出两层确认——先是系统的「风险提示 → 继续安装」，
+# 点掉后交给「华为应用市场」的风险检测再确认一次。**不点就一直挂着**
+# （表现为 adb install 无限等待，而 macOS 没有 timeout 兜底）。
+#
+# 为什么不直接 `input tap x y`：按钮位置随机型/分辨率/系统版本变，硬编码坐标等于
+# "只在我这台能用"。这里用 `uiautomator dump` **按按钮文字反查坐标**。
+CONFIRM_TEXTS=("继续安装" "仍要安装" "允许" "确定" "安装")
+
+# 华为的"应用市场风险检测"页里，`继续安装` **前面还有一个确认框**
+# （"已了解此应用未经检测…"），不勾选则点 `继续安装` 无效——实测表现为
+# 反复点击但对话框一直在。所以这里一并处理：先勾确认框，再点继续。
+# 输出两行 "ack_x ack_y" 与 "ok_x ok_y"（缺失行留空）。
+_find_install_targets() {
+    "$ADB_BIN" shell uiautomator dump /sdcard/sekb_ui.xml >/dev/null 2>&1 || return 1
+    "$ADB_BIN" pull /sdcard/sekb_ui.xml /tmp/sekb_ui.xml >/dev/null 2>&1 || return 1
+    python3 - /tmp/sekb_ui.xml "${CONFIRM_TEXTS[@]}" <<'PYEOF'
+import re, sys, xml.etree.ElementTree as ET
+path, *texts = sys.argv[1:]
+try:
+    root = ET.parse(path).getroot()
+except Exception:
+    print("")
+    print("")
+    sys.exit(0)
+
+def center(node):
+    m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds") or "")
+    if not m:
+        return None
+    x1, y1, x2, y2 = map(int, m.groups())
+    return f"{(x1 + x2) // 2} {(y1 + y2) // 2}"
+
+ack = ok = ""
+for node in root.iter("node"):
+    if node.get("clickable") != "true":
+        continue
+    label = (node.get("text") or "").strip()
+    # 确认勾选框（措辞会变，所以用前缀匹配）
+    if not ack and (label.startswith("已了解") or label.startswith("我已阅读")):
+        ack = center(node) or ""
+    # 确认按钮：只认 clickable 的，避免点到标题/商品名里的"安装"（实测页面里有多个）
+    if not ok and label in texts:
+        ok = center(node) or ""
+print(ack)
+print(ok)
+PYEOF
+}
+
+# 后台守着安装确认框，直到超时（安装本身由前台 adb install 负责）
+_auto_confirm_loop() {
+    local deadline=$(( SECONDS + ${1:-300} ))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        local act xy
+        act="$("$ADB_BIN" shell dumpsys activity activities 2>/dev/null | grep -m1 mResumedActivity || true)"
+        case "$act" in
+            *packageinstaller*|*appgallery*|*InstallDist*|*riskcheck*)
+                targets="$(_find_install_targets || true)"
+                # 用 bash 内建 read 取两行，**不要**用 `| sed -n 1p`：
+                # 后者会在 sed 提前退出时让 python 写已关闭的管道，打出
+                # `BrokenPipeError` 一堆噪音（实测），把真正的安装结果淹掉
+                ack=""; ok=""
+                { IFS= read -r ack || true; IFS= read -r ok || true; } <<< "$targets"
+                if [ -n "$ack" ]; then
+                    # shellcheck disable=SC2086
+                    "$ADB_BIN" shell input tap $ack >/dev/null 2>&1
+                    sleep 1
+                fi
+                if [ -n "$ok" ]; then
+                    echo "   ↳ 越过安装确认框（勾选 ${ack:-无} / 继续 ${ok}）"
+                    # shellcheck disable=SC2086
+                    "$ADB_BIN" shell input tap $ok >/dev/null 2>&1
+                fi
+                ;;
+        esac
+        sleep 2
+    done
+}
+
 # ⚠️ 构建期 `-P` 属性必须在 **assemble 与 install 两条路径上都传**。
 # 曾经的 bug：只有 `assemble` 传了 `-PsekbEdgeUrl`，而 `install` 没传 —— 于是
 #   `SEKB_EDGE_URL=http://127.0.0.1:11434/v1 bash scripts/android.sh install`
@@ -96,6 +194,19 @@ for task in "$@"; do
         # install 与 assemble 传**同一组**属性：只传一边是上面那个 bug 的根源
         install)   ./gradlew :app:installDebug --console=plain $MINOR_FLAG \
                        ${PROP_FLAGS[@]+"${PROP_FLAGS[@]}"} ;;
+        install-real)
+            # 面向"装一次要过华为确认框"的真机：gradle 只出 APK，安装交给 adb + 自动确认
+            ./gradlew :app:assembleDebug --console=plain $MINOR_FLAG \
+                ${PROP_FLAGS[@]+"${PROP_FLAGS[@]}"} || exit 1
+            APK="$(find app/build/outputs/apk/debug -name '*-arm64-v8a-debug.apk' | head -1)"
+            [ -n "$APK" ] || { echo "❌ 找不到 APK"; exit 1; }
+            echo "安装 ${APK}（设备侧确认框会被自动点击）"
+            _auto_confirm_loop 300 &
+            watchdog=$!
+            "$ADB_BIN" install -r "$APK"
+            rc=$?
+            kill "$watchdog" 2>/dev/null || true
+            [ $rc -eq 0 ] || exit $rc ;;
         push-policy)
             # 自检用的**已签名**策略包（离线验证「应用→重建→阈值生效→回滚」）。
             # 生成方式见 README/VERIFICATION：用服务端 edge_policy 的 canonical+HMAC 签一份，
