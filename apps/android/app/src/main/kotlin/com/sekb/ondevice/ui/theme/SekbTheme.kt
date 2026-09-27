@@ -6,6 +6,9 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -48,6 +51,41 @@ object SekbColors {
     val CloudGold = Color(0xFFD48806)
     val DangerRed = Color(0xFFD4380D)
 }
+
+/**
+ * **语义色**：只有在表达"这条在哪算的"时才用（详见 [SekbColors] 的说明）。
+ *
+ * ## 为什么它必须随明暗切换（踩过的真实缺陷）
+ *
+ * 第一版把 `SekbColors.OnDeviceGreen` 之类当**常量**直接写在页面里。
+ * 结果深色模式下：输入框还是近白的 `#F0F2F5`、空状态圆形还是近白的 `#E6F0FF`、
+ * 边框在深底上几乎看不见——**"深色模式"只在 `SekbTheme` 里定义了配色，而页面根本没走主题**。
+ * 所以语义色也必须有明暗两套（深色下要更亮才够对比度），并通过 [LocalSekbSemantic] 取。
+ */
+@Immutable
+data class SekbSemantic(
+    /** 本机完成 */
+    val onDevice: Color,
+    /** 已上云 / 端侧不可用 */
+    val cloud: Color,
+    /** 失败 */
+    val danger: Color,
+)
+
+private val LightSemantic = SekbSemantic(
+    onDevice = SekbColors.OnDeviceGreen,
+    cloud = SekbColors.CloudGold,
+    danger = SekbColors.DangerRed,
+)
+
+private val DarkSemantic = SekbSemantic(
+    // 深色底上要提亮：直接用 light 的绿/金会糊在背景里
+    onDevice = Color(0xFF73D13D),
+    cloud = Color(0xFFFFC53D),
+    danger = Color(0xFFFF7875),
+)
+
+val LocalSekbSemantic = staticCompositionLocalOf { LightSemantic }
 
 private val LightScheme = lightColorScheme(
     primary = SekbColors.Primary,
@@ -99,9 +137,13 @@ fun SekbTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    MaterialTheme(
-        colorScheme = if (darkTheme) DarkScheme else LightScheme,
-        typography = SekbTypography,
-        content = content,
-    )
+    CompositionLocalProvider(
+        LocalSekbSemantic provides if (darkTheme) DarkSemantic else LightSemantic,
+    ) {
+        MaterialTheme(
+            colorScheme = if (darkTheme) DarkScheme else LightScheme,
+            typography = SekbTypography,
+            content = content,
+        )
+    }
 }

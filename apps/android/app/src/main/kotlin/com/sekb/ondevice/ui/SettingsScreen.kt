@@ -47,7 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sekb.ondevice.BuildConfig
-import com.sekb.ondevice.ui.theme.SekbColors
+import com.sekb.ondevice.ui.theme.LocalSekbSemantic
 
 /**
  * 设置页：把上一版摊在聊天页上的东西**分组收进来**。
@@ -108,7 +108,7 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
                 title,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = SekbColors.TextSecondary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(10.dp))
             content()
@@ -124,7 +124,7 @@ private fun AccountCard(viewModel: ChatViewModel, state: ChatUiState) {
                 Icon(
                     Icons.Filled.CheckCircle,
                     contentDescription = null,
-                    tint = SekbColors.OnDeviceGreen,
+                    tint = LocalSekbSemantic.current.onDevice,
                     modifier = Modifier.size(18.dp),
                 )
                 Spacer(Modifier.width(8.dp))
@@ -134,7 +134,7 @@ private fun AccountCard(viewModel: ChatViewModel, state: ChatUiState) {
                         // 设备 ID 是排障要用的，所以保留，但不占主视觉
                         "设备 ${state.deviceId.take(8)}…",
                         fontSize = 11.sp,
-                        color = SekbColors.TextSecondary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace,
                     )
                 }
@@ -143,7 +143,7 @@ private fun AccountCard(viewModel: ChatViewModel, state: ChatUiState) {
             Text(
                 "接入后即可使用云端知识库；端侧推理与本地检索不需要接入。",
                 fontSize = 12.sp,
-                color = SekbColors.TextSecondary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(
@@ -189,9 +189,9 @@ private fun ConnectionCard(
                     .size(6.dp)
                     .background(
                         when (state.edgeReachable) {
-                            true -> SekbColors.OnDeviceGreen
-                            false -> SekbColors.CloudGold
-                            null -> SekbColors.TextSecondary
+                            true -> LocalSekbSemantic.current.onDevice
+                            false -> LocalSekbSemantic.current.cloud
+                            null -> MaterialTheme.colorScheme.onSurfaceVariant
                         },
                         CircleShape,
                     ),
@@ -244,7 +244,7 @@ private fun PrivacyCard(viewModel: ChatViewModel, state: ChatUiState) {
         StatRow("被权限闸门拦截", "${state.audit.denied} 次")
         StatRow("越权拦截率", state.deniedRateText)
         Spacer(Modifier.height(6.dp))
-        Text(state.toolEvalSummary, fontSize = 11.sp, color = SekbColors.TextSecondary)
+        Text(state.toolEvalSummary, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(4.dp))
         TextButton(onClick = viewModel::clearAudit) { Text("清空统计", fontSize = 12.sp) }
     }
@@ -269,7 +269,7 @@ private fun AboutCard(state: ChatUiState) {
         Text(
             "文档索引与向量都存在这台设备上；标记为「设备专属」的内容不会被上传。",
             fontSize = 11.sp,
-            color = SekbColors.TextSecondary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 6.dp),
         )
     }

@@ -70,7 +70,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.sekb.ondevice.ui.theme.SekbColors
+import com.sekb.ondevice.ui.theme.LocalSekbSemantic
 import com.sekb.shared.model.Plane
 
 /**
@@ -192,10 +192,10 @@ fun ChatScreen(
 @Composable
 private fun EdgeStatusLine(reachable: Boolean?, enrolled: Boolean) {
     val (dot, text) = when {
-        !enrolled -> SekbColors.TextSecondary to "未接入云端账号"
-        reachable == true -> SekbColors.OnDeviceGreen to "端侧就绪 · 数据不出本机"
-        reachable == false -> SekbColors.CloudGold to "端侧不可用 · 将使用云端"
-        else -> SekbColors.TextSecondary to "正在检查端侧…"
+        !enrolled -> MaterialTheme.colorScheme.onSurfaceVariant to "未接入云端账号"
+        reachable == true -> LocalSekbSemantic.current.onDevice to "端侧就绪 · 数据不出本机"
+        reachable == false -> LocalSekbSemantic.current.cloud to "端侧不可用 · 将使用云端"
+        else -> MaterialTheme.colorScheme.onSurfaceVariant to "正在检查端侧…"
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
@@ -204,7 +204,7 @@ private fun EdgeStatusLine(reachable: Boolean?, enrolled: Boolean) {
                 .background(dot, CircleShape),
         )
         Spacer(Modifier.width(6.dp))
-        Text(text, fontSize = 11.sp, color = SekbColors.TextSecondary)
+        Text(text, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -227,10 +227,10 @@ private fun EmptyState(modifier: Modifier = Modifier, onPick: (String) -> Unit) 
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
-            modifier = Modifier.size(56.dp).background(SekbColors.PrimaryContainer, CircleShape),
+            modifier = Modifier.size(56.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Filled.SmartToy, contentDescription = null, tint = SekbColors.Primary)
+            Icon(Icons.Filled.SmartToy, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
         }
         Spacer(Modifier.height(14.dp))
         Text("SEKB 端侧助手", style = MaterialTheme.typography.titleMedium)
@@ -238,7 +238,7 @@ private fun EmptyState(modifier: Modifier = Modifier, onPick: (String) -> Unit) 
         Text(
             "文档与推理都在这台设备上完成，设备专属内容不会离开本机。",
             style = MaterialTheme.typography.bodySmall,
-            color = SekbColors.TextSecondary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(20.dp))
         samples.forEach { q ->
@@ -249,7 +249,7 @@ private fun EmptyState(modifier: Modifier = Modifier, onPick: (String) -> Unit) 
                     .clickable { onPick(q) },
                 shape = RoundedCornerShape(10.dp),
                 color = MaterialTheme.colorScheme.surface,
-                border = androidx.compose.foundation.BorderStroke(1.dp, SekbColors.Border),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
                 Text(
                     q,
@@ -269,7 +269,7 @@ private fun BubbleRow(bubble: Bubble) {
         horizontalArrangement = if (bubble.fromUser) Arrangement.End else Arrangement.Start,
     ) {
         if (!bubble.fromUser) {
-            Avatar(Icons.Filled.SmartToy, SekbColors.PrimaryContainer, SekbColors.Primary)
+            Avatar(Icons.Filled.SmartToy, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(8.dp))
         }
         Column(
@@ -282,10 +282,10 @@ private fun BubbleRow(bubble: Bubble) {
                     bottomStart = if (bubble.fromUser) 14.dp else 4.dp,
                     bottomEnd = if (bubble.fromUser) 4.dp else 14.dp,
                 ),
-                color = if (bubble.fromUser) SekbColors.Primary
+                color = if (bubble.fromUser) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.surface,
                 border = if (bubble.fromUser) null
-                else androidx.compose.foundation.BorderStroke(1.dp, SekbColors.Border),
+                else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
                 // 用户自己的话按纯文本显示；**助手的回答必须渲染 Markdown**——
                 // 模型输出里带 `# 标题` / `**粗体**` / 表格，原样显示就是给用户看源码
@@ -316,7 +316,7 @@ private fun BubbleRow(bubble: Bubble) {
         }
         if (bubble.fromUser) {
             Spacer(Modifier.width(8.dp))
-            Avatar(Icons.Filled.PhoneAndroid, SekbColors.Fill, SekbColors.TextSecondary)
+            Avatar(Icons.Filled.PhoneAndroid, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -347,7 +347,7 @@ private fun ExecutionBadge(bubble: Bubble) {
     val badge = ChatViewModel.badgeOf(bubble.execution, bubble.escalated)
     if (badge.isEmpty()) return
     val isEdge = bubble.execution?.primaryPlane == Plane.EDGE.wire
-    val color = if (isEdge) SekbColors.OnDeviceGreen else SekbColors.CloudGold
+    val color = if (isEdge) LocalSekbSemantic.current.onDevice else LocalSekbSemantic.current.cloud
     val model = bubble.execution?.model?.takeIf { it.isNotEmpty() }
 
     // 徽章必须能自己解释"为什么"：只给"已上云（端侧不达标）"这种结论，
@@ -392,7 +392,7 @@ private fun ExecutionBadge(bubble: Bubble) {
             Text(
                 explain,
                 fontSize = 11.sp,
-                color = SekbColors.TextSecondary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 3.dp, start = 16.dp),
             )
         }
@@ -413,12 +413,12 @@ private fun SourcesRow(
             Text(
                 "引用 ${sources.size} 段本机资料",
                 fontSize = 11.sp,
-                color = SekbColors.Primary,
+                color = MaterialTheme.colorScheme.primary,
             )
             Icon(
                 if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                 contentDescription = if (expanded) "收起" else "展开",
-                tint = SekbColors.Primary,
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(14.dp),
             )
         }
@@ -426,7 +426,7 @@ private fun SourcesRow(
             Card(
                 modifier = Modifier.padding(top = 4.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = androidx.compose.foundation.BorderStroke(1.dp, SekbColors.Border),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 shape = RoundedCornerShape(10.dp),
             ) {
                 sources.forEach { s ->
@@ -437,13 +437,13 @@ private fun SourcesRow(
                             Text(
                                 "%.2f".format(s.score),
                                 fontSize = 11.sp,
-                                color = SekbColors.TextSecondary,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                         Text(
                             s.snippet,
                             fontSize = 11.sp,
-                            color = SekbColors.TextSecondary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
                         )
                     }
@@ -465,7 +465,7 @@ private fun ThinkingRow(thinking: String) {
         Text(
             thinking.ifEmpty { "正在本机生成…" },
             fontSize = 12.sp,
-            color = SekbColors.TextSecondary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -488,7 +488,7 @@ private fun InputBar(
                 Icon(
                     Icons.Filled.Description,
                     contentDescription = "导入本机文档",
-                    tint = SekbColors.TextSecondary,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             TextField(
@@ -499,8 +499,8 @@ private fun InputBar(
                 maxLines = 4,
                 shape = RoundedCornerShape(20.dp),
                 colors = TextFieldDefaults.colors(
-                    focusedContainerColor = SekbColors.Fill,
-                    unfocusedContainerColor = SekbColors.Fill,
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                     focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent,
                 ),
@@ -513,7 +513,7 @@ private fun InputBar(
                 enabled = value.isNotBlank() && !busy,
                 shape = CircleShape,
                 colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = SekbColors.Primary,
+                    containerColor = MaterialTheme.colorScheme.primary,
                 ),
             ) {
                 Icon(Icons.Filled.Send, contentDescription = "发送", modifier = Modifier.size(18.dp))

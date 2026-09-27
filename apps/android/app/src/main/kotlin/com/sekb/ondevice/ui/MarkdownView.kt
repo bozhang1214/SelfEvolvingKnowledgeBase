@@ -30,7 +30,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.sekb.ondevice.ui.theme.SekbColors
 
 /**
  * 把 [Markdown] 解析出来的块渲染成 Compose 组件。
@@ -53,9 +52,12 @@ fun MarkdownText(
 
 @Composable
 private fun BlockView(block: Markdown.Block, color: Color) {
+    // 一次取好、往下传：行内码底色与链接色在明暗两套主题下不同
+    val codeBg = MaterialTheme.colorScheme.surfaceVariant
+    val linkColor = MaterialTheme.colorScheme.primary
     when (block) {
         is Markdown.Block.Heading -> Text(
-            inlineText(block.text, color),
+            inlineText(block.text, color, codeBg, linkColor),
             fontSize = when (block.level) {
                 1 -> 18.sp
                 2 -> 16.sp
@@ -66,7 +68,7 @@ private fun BlockView(block: Markdown.Block, color: Color) {
         )
 
         is Markdown.Block.Paragraph -> Text(
-            inlineText(block.text, color),
+            inlineText(block.text, color, codeBg, linkColor),
             style = MaterialTheme.typography.bodyMedium,
             color = color,
         )
@@ -76,7 +78,7 @@ private fun BlockView(block: Markdown.Block, color: Color) {
                 Row {
                     Text("•  ", color = color, style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        inlineText(item, color),
+                        inlineText(item, color, codeBg, linkColor),
                         style = MaterialTheme.typography.bodyMedium,
                         color = color,
                     )
@@ -89,7 +91,7 @@ private fun BlockView(block: Markdown.Block, color: Color) {
                 Row {
                     Text("${idx + 1}.  ", color = color, style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        inlineText(item, color),
+                        inlineText(item, color, codeBg, linkColor),
                         style = MaterialTheme.typography.bodyMedium,
                         color = color,
                     )
@@ -106,20 +108,20 @@ private fun BlockView(block: Markdown.Block, color: Color) {
                 modifier = Modifier
                     .width(3.dp)
                     .fillMaxHeight()
-                    .background(SekbColors.Border),
+                    .background(MaterialTheme.colorScheme.outlineVariant),
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                inlineText(block.lines.joinToString("\n"), color),
+                inlineText(block.lines.joinToString("\n"), color, codeBg, linkColor),
                 style = MaterialTheme.typography.bodySmall,
-                color = SekbColors.TextSecondary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
         is Markdown.Block.Code -> Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SekbColors.Fill, RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
                 .horizontalScroll(rememberScrollState())
                 .padding(10.dp),
         ) {
@@ -133,13 +135,15 @@ private fun BlockView(block: Markdown.Block, color: Color) {
 
         is Markdown.Block.Table -> TableView(block, color)
 
-        Markdown.Block.Divider -> HorizontalDivider(color = SekbColors.Border)
+        Markdown.Block.Divider -> HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
 /** 表格：横向可滚动（模型给的表格列数不定，硬挤会把字压成竖条）。 */
 @Composable
 private fun TableView(table: Markdown.Block.Table, color: Color) {
+    val codeBg = MaterialTheme.colorScheme.surfaceVariant
+    val linkColor = MaterialTheme.colorScheme.primary
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -148,7 +152,7 @@ private fun TableView(table: Markdown.Block.Table, color: Color) {
         Row {
             table.header.forEach { cell ->
                 Text(
-                    inlineText(cell, color),
+                    inlineText(cell, color, codeBg, linkColor),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = color,
@@ -156,12 +160,12 @@ private fun TableView(table: Markdown.Block.Table, color: Color) {
                 )
             }
         }
-        HorizontalDivider(color = SekbColors.Border)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         table.rows.forEach { row ->
             Row {
                 row.forEach { cell ->
                     Text(
-                        inlineText(cell, color),
+                        inlineText(cell, color, codeBg, linkColor),
                         fontSize = 12.sp,
                         color = color,
                         modifier = Modifier.width(96.dp).padding(vertical = 4.dp, horizontal = 4.dp),
@@ -172,8 +176,20 @@ private fun TableView(table: Markdown.Block.Table, color: Color) {
     }
 }
 
-/** 行内片段 → AnnotatedString。 */
-private fun inlineText(text: String, color: Color): AnnotatedString =
+/**
+ * 行内片段 → AnnotatedString。
+ *
+ * ⚠️ 它**不是** `@Composable`（要在任意上下文里构造文本），所以行内码底色与链接色
+ * 必须**由调用方传进来**——直接读 `MaterialTheme` 会编译失败
+ * （"@Composable invocations can only happen from the context of a @Composable function"）。
+ * 这也是好事：把"这段文本用什么底色"变成显式参数，而不是藏着一个隐式的主题读取。
+ */
+private fun inlineText(
+    text: String,
+    color: Color,
+    codeBg: Color,
+    linkColor: Color,
+): AnnotatedString =
     buildAnnotatedString {
         Markdown.inline(text).forEach { span ->
             when (span) {
@@ -188,13 +204,13 @@ private fun inlineText(text: String, color: Color): AnnotatedString =
                     SpanStyle(
                         color = color,
                         fontFamily = FontFamily.Monospace,
-                        background = SekbColors.Fill,
+                        background = codeBg,
                     ),
                 ) { append(span.text) }
                 // 链接先只显示文字 + 主题色：端侧场景里点开外链的机会很少，
                 // 而 `LocalUriHandler` 在无浏览器/无网络的设备上会静默失败，不如不点
                 is Markdown.Span.Link -> withStyle(
-                    SpanStyle(color = SekbColors.Primary),
+                    SpanStyle(color = linkColor),
                 ) { append(span.text) }
             }
         }

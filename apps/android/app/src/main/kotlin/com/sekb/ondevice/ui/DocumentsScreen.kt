@@ -43,7 +43,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.sekb.ondevice.ui.theme.SekbColors
 import com.sekb.shared.rag.DocumentInfo
 
 /**
@@ -80,7 +79,7 @@ fun DocumentsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                         Text(
                             state.documentSummary,
                             fontSize = 11.sp,
-                            color = SekbColors.TextSecondary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 },
@@ -93,7 +92,7 @@ fun DocumentsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                         arrayOf("text/*", "application/json", "text/markdown", "text/csv"),
                     )
                 },
-                containerColor = SekbColors.Primary,
+                containerColor = MaterialTheme.colorScheme.primary,
             ) {
                 Icon(Icons.Filled.Add, contentDescription = "导入文档", tint = androidx.compose.ui.graphics.Color.White)
             }
@@ -105,7 +104,7 @@ fun DocumentsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                 Text(
                     "正在导入并切分…",
                     fontSize = 12.sp,
-                    color = SekbColors.TextSecondary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
             }
@@ -133,10 +132,10 @@ private fun EmptyDocs() {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
-            modifier = Modifier.size(56.dp).background(SekbColors.PrimaryContainer, CircleShape),
+            modifier = Modifier.size(56.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Filled.Description, contentDescription = null, tint = SekbColors.Primary)
+            Icon(Icons.Filled.Description, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
         }
         Spacer(Modifier.height(14.dp))
         Text("还没有本机资料", style = MaterialTheme.typography.titleMedium)
@@ -145,7 +144,7 @@ private fun EmptyDocs() {
             "导入 PDF 或文本后，助手就能只在本机检索它们来回答——" +
                 "这些内容不会被上传。",
             style = MaterialTheme.typography.bodySmall,
-            color = SekbColors.TextSecondary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -173,14 +172,14 @@ private fun DocumentCard(doc: DocumentInfo, onDelete: () -> Unit) {
                     // "段"是内部概念，但对用户有意义（检索的单位），所以保留并配一句解释
                     "${doc.chunks} 个片段 · ${humanSize(doc.sizeBytes)}",
                     fontSize = 11.sp,
-                    color = SekbColors.TextSecondary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             IconButton(onClick = onDelete) {
                 Icon(
                     Icons.Filled.Delete,
                     contentDescription = "删除 ${doc.name}",
-                    tint = SekbColors.TextSecondary,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
                 )
             }

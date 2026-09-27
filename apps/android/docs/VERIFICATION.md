@@ -738,3 +738,46 @@ adb logcat -s SEKB_SELFTEST:V      # ⚠️ 必须实时抓：本机日志刷得
   「端侧没能达标（原因：edge_unavailable），这次改由云端重答。」——与徽章一致。
   该码当时不在表里，被**原样透出**，因此被发现并补进翻译表。
 - Markdown **表格**渲染也在本轮真机上首次确认（此前只做过代码对齐）。
+
+---
+
+## 1.4 深色模式修复 + 配色纪律的机械检查（2026-09-24）
+
+### 查到的问题：**"我定义了深色配色"这句话当时是不成立的**
+
+`SekbTheme` 里写了 `DarkScheme`，但三个页面里**有 42 处硬编码** `SekbColors.*` 常量
+（`Fill` `#F0F2F5` 近白、`PrimaryContainer` `#E6F0FF` 近白蓝、`Border` `#E5E7EB`、`Primary` `#1677FF`），
+**页面根本没走主题**。深色模式下会是：输入框与头像变**白块**、空状态变**白圆**、边框在深底上几乎看不见。
+
+### 修法
+
+- 页面里的主题色一律改走 `MaterialTheme.colorScheme.*`
+  （`Fill`→`surfaceVariant`、`Border`→`outlineVariant`、`TextSecondary`→`onSurfaceVariant`、
+  `Primary`→`primary`、`PrimaryContainer`→`primaryContainer`）。
+- **语义色**（本机完成 = 绿 / 已上云 = 金 / 失败 = 红）改为 `SekbSemantic` + `LocalSekbSemantic`，
+  **明暗两套**（深色下提亮，否则糊在背景里）。
+- `MarkdownView.inlineText()` **不是** `@Composable`（要在任意上下文构造文本），
+  所以行内码底色与链接色改为**显式参数**——直接读 `MaterialTheme` 会编译失败；
+  这也顺带把"这段文本用什么底色"从隐式主题读取变成显式契约。
+
+> 替换时的坑：`SekbColors.Primary` 是 `SekbColors.PrimaryContainer` 的**前缀**，
+> 必须先替换长的，否则短的会把长的截断成半成品。
+
+### 新增机械检查 `ThemeColorDisciplineTest`
+
+深色模式坏掉**在浅色模式下完全看不出来**，靠记性守不住。所以加两条 JVM 单测：
+
+1. 页面里**不许出现** `SekbColors.`（`theme/` 豁免；注释里提到不算）；扫到的文件数 < 3 直接判失败，
+   避免"目录找错 → 静默通过"；
+2. `Markdown.kt` / `PlaneExplain.kt` 这类纯逻辑文件**不许 import Compose**（要能被 JVM 单测直接跑）。
+
+**并验证了这条检查真的会失败**（一个不能失败的检查等于不存在）：
+往 `ChatScreen.kt` 注入一处 `SekbColors.Primary` → `FAILED` 且精确指到 `ChatScreen.kt:128`；
+还原 → 立刻回绿。
+
+### 验证
+
+- `bash scripts/android.sh test` → **258 用例 / 0 失败**。
+- `grep -rn 'SekbColors\.' ui/*.kt | grep -v SekbTheme` → **空**（页面已全部走主题）。
+- ⚠️ **未做**：深色模式的**真机目视确认**——验证时手机已从 adb 断开（`adb devices` 为空）。
+  代码层面已对齐，但"看起来对不对"仍需一次真机截图，见下节缺口。
