@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandLess
@@ -125,11 +126,21 @@ fun ChatScreen(
                 ),
                 title = {
                     Column {
-                        Text("SEKB", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            state.conversationTitle.ifEmpty { "SEKB" },
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
                         EdgeStatusLine(state.edgeReachable, state.enrolled)
                     }
                 },
                 actions = {
+                    // 已有对话时才给"新对话"：空对话给这个按钮没有意义
+                    if (state.bubbles.isNotEmpty()) {
+                        IconButton(onClick = viewModel::newConversation) {
+                            Icon(Icons.Filled.Add, contentDescription = "新对话")
+                        }
+                    }
                     BadgedBox(
                         badge = {
                             if (documentCount > 0) Badge { Text("$documentCount") }

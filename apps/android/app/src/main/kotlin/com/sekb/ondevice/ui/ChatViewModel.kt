@@ -61,6 +61,8 @@ data class ChatUiState(
     /** 已导入的本机文档（UI 列表用） */
     val documents: List<com.sekb.shared.rag.DocumentInfo> = emptyList(),
     val importing: Boolean = false,
+    /** 当前会话标题（由第一条用户消息推导；空表示还没开始对话）。 */
+    val conversationTitle: String = "",
 ) {
     val documentSummary: String get() =
         if (documents.isEmpty()) "还没有导入本机文档" else
@@ -95,9 +97,114 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** 云端会话 ID：第一轮由服务端下发，之后必须带回去才能连续对话。 */
     private var conversationId: String? = null
 
+    /**
+     * 本地会话存储（**与云端 conversationId 是两件事**）。
+     *
+     * 云端那个是"服务端侧的会话"，只在接入账号后才有；端侧这一段（含**设备专属**的
+     * 检索来源与执行位置）服务端并不知道，也不该上传。所以本地另有一套落盘，
+     * 重启 App 后能恢复上次聊到哪——**这是聊天应用的基本预期**。
+     */
+    private val conversations: com.sekb.shared.chat.ConversationStore =
+        com.sekb.ondevice.chat.FileConversationStore(
+            com.sekb.ondevice.chat.FileConversationStore.defaultDir(app.filesDir),
+        )
+
+    /** 当前本地会话 id 与标题。 */
+    private var localConversationId: String = com.sekb.shared.core.Ids.random()
+    private var localTitle: String = ""
+
     init {
         refreshAudit()
         refreshDocuments()
+        restoreLatestConversation()
+    }
+
+    /**
+     * 启动时恢复最近一次会话。
+     *
+     * 只恢复**本机**这一段（气泡与执行位置）；云端会话上下文由服务端按 `conversationId` 维护，
+     * 而那个 id 没有持久化——所以恢复后继续提问时，服务端会开一个新会话。
+     * 这是有意的取舍：把云端会话 id 落盘会让"换设备/清数据"后的行为变得难以解释，
+     * 而端侧要保住的是**用户在本机看到过什么**。
+     */
+    private fun restoreLatestConversation() {
+        val latest = runCatching { conversations.latest() }.getOrNull() ?: return
+        if (latest.messages.isEmpty()) return
+        history.clear()
+        latest.messages.forEach { m ->
+            history.add(
+                if (m.fromUser) ChatMessage.user(m.text) else ChatMessage.assistant(m.text),
+            )
+        }
+        localConversationId = latest.id
+        localTitle = latest.title
+        _state.update { st ->
+            st.copy(
+                conversationTitle = latest.title,
+                bubbles = latest.messages.map { m ->
+                    Bubble(
+                        fromUser = m.fromUser,
+                        text = m.text,
+                        execution = if (m.plane.isEmpty()) null else com.sekb.shared.model.ExecutionInfo(
+                            primaryPlane = m.plane, model = m.model, escalated = m.escalated,
+                        ),
+                        escalated = m.escalated > 0,
+                        sources = m.sources.map {
+                            RetrievalSources.Source(it.sourceId, it.score, it.snippet)
+                        },
+                        reason = m.reason,
+                        escalateReason = m.escalateReason,
+                    )
+                },
+            )
+        }
+    }
+
+    /** 开一段新对话（旧的那段已经落盘，不会丢）。 */
+    fun newConversation() {
+        localConversationId = com.sekb.shared.core.Ids.random()
+        localTitle = ""
+        history.clear()
+        conversationId = null
+        _state.update {
+            it.copy(bubbles = emptyList(), conversationTitle = "", input = "", thinking = "", error = "", notice = "")
+        }
+    }
+
+    /**
+     * 把当前会话落盘。
+     *
+     * 时间戳用注入的时钟（`Clock.nowMillis()`）而不是 `System.currentTimeMillis()`：
+     * 后者是 JVM 专有，共享层编不过——而且会话排序要能被测试钉住。
+     */
+    private fun persistConversation() {
+        val st = _state.value
+        if (st.bubbles.isEmpty()) return
+        val title = localTitle.ifEmpty {
+            com.sekb.shared.chat.ConversationCodec.deriveTitle(
+                st.bubbles.firstOrNull { it.fromUser }?.text.orEmpty(),
+            ).also { localTitle = it }
+        }
+        val conv = com.sekb.shared.chat.Conversation(
+            id = localConversationId,
+            title = title,
+            updatedAtMillis = com.sekb.shared.core.nowMillis(),
+            messages = st.bubbles.map { b ->
+                com.sekb.shared.chat.StoredMessage(
+                    fromUser = b.fromUser,
+                    text = b.text,
+                    plane = b.execution?.primaryPlane.orEmpty(),
+                    model = b.execution?.model.orEmpty(),
+                    escalated = b.execution?.escalated ?: (if (b.escalated) 1 else 0),
+                    reason = b.reason,
+                    escalateReason = b.escalateReason,
+                    sources = b.sources.map {
+                        com.sekb.shared.chat.StoredSource(it.sourceId, it.score, it.snippet)
+                    },
+                )
+            },
+        )
+        runCatching { conversations.save(conv) }
     }
 
     // ---------- 本机文档（端侧 RAG 的输入） ----------
@@ -298,11 +405,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     st.copy(
                         busy = false, thinking = "", bubbles = patched, audit = stats,
+                        conversationTitle = localTitle.ifEmpty { st.conversationTitle },
                         toolEvalSummary = container.toolEval.summary(),
                         lastReason = reasonLine,
                         error = result.error,
                     )
                 }
+                // 落盘放在状态更新**之后**：这样存下来的就是用户实际看到的那一版
+                // （含执行位置、引用来源、失败文本）。写盘失败不影响对话本身。
+                persistConversation()
             }.onFailure { e ->
                 _state.update {
                     it.copy(busy = false, thinking = "", error = "请求失败：${e.message}")

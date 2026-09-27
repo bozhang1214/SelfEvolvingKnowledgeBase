@@ -781,3 +781,47 @@ adb logcat -s SEKB_SELFTEST:V      # ⚠️ 必须实时抓：本机日志刷得
 - `grep -rn 'SekbColors\.' ui/*.kt | grep -v SekbTheme` → **空**（页面已全部走主题）。
 - ⚠️ **未做**：深色模式的**真机目视确认**——验证时手机已从 adb 断开（`adb devices` 为空）。
   代码层面已对齐，但"看起来对不对"仍需一次真机截图，见下节缺口。
+
+---
+
+## 1.5 会话历史持久化（2026-09-25）
+
+### 为什么做
+
+上一版的气泡**只在内存里**：杀掉 App 再打开，聊过的内容全没了。
+对聊天应用这是不能接受的——用户的第一预期就是"上次聊到哪还在"。
+网页端有会话列表（左侧栏），端侧连"恢复最近一次"都做不到。
+
+### 结构（照 `DocumentRegistry` / `VectorStore` 的既有套路）
+
+| 层 | 文件 | 职责 |
+|---|---|---|
+| 共享（可移植） | `shared/chat/Conversation.kt` | `Conversation` / `StoredMessage` / `StoredSource` 模型 + `ConversationCodec`（JSON 编解码）+ `ConversationStore` 接口 + `InMemoryConversationStore` |
+| Android（平台） | `ondevice/chat/FileConversationStore.kt` | 落盘实现：**每个会话一个 JSON 文件** |
+
+### 四个刻意的设计选择
+
+1. **一文件一会话，而不是"一个大 JSON 全都会话"**：单文件更简单，但一次写坏 = 用户所有历史全没；
+   一文件一会话的失败面小得多。
+2. **写盘走"临时文件 + 原子改名"**：直接覆写时若进程被杀，会留下半截 JSON，
+   下次打开就是一段坏数据。
+3. **坏文件跳过而不是抛异常**（`lastSkippedCorrupt` 计数）：
+   用户宁可少看到一段对话，也不该看到"历史列表打不开"。
+   `ConversationCodec.decode` 对**旧数据缺字段**一律取默认值——**宁可丢一个字段，也不能丢整段对话**。
+4. **上限裁剪（50 段）**：端侧存储有限，"无限增长的聊天记录"是典型的隐性磁盘泄漏。
+
+### 与云端 `conversationId` 的关系（**有意不持久化它**）
+
+云端 `conversationId` 是"服务端侧的会话"，只在接入账号后才有；端侧这一段（含**设备专属**的
+检索来源与执行位置）服务端并不知道、也不该上传。所以本地另有一套落盘，只恢复
+**用户在本机看到过什么**。代价是：恢复后继续提问时服务端会开一个新会话——
+这是有意的取舍（把云端会话 id 落盘会让"换设备/清数据"后的行为难以解释）。
+
+### 验证
+
+- `bash scripts/android.sh test` → **273 用例 / 0 失败**（新增 15 条：`ConversationTest` 7 + `FileConversationStoreTest` 8）。
+- `FileConversationStoreTest` 用**真实文件系统**（不是 mock），核心用例是
+  `restarting the app still finds the latest conversation`——用**新的 store 实例**指向同一目录，
+  等价于杀进程重启；另覆盖坏文件跳过、`.tmp` 不残留、上限裁剪、同 id 覆盖不重复。
+- ⚠️ **未做**：真机上的"杀掉 App → 重开 → 历史还在"目视确认（验证时手机已断开 adb）；
+  文件层已用真实文件系统验过，但端到端仍待一次真机操作。
