@@ -306,7 +306,8 @@ HarmonyOS 的 MindSpore Lite 平台绑定，它是**系统能力**（`libmindspo
 | 转换方式 | 结果 |
 |---|---|
 | 动态 shape（不带 `--inputShape`） | 转换成功，但 `benchmark` 加载时 `FindBackendKernel return nullptr, name: /m/Flatten, type: Flatten` → 典型的"上游动态形状没解析出来、下游算子形状未知、拿不到 kernel" |
-| 固定 shape（`--inputShape="input_ids:1,512;..."`） | **转换阶段**就失败：`SaveGraph] Convert to meta graph failed` |
+| 固定 shape（四步重写后的静态 ONNX） | ✅ **转换成功**：`CONVERT RESULT SUCCESS:0` → `bge-static.ms` **94,808,432 B**、魔数 `MSL2`；但 `benchmark` **0 CPU 挂起**（详见下） |
+| ~~固定 shape（未做四步重写时）~~ | ~~转换阶段失败 `Convert to meta graph failed`~~ ← **此行已过时**（那是四步重写完成**之前**的状态） |
 
 **所以"鸿蒙端侧嵌入"的模型依赖目前是未打通的**，不是"差一个下载链接"。三条可选路径（按性价比）：
 

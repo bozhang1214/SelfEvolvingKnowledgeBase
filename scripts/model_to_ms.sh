@@ -77,6 +77,26 @@
 # 验证该假说最便宜的一步：造一份"掩码链已被宿主 additive mask 取代"的 ONNX 变体，
 # 重跑 convert + benchmark，看挂起是否消失。
 #
+# ## 复现性缺口：**已闭合**（2026-09-25）
+#
+# 上一轮记录"产出 `bge-static.ms` 的配方没固化在脚本里"。本轮查清并修好：
+#   · 根因：`convert` 硬编码转**动态**那份 ONNX（`bge-small-zh-v1.5-ms.onnx`），
+#     所以 `all`（fetch→rewrite→convert→check）**永远不会产出 `bge-static.ms`**——
+#     脚本跑一遍复现不出它自己的关键产物。
+#   · 证据（时间戳）：`ms-static-1x512.onnx` 与 `bge-static.ms` 同为 2026-09-22 **17:39**，
+#     产物 94,808,432 B，与 RFC §10 E11 记录一致 → 静态产物确实由静态 ONNX 转换而来。
+#   · 修法：`convert` 参数化 + 新增 `convert-static`：
+#         bash scripts/model_to_ms.sh convert-static
+#   · **复现验证**：重跑后产出 **94,808,432 B**、魔数 `MSL2`，与既有产物大小逐字节一致；
+#     当前 sha256 = 1f071d3a2f75093b3fc543e03b2eaa632ad076cffe15bb4dead8e39739702890
+#
+# ⚠️ 同时更正 `apps/harmony/README.md` 里一行**过时**结论（原写"固定 shape 转换阶段就失败"）——
+#    那是四步重写**完成之前**的状态，会让人误以为这条路根本走不通。
+#
+# 📌 **支持掩码链假说的旁证**：转换静态 ONNX 时反复报
+#    `/m/ConstantOfShape infershape failed!`（**非致命**，转换仍成功）——
+#    而 `ConstantOfShape` 正是掩码链里的算子。这不能证明挂起由它引起，但方向一致。
+#
 # ## 路线① 假说检验（2026-09-25）：变换已证明正确，但**转换没跑通**，且暴露出复现性缺口
 #
 # 新增 `scripts/model_to_ms_maskfree.py`：把掩码链摘掉（重接 4 处注意力 Add → 全零常量，
@@ -142,12 +162,25 @@ rewrite() {
     "$PY" "$ROOT/scripts/model_to_ms.py" "$SRC_ONNX" "$WORK/work/bge-small-zh-v1.5-ms.onnx" || return 1
 }
 
+# ⚠️ **本条曾是个复现性缺口**：原来它硬编码转**动态**那份 ONNX，
+# 于是 `all`（fetch→rewrite→convert→check）**永远不会产出 `bge-static.ms`**——
+# 而 `bge-static.ms` 才是"静态化"那条路的关键产物。换句话说：脚本跑一遍复现不出它自己的产物。
+# 现参数化 source/output，并加 `convert-static` 明确固化静态配方。
+# 证据（时间戳）：`ms-static-1x512.onnx` 与 `bge-static.ms` 同为 2026-09-22 17:39，
+# 产物 94,808,432 B —— 与 RFC §10 E11 记的"CONVERT RESULT SUCCESS:0 产出静态 .ms（94,808,432 B）"一致。
 convert() {
-    echo "── converter_lite（动态 shape）──"
-    in_docker "export LD_LIBRARY_PATH=$LDP; /w/mindspore-lite/${MS_A64}/tools/converter/converter/converter_lite --fmk=ONNX --modelFile=/w/mindspore-lite/work/bge-small-zh-v1.5-ms.onnx --outputFile=/w/mindspore-lite/work/bge-small-zh-v1.5" 2>&1 | tr -d '\000' | grep -E 'CONVERT RESULT|UNSUPPORTED OP|OP TYPE' || true
-    ls -la "$WORK/work/bge-small-zh-v1.5.ms" 2>/dev/null && python3 -c "
-d=open('$WORK/work/bge-small-zh-v1.5.ms','rb').read(16)
-print('魔数:', d[4:8].decode('ascii', 'replace'), '（应为 MSL2）')"
+    local src="${1:-bge-small-zh-v1.5-ms.onnx}"
+    local out="${2:-bge-small-zh-v1.5}"
+    echo "── converter_lite：${src} → ${out}.ms ──"
+    in_docker "export LD_LIBRARY_PATH=$LDP; /w/mindspore-lite/${MS_A64}/tools/converter/converter/converter_lite --fmk=ONNX --modelFile=/w/mindspore-lite/work/${src} --outputFile=/w/mindspore-lite/work/${out}" 2>&1 | tr -d '\000' | grep -E 'CONVERT RESULT|UNSUPPORTED OP|OP TYPE|ERROR' | head -6 || true
+    if [ -f "$WORK/work/${out}.ms" ]; then
+        ls -la "$WORK/work/${out}.ms" | awk '{printf "  产物 %s：%d B\n", $9, $5}'
+        python3 -c "
+d=open('$WORK/work/${out}.ms','rb').read(16)
+print('  魔数:', d[4:8].decode('ascii','replace'), '（应为 MSL2）')"
+    else
+        echo "  ❌ 未产出 ${out}.ms"
+    fi
 }
 
 # benchmark 是**判定 M7 路线**的关键一步：`.ms` 能被转换 ≠ 能被运行。
@@ -166,6 +199,8 @@ case "${1:-all}" in
     fetch)   fetch ;;
     rewrite) rewrite ;;
     convert) convert ;;
+    # 静态化配方（四步重写后的 ONNX → 静态 .ms）；用 all 跑不出来，必须显式指定
+    convert-static) convert ms-static-1x512.onnx bge-static ;;
     check)   check ;;
     # 静态化产物（512 定长）：M7 路线判定的决定性实验——此前只验过它能转换，没验过它能运行
     check-static) check bge-static.ms 'input_ids:1,512;attention_mask:1,512;token_type_ids:1,512' ;;
