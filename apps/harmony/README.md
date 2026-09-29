@@ -366,3 +366,107 @@ ArkTS (pages/Index.ets)
 要接就得先给 `ohosMain` 补共享层的 `actual` 端口（`Clock`/`Hmac`/`Digests`）——
 那是 M7 的活。**顺序上应该先确认模型能跑**（上面的清单），再花这个成本；
 否则一旦转路线③，这份 Kotlin 就白写了。
+
+---
+
+## 模拟器 / Preview 路径的实际可达性（2026-09-25 盘点）
+
+> 背景：owner 于 2026-09-25 把鸿蒙验收前提从"必须 NEXT 真机"改为
+> **"用 DevEco 模拟器或 Preview 模式调试功能和 UI"**。本节是动手前的**实际盘点**，
+> 只写查到的路径与版本，不写"应该可以"。
+
+### 一、有什么 / 缺什么（实测）
+
+| 组件 | 状态 | 证据（路径 / 版本） |
+|---|---|---|
+| DevEco Studio | ✅ 已装 | `/Applications/DevEco-Studio.app` |
+| 鸿蒙 SDK | ✅ **内置在 App 里** | `/Applications/DevEco-Studio.app/Contents/sdk/default`（所以 `~/Library/Huawei/Sdk` 近乎空也能构建 HAP） |
+| hvigor / ohpm / node CLI | ✅ | `Contents/tools/hvigor/bin/hvigorw`、`tools/ohpm/bin/ohpm`、`tools/node` |
+| JBR (JDK) | ✅ | `Contents/jbr` |
+| **模拟器引擎** | ✅ 已部署 | `tools/emulator/`，`~/.Huawei/Emulator/deployed/versionInfo.txt` = `6.0.2.642`；`Emulator -version` → `HarmonyOS Emulator :6.0.2.210` |
+| **Previewer** | ✅ 存在且**可执行** | `sdk/default/openharmony/previewer/common/bin/Previewer`（Mach-O 64-bit executable **arm64**） |
+| **模拟器系统镜像** | ❌ **没有** | 全盘无 >100MB 的镜像文件；`~/.Huawei/Emulator/deployed/` 只有 `versionInfo.txt` |
+| 模拟器实例清单 | ❌ 没有 | `Emulator -list` → `can not open file : "$USER_HOME$/.Huawei/Emulator/deployed//lists.json"`（`$USER_HOME$` **占位符未被替换**，说明该文件由 IDE 生成） |
+| 签名材料 | ❌ 没有 | 无 `~/.ohos/config/`、无 `.p12/.cer/.p7b` |
+
+### 二、⚠️ 一个必须先说清的技术区分：**Preview 验 UI，验不了"功能"**
+
+这不是取舍，是硬限制：
+
+- `Previewer` 是 **macOS arm64 原生程序**，它在 macOS 上直接跑 ArkUI/ArkTS；
+- 而我们的 NAPI 桥 `libkn.so`（KMP 产物 + `libmindspore_lite_ndk` 依赖）是 **ohosArm64** 目标；
+- 因此 **Preview 模式下 `libkn.so` 加载不了** → NAPI↔KMP 调用、`.ms` 模型推理、hdc/设备能力
+  这些"功能"在 Preview 里**无法验证**。
+
+所以 owner 的要求需要拆成两半：
+
+| 目标 | 可行路径 | 前置条件 |
+|---|---|---|
+| **UI**（ArkUI 布局/交互/深浅色） | **Previewer**（macOS 本地，不需要镜像） | 需要先产出 preview 构建产物（见下，**尚未打通**） |
+| **功能**（NAPI↔KMP、`.ms` 运行期、M6 第 4 条"能装能起"） | **模拟器**（真 OHOS，能跑 `.so`） | **需要系统镜像**——而镜像要在 DevEco 的 Device Manager 里下载，**需要 owner 的华为账号登录** |
+
+### 三、Previewer 的 CLI 事实（实测）
+
+- 它**能启动并自报参数需求**（`RichPreviewer`）：
+
+  ```
+  [ERROR][CommandParser.cpp][IsAppPathValid][335]: Launch -j parameters abnormal!
+  [ERROR][CommandParser.cpp][IsCommandValid][145]: No app path specified.
+  ```
+  即 `-j <app 路径>` 是必须的（其余参数需逐个试出）；它会尝试连本地 socket 收 trace，
+  连不上只报 `TraceTool::pipe connect failed`，**不致命**（进程继续）。
+- 模拟器 CLI 是完整的：`Emulator [-hvd <name> -path <path> -imageRoot <path>] [-list] [-stop <name>] [-hdcport <port>]`。
+  也就是说**一旦有了镜像，模拟器可以脱离 IDE 用命令行起**。
+
+### 四、Preview 构建任务**存在**，但首轮没跑完（如实记录）
+
+先确认了任务是否注册——`taskTree` 里有完整的 preview 构建链：
+
+```
+:entry:PreviewBuild
++--- :default@PreviewArkTS
+    +--- :default@PreviewUpdateAssets
+        +--- :buildPreviewerResource
+            +--- :default@ReplacePreviewerPage
+                +--- :default@PreviewHookCompileResource
+:entry:default@CopyPreviewProfile
+```
+
+即 **`PreviewBuild` 是真实任务**，调用形式与 IDE 一致：
+
+```bash
+hvigorw --mode module -p module=entry@default -p product=default \
+        -p requiredDeviceType=phone PreviewBuild --no-daemon
+```
+
+**第一次跑它时 10 分钟无任何输出、`.tooling/hvigor-home` 下也没有新文件，我据此判定"卡住"并终止了
+——这个判断可能是错的**：ArkTS 首轮编译本来就可能很慢，10 分钟无输出未必等于挂死
+（教训：把"慢"当成"死"会误杀正在做的事）。下一次应当：**放到后台、给足时间（≥20 分钟）、
+并用 `--debug` 观察它停在哪一步**，同时盯着 preview 产物目录是否在增长。
+
+### 五、下一步（按"是否需要 owner"分）
+
+**不需要 owner**：
+1. 后台重跑 `PreviewBuild` 并给足时间，确认它产出 preview 产物（若真卡住再用 `--debug` 定位）；
+2. 打通后按 Previewer 参数起一次预览，截图核对 ArkUI 页面（这是 **M7 UI 的可验证部分**）。
+
+**需要 owner**（做完这两步，功能侧才有路）：
+3. 在 DevEco 登录华为账号 → Device Manager 下载 **HarmonyOS 模拟器镜像**（约数 GB），
+   生成 `lists.json`/实例；
+4. Device Manager 里点一次**自动生成签名**（`~/.ohos/config/` 目前为空）。
+
+> 完成 3/4 后，M6 第 3 条运行期（`.ms` 能否加载）与第 4 条（HAP 能装能起）就能在模拟器上验，
+> 从而决定 M7 走 MindSpore Lite 还是转路线③（ArkTS + 37 条契约夹具）。
+### 五、下一步（按"是否需要 owner"分）
+
+**不需要 owner**：
+1. 诊断 `PreviewBuild`：确认任务名与必要参数（`hvigorw --debug`、或查 `entry/hvigorfile.ts` 注册的任务）；
+2. 打通后按 Previewer 参数起一次预览，截图核对 ArkUI 页面（这是 **M7 UI 的可验证部分**）。
+
+**需要 owner**（做完这两步，功能侧才有路）：
+3. 在 DevEco 登录华为账号 → Device Manager 下载 **HarmonyOS 模拟器镜像**（约数 GB），
+   生成 `lists.json`/实例；
+4. Device Manager 里点一次**自动生成签名**（`~/.ohos/config/` 目前为空）。
+
+> 完成 3/4 后，M6 第 3 条运行期（`.ms` 能否加载）与第 4 条（HAP 能装能起）就能在模拟器上验，
+> 从而决定 M7 走 MindSpore Lite 还是转路线③（ArkTS + 37 条契约夹具）。
