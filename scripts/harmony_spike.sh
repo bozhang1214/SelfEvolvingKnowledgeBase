@@ -71,7 +71,9 @@ build_hap() {
     # 把 `.ms` 作为 rawfile 打进包：App 首次启动时复制到私有目录再交给 OH_AI_ModelBuildFromFile
     # （那个 API 要的是**文件系统路径**，rawfile 不是路径）。这样真机日不需要手工 push，
     # 也不会踩 /data/local/tmp 之类的权限坑；代价是 HAP 会大到 ~100MB（spike 阶段可接受）。
-    local ms="$MS_WORK/bge-static.ms"
+    # 打包**可运行**的那个 `bge-maskinput.ms`（掩码=宿主输入）；
+    # 旧的 `bge-static.ms` 图内仍带动态掩码链 → benchmark 0 CPU 挂起。
+    local ms="$MS_WORK/bge-maskinput.ms"
     local raw="$HAP_PROJ/entry/src/main/resources/rawfile"
     if [ -f "$ms" ]; then
         mkdir -p "$raw"

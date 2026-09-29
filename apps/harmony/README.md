@@ -538,3 +538,39 @@ bash scripts/harmony_spike.sh hap   → entry-default-unsigned.hap 96M
    —— 可见位 `0`、被掩位 `-inf`、形状 `[1,1,512,512]`（实测四层相同，单个输入即可）
    —— 并用 `predictTyped` 传入；
 3. 在**模拟器/设备**上验证（需 DevEco 模拟器镜像）。
+
+---
+
+## 宿主侧接线完成 + HAP 改打可运行模型（2026-09-25）
+
+### 改动
+
+1. **`MindSporeProbe.kt`**：新增 `additiveMask(mask)`（可见位 `0`、被掩位 `-inf`、形状 `[1,1,seq,seq]`），
+   两处 `predict` 调用改为 `predictTyped`，输入集合由
+   `{input_ids, attention_mask, token_type_ids}` 改为
+   **`{input_ids, token_type_ids, sekb_additive_mask_zero}`**
+   —— 因为新模型里 `attention_mask` 已被裁掉（它在图内的唯一作用就是展开成 additive mask）。
+   ⚠️ 只按 **key** 掩：若把 query 行也掩成全 -inf，softmax 会出现 nan，而原模型就是只掩 key。
+2. **`scripts/harmony_spike.sh`**：`build_hap` 由打包 `bge-static.ms`（图内仍有动态掩码链 → 0 CPU 挂起）
+   改为打包 **`bge-maskinput.ms`（可运行版）**。
+
+### 验证（仅 build+link）
+
+```
+bash scripts/harmony_spike.sh all
+  ✅ libkn.so arm64-v8a 2.5M / x86_64 2.0M
+  ✅ HAP 96M；arm64-v8a 与 x86_64 的 libknspike.so 各引用 4 个 KMP 入口
+```
+
+**模型确实在包内**（直接查 HAP 内容）：
+```
+94802472  resources/rawfile/bge-small-fixed512.ms     ← 大小 = bge-maskinput.ms（可运行版）
+```
+
+### ⚠️ 同时发现一处**验证脚本误报**（如实记录，未修）
+
+同一次运行里，`verify_link` 的模型检查却打印了
+"⚠️ 包里没有模型 rawfile"。**这是误报**——上面 `unzip -l` 的直接证据表明它在包内、
+且大小正是可运行版。该检查用 `unzip -l "$hap" | grep -q 'rawfile/bge-small-fixed512.ms'`，
+按内容本应命中，**根因尚未定位**（可能是该代码路径的时序/`unzip` 可用性问题）。
+**未修**，以免在没搞清原因前改检查逻辑而掩盖真实问题；已在此标注，避免下次被这句警告误导。

@@ -18,6 +18,25 @@ package com.sekb.ohos.spike
  * 输入用**合成 token id**（`[CLS] 若干 [SEP] 0…`），因为本函数不接分词器。
  * 它证明的是运行时链路（build → feed → predict → 读回浮点），不是语义。
  */
+/**
+ * 由 attention mask 算 **additive mask**（宿主侧职责，替代模型内部的动态展开链）。
+ *
+ * 取值：可见位 `0`、被掩位 `-inf`；形状 `[1,1,seq,seq]`（对 heads 维广播）。
+ * 依据：实测原模型四层产生的该张量**完全相同**，且带 padding 时取值集合正是 {-inf, 0}，
+ * 故单个输入即可（见 `scripts/model_to_ms.sh` 头部与 apps/harmony/README.md）。
+ *
+ * ⚠️ 只按 **key** 掩：若把 query 行也掩成全 -inf，softmax 会出现 nan；原模型就是只掩 key。
+ */
+private fun additiveMask(mask: LongArray): FloatArray {
+    val n = mask.size
+    val out = FloatArray(n * n)          // 零初始化 = 全部"可见"
+    for (j in 0 until n) {
+        if (mask[j] != 0L) continue
+        for (i in 0 until n) out[i * n + j] = Float.NEGATIVE_INFINITY
+    }
+    return out
+}
+
 @CName("sekb_spike_mindspore_selftest")
 fun sekbSpikeMindSporeSelfTest(modelPath: String): Int {
     var session: MsSession? = null
@@ -52,7 +71,15 @@ fun sekbSpikeMindSporeSelfTest(modelPath: String): Int {
         } else {
             for (i in 0 until seqLen) { ids[i] = 101L; mask[i] = 1L }
         }
-        s.predict(mapOf("input_ids" to ids, "attention_mask" to mask, "token_type_ids" to types))
+        // 模型输入已无 `attention_mask`（它在图内的唯一作用就是展开成 additive mask，
+        // 而那段动态链已被移除）；改为宿主算好 additive mask，用 float32 喂进去。
+        s.predictTyped(
+            mapOf(
+                "input_ids" to MsSession.Feed.I64(ids),
+                "token_type_ids" to MsSession.Feed.I64(types),
+                "sekb_additive_mask_zero" to MsSession.Feed.F32(additiveMask(mask)),
+            ),
+        )
 
         val v = s.readOutputFloats(hidden)
         if (v.any { it.isNaN() || it.isInfinite() }) return MsStep.PREDICT_FAILED
@@ -86,7 +113,15 @@ fun sekbSpikeMindSporeFirstFloat(modelPath: String): Int {
         } else {
             for (i in 0 until seqLen) { ids[i] = 101L; mask[i] = 1L }
         }
-        s.predict(mapOf("input_ids" to ids, "attention_mask" to mask, "token_type_ids" to types))
+        // 模型输入已无 `attention_mask`（它在图内的唯一作用就是展开成 additive mask，
+        // 而那段动态链已被移除）；改为宿主算好 additive mask，用 float32 喂进去。
+        s.predictTyped(
+            mapOf(
+                "input_ids" to MsSession.Feed.I64(ids),
+                "token_type_ids" to MsSession.Feed.I64(types),
+                "sekb_additive_mask_zero" to MsSession.Feed.F32(additiveMask(mask)),
+            ),
+        )
         val v0 = s.readOutputFloats(1)[0]
         if (v0.isNaN() || v0.isInfinite()) return MsStep.PREDICT_FAILED
         (kotlin.math.abs(v0) * 1e6).toInt()
