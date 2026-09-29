@@ -77,7 +77,35 @@
 # 验证该假说最便宜的一步：造一份"掩码链已被宿主 additive mask 取代"的 ONNX 变体，
 # 重跑 convert + benchmark，看挂起是否消失。
 #
-# ## 生产化（掩码改为模型输入）：**转换通过 + 等价性已证，但运行期尚未通过**（2026-09-25）
+# ## ✅ 生产化（掩码改为模型输入）：**转换 + 等价 + 运行 三项全通**（2026-09-25）
+#
+# 上一轮这里写着"运行期尚未通过"，并**明确标注未判定**是①工具解析 4D `--inputShape` 的问题
+# 还是②模型不接受 4D 输入。本轮把它分清了：
+#
+#   **是①——benchmark 工具解析不了 4D 的 `--inputShape`；模型本身没问题。**
+#   决定性实验：**完全不传 `--inputShape`**（静态图自描述，`check` 支持 `shape=NONE`）：
+#       start unified benchmark run
+#       PrepareTime = 138.863 ms
+#       Model = bge-maskinput.ms, NumThreads = 2, AvgRunTime = **65.838 ms**
+#       Run Benchmark bge-maskinput.ms Success.
+#
+#   ⚠️ 区分"不传"与"传空"：上一轮我用 `--inputShape=''`（空串）来代表"不传"，那是错的——
+#      工具会把它当参数解析并报 `ParseGraphInputShapeMap] token_type_ids`，结论无效。
+#      **要"不传"就必须真的不传**（这正是上一轮我拒绝下结论的原因，也让本轮结论可信）。
+#
+# 于是生产形态的三项验证齐了：
+#   · 转换：`CONVERT RESULT SUCCESS:0` → `bge-maskinput.ms` 94,802,472 B、魔数 `MSL2`
+#   · 等价：关闭 ORT 优化时与原图**逐位相同**（无 padding / 有 padding / 全 padding 三种都过）
+#   · 运行：`Run Benchmark Success`，AvgRunTime **65.838 ms**（512 长、2 线程、CPU）
+#
+# **重要推论：因为等价是"逐位相同"，嵌入空间与阈值都不必重标。**
+# RFC 里"换运行时只影响向量空间、需按既有做法重标阈值"的提醒，在这里**不适用**——
+# 图变换没有改变数值输出，所以 M5/M8 那套已标定的阈值继续有效。
+#
+# 宿主侧契约（Kotlin 实现时要照做）：additive mask 取值 —— 可见位置 `0`、被掩位置 `-inf`，
+# 形状 `[1,1,512,512]`；实测该张量**四层完全相同**，故单个输入即可。
+#
+
 #
 # `scripts/model_to_ms_maskfree.py --mask-input` 把 additive mask 由常量改为**模型输入**
 # `sekb_additive_mask_zero: float32[1,1,512,512]`（由宿主按实际 padding 计算后喂入）。
@@ -248,8 +276,15 @@ print('  魔数:', d[4:8].decode('ascii','replace'), '（应为 MSL2）')"
 check() {
     local model="${1:-bge-small-zh-v1.5.ms}"
     local shape="${2:-input_ids:1,64;attention_mask:1,64;token_type_ids:1,64}"
-    echo "── benchmark：实际加载并运行 ${model}（inputShape=${shape}）──"
-    in_docker "export LD_LIBRARY_PATH=$LDP; /w/mindspore-lite/${MS_A64}/tools/benchmark/benchmark --modelFile=${model} --inputShape='${shape}' --device=CPU --warmUpLoopCount=1 --loopCount=3" 2>&1 | tr -d '\000' | tail -14
+    # shape=NONE 表示**完全不传 `--inputShape`**（用于区分"工具解析 4D 形状失败"与"模型不接受 4D 输入"）。
+    # 注意：曾经我用"传空串"来做这件事，那是错的——工具会把 `--inputShape=''` 当参数解析并报
+    # `ParseGraphInputShapeMap] token_type_ids`，得出的结论无效。要"不传"就必须真的不传。
+    local shape_arg=""
+    if [ "$shape" != "NONE" ]; then
+        shape_arg="--inputShape=${shape}"
+    fi
+    echo "── benchmark：${model}（inputShape=${shape}${shape_arg:+}）──"
+    in_docker "export LD_LIBRARY_PATH=$LDP; /w/mindspore-lite/${MS_A64}/tools/benchmark/benchmark --modelFile=${model} ${shape_arg} --device=CPU --warmUpLoopCount=1 --loopCount=3" 2>&1 | tr -d '\000' | tail -14
 }
 
 case "${1:-all}" in
@@ -265,7 +300,8 @@ case "${1:-all}" in
     convert-maskinput) convert ms-static-maskinput.onnx bge-maskinput ;;
     check-maskinput)  check bge-maskinput.ms 'input_ids:1,512;token_type_ids:1,512;sekb_additive_mask_zero:1,1,512,512' ;;
     # 不带 --inputShape：模型本身是静态的，用于排除"工具解析 4D 形状"这一层
-    check-maskinput-noshape) check bge-maskinput.ms '' ;;
+    # 真正**不传** --inputShape（用于区分工具解析问题 vs 模型不接受 4D 输入）
+    check-maskinput-noshape) check bge-maskinput.ms NONE ;;
     check)   check ;;
     # 静态化产物（512 定长）：M7 路线判定的决定性实验——此前只验过它能转换，没验过它能运行
     check-static) check bge-static.ms 'input_ids:1,512;attention_mask:1,512;token_type_ids:1,512' ;;
