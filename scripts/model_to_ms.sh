@@ -27,20 +27,38 @@
 # **死代码**（掩码是加性大负数、不是 -inf，softmax 不可能出 NaN），短路掉即可。
 # 重写由 `scripts/model_to_ms.py` 完成，并用 onnxruntime **证明逐位等价**（不是"余弦接近 1"）。
 #
-# ## ⚠️ 当前状态：`.ms` 能转换，但**运行时 build 失败**（未解决）
+# ## ⚠️ 当前状态（2026-09-25 修订）：`.ms` 能转换，但**两个产物都跑不起来**，且失败方式不同
 #
-# 两条路都试过，都失败，且失败点不同 —— 这两条错误信息是排查的起点：
-#   · 动态 shape（不带 --inputShape）：`CONVERT RESULT SUCCESS:0` 产出 .ms，
-#     但 `benchmark` 加载时 `FindBackendKernel return nullptr, name: /m/Flatten, type: Flatten`
-#     → `/m/Flatten` 拿不到 kernel，典型的"上游动态形状没解析出来，下游算子形状未知"。
-#   · 固定 shape（--inputShape="input_ids:1,512;..."）：转换阶段就
-#     `SaveGraph] Convert to meta graph failed` / `HandleGraphCommon] Save graph failed`。
+# ⚠️ 本节曾把两个产物**混为一谈**，必须分开记——因为结论完全不同：
+#   · `bge-small-zh-v1.5.ms`（**动态** shape）：`CONVERT RESULT SUCCESS:0` 产出 .ms，
+#     `benchmark` **快速失败**：
+#       FindBackendKernel return nullptr, name: /m/Flatten, type: Flatten
+#       → Schedule subgraph failed → Build failed → Run Benchmark Failed : -1
+#     典型的"上游动态形状没解析出来，下游算子形状未知，选不到 kernel"。
+#   · `bge-static.ms`（**静态化**后：Flatten→Reshape + 常量内联；转换成功、CLS 余弦 1.0）：
+#     `benchmark` **挂起**——**不是慢，是真的不动**：容器内该进程 CPU 时间恒为 `00:00:00`，
+#     带与不带 `--inputShape` 都一样，且容器里还留着 **7 天前**同样挂着的同名进程（可复现）。
+#     （此前把这一步记成"600s 无输出、原因不明"，实为 **0 CPU 的真挂起**；
+#      而"固定 shape 在转换阶段失败"是**更早**的状态，后来转换已修好。）
 #
-# 因此**"鸿蒙端侧嵌入"的模型依赖目前未打通**。下一步可选（按性价比）：
-#   ① 把 ONNX 里那段**动态掩码展开子图**（Shape/ConstantOfShape/Range/Gather 链）改写成静态等价形式，
-#      再走固定 shape 转换 —— 与本脚本已有的重写思路一致，但工作量更大；
+# **本次同时补上一个测试覆盖缺口**：原 `check` 只跑**动态**那个产物，
+# **从没人在 `bge-static.ms` 上跑过 benchmark**（只验过它能转换、余弦对）。
+# 现 `check` 已参数化，并新增 `check-static` 专测静态产物：
+#       bash scripts/model_to_ms.sh check-static
+#
+# ## 对 M7 路线判定的含义（需谨慎表述）
+#
+# **Linux-aarch64 runtime 跑不起来 ≠ 鸿蒙 runtime 跑不起来**：鸿蒙用系统自带的
+# `libmindspore_lite_ndk`（另一份构建），其算子集**可能**含 Flatten kernel。
+# 但 `bge-static.ms` 那个 **0 CPU 挂起是图/模型层面**的问题（与后端算子集关系不大），
+# 大概率在鸿蒙上同样复现。因此性价比排序仍倾向：
+#   ① 把 ONNX 里那段**动态掩码展开子图**（Shape/ConstantOfShape/Range/Gather 链）彻底改写成静态等价形式，
+#      再转一次 —— 与 `scripts/model_to_ms.py` 已有的重写思路一致，但工作量更大；
 #   ② 放弃 MindSpore Lite，回到社区版 OHOS ONNX Runtime（原方案，需找到预编译产物）；
-#   ③ 按 RFC §4 D2 退路线 B（ArkTS 重写 + 契约夹具）。
+#   ③ 按 RFC §4 D2 退路线 B（ArkTS 重写 + 契约夹具，仓库已有 37 条夹具）。
+#
+# 待清理：容器内 6 个 `benchmark` 挂起进程（含 2 个 7 天前的）——0 CPU 无害，
+# 但容器里没有 `pkill`、宿主 PID 又不匹配，需手工 `docker exec <c> kill <容器内PID>`。
 # ============================================================
 set -uo pipefail
 
