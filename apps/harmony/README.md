@@ -494,3 +494,47 @@ ERROR: The "data" argument must be of type string or an instance of Buffer, Type
 
 > 完成 3/4 后，M6 第 3 条运行期（`.ms` 能否加载）与第 4 条（HAP 能装能起）就能在模拟器上验，
 > 从而决定 M7 走 MindSpore Lite 还是转路线③（ArkTS + 37 条契约夹具）。
+
+---
+
+## 原生层补齐 float32 输入能力（2026-09-25，M6 第 4 条的前置）
+
+### 补的是一个**能力缺口**，不是修 bug
+
+模型侧打通后（见 `scripts/model_to_ms.sh` 头部：转换/等价/运行三项齐备，
+additive mask 由宿主喂入）我去看原生层能不能真的驱动它——**不能**：
+
+`MsLite.kt` 原本只有 `predict(feeds: Map<String, LongArray>)`，**只能喂 int64**。
+而 `sekb_additive_mask_zero` 是 **float32**。也就是说：**即使 `.ms` 已经能跑，
+原生层也喂不进那个输入**，M6 第 4 条到不了。
+
+### 改动（**纯新增，不动既有已验证代码**）
+
+- 新增 `Feed`（`I64` / `F32`）与 `predictTyped(feeds: Map<String, Feed>)`；
+- 既有的 `predict(Map<String, LongArray>)` **一行未改**——它已经过验证，没必要冒回归风险；
+- `predictTyped` 逐个输入**显式校验元素数与声明类型**，不匹配就早报。
+
+**为什么强调显式校验**：`OH_AI_TensorSetData` 返回 void、**没有状态可查**，
+类型/长度对不上**不会报错**，只会表现为"向量不对"——这是最难查的一类问题
+（该类的注释里原本就写着这条教训，新代码把它执行得更彻底）。
+
+### 验证（按仓库口径：只到 build+link）
+
+```
+bash scripts/harmony_spike.sh kn    → libkn.so arm64-v8a 2.5M / x86_64 2.0M
+bash scripts/harmony_spike.sh hap   → entry-default-unsigned.hap 96M
+                                    → ✅ arm64-v8a: libknspike.so 引用 4 个 KMP 入口
+                                    → ✅ x86_64:    同上
+                                    → ✅ 模型 rawfile 在包内
+```
+
+⚠️ **口径**：以上只证明"产物齐备且 NAPI↔KMP 引用成立"。
+**"能装能起 + 真的调通"属于 spike 第 4 条**，需要签名 HAP + 设备/模拟器——**仍未做**。
+
+### M6 第 4 条还差什么（明确清单）
+
+1. 把 HAP 里的模型 rawfile 换成**可运行**的 `bge-maskinput.ms`（当前包内是那个会挂起的静态版）；
+2. 调用方（`MindSporeProbe` / 待接的 `MindSporeBgeEmbedding`）计算 additive mask
+   —— 可见位 `0`、被掩位 `-inf`、形状 `[1,1,512,512]`（实测四层相同，单个输入即可）
+   —— 并用 `predictTyped` 传入；
+3. 在**模拟器/设备**上验证（需 DevEco 模拟器镜像）。

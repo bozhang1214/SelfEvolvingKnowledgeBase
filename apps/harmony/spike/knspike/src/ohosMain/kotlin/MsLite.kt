@@ -121,6 +121,68 @@ class MsSession private constructor(
         }
     }
 
+    /**
+     * 一次推理的输入数据。**为什么需要它**：模型现在有两类输入——
+     * int64 的 token（`input_ids`/`token_type_ids`，无掩码后不再需要 `attention_mask`）
+     * 与 **float32 的 `sekb_additive_mask_zero`**（宿主按 padding 算出的 additive mask）。
+     * 既有的 `predict(Map<String, LongArray>)` **只能喂 int64**，喂不了掩码；
+     * 而 `OH_AI_TensorSetData` 返回 void、**没有状态可查**，类型对不上只会表现为"向量不对"，
+     * 所以类型必须由**我们**显式表达与校验，不能靠猜。
+     */
+    sealed interface Feed {
+        val size: Int
+
+        class I64(val values: LongArray) : Feed {
+            override val size: Int get() = values.size
+        }
+
+        class F32(val values: FloatArray) : Feed {
+            override val size: Int get() = values.size
+        }
+    }
+
+    /**
+     * 混合类型推理（**additive mask 必须走这里**）。
+     *
+     * 与 [predict] 的区别只有两点：① 按 `Feed` 的实际类型分配 int64/float32 缓冲；
+     * ② 逐个输入校验"元素数"与"声明类型"，不匹配就**早报**——因为 SetData 无返回值，
+     * 静默错配的症状是"向量不对"，那是最难查的一类问题。
+     */
+    fun predictTyped(feeds: Map<String, Feed>) {
+        memScoped {
+            OH_AI_ModelGetInputs(model).useContents {
+                for (i in 0 until handle_num.toInt()) {
+                    val t = handle_list?.get(i) ?: continue
+                    val name = OH_AI_TensorGetName(t)?.toKString() ?: continue
+                    val feed = feeds[name] ?: continue
+                    val want = OH_AI_TensorGetElementNum(t).toInt()
+                    if (feed.size != want) {
+                        throw MsError("输入 $name 元素数不符：给了 ${feed.size}，模型要 $want")
+                    }
+                    val isInt64 = OH_AI_TensorGetDataType(t) == OH_AI_DATATYPE_NUMBERTYPE_INT64
+                    when (feed) {
+                        is Feed.I64 -> {
+                            if (!isInt64) throw MsError("输入 $name 模型要 float32，却给了 int64")
+                            val buf = allocArray<LongVar>(feed.values.size)
+                            for (j in feed.values.indices) buf[j] = feed.values[j]
+                            OH_AI_TensorSetData(t, buf)
+                        }
+
+                        is Feed.F32 -> {
+                            if (isInt64) throw MsError("输入 $name 模型要 int64，却给了 float32")
+                            val buf = allocArray<FloatVar>(feed.values.size)
+                            for (j in feed.values.indices) buf[j] = feed.values[j]
+                            OH_AI_TensorSetData(t, buf)
+                        }
+                    }
+                }
+            }
+            val outArr = alloc<OH_AI_TensorHandleArray>()
+            val st = OH_AI_ModelPredict(model, OH_AI_ModelGetInputs(model), outArr.ptr, null, null)
+            if (st != 0u) throw MsError("OH_AI_ModelPredict 失败 status=$st")
+        }
+    }
+
     /** 读出第 0 个输出张量的前 [n] 个 float（**CLS 向量就是前 hidden 个**）。 */
     fun readOutputFloats(n: Int): FloatArray {
         val t = OH_AI_ModelGetOutputs(model).useContents { handle_list?.get(0) }
