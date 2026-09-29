@@ -90,9 +90,16 @@ d=open('$WORK/work/bge-small-zh-v1.5.ms','rb').read(16)
 print('魔数:', d[4:8].decode('ascii', 'replace'), '（应为 MSL2）')"
 }
 
+# benchmark 是**判定 M7 路线**的关键一步：`.ms` 能被转换 ≠ 能被运行。
+# 参数化模型名与输入形状，是为了能分别验**两个不同产物**——它们此前被混为一谈：
+#   · bge-small-zh-v1.5.ms：**动态 shape**（旧路径），实测 Flatten 拿不到 kernel
+#   · bge-static.ms：**静态化**后的产物（重写 Flatten→Reshape + 常量内联），
+#     **此前的记录只验了它的转换成功与余弦，从未对它跑过 benchmark**
 check() {
-    echo "── benchmark：实际加载并运行 .ms（Linux-aarch64 runtime）──"
-    in_docker "export LD_LIBRARY_PATH=$LDP; /w/mindspore-lite/${MS_A64}/tools/benchmark/benchmark --modelFile=bge-small-zh-v1.5.ms --inputShape='input_ids:1,64;attention_mask:1,64;token_type_ids:1,64' --device=CPU --warmUpLoopCount=1 --loopCount=3" 2>&1 | tr -d '\000' | tail -12
+    local model="${1:-bge-small-zh-v1.5.ms}"
+    local shape="${2:-input_ids:1,64;attention_mask:1,64;token_type_ids:1,64}"
+    echo "── benchmark：实际加载并运行 ${model}（inputShape=${shape}）──"
+    in_docker "export LD_LIBRARY_PATH=$LDP; /w/mindspore-lite/${MS_A64}/tools/benchmark/benchmark --modelFile=${model} --inputShape='${shape}' --device=CPU --warmUpLoopCount=1 --loopCount=3" 2>&1 | tr -d '\000' | tail -14
 }
 
 case "${1:-all}" in
@@ -100,6 +107,8 @@ case "${1:-all}" in
     rewrite) rewrite ;;
     convert) convert ;;
     check)   check ;;
+    # 静态化产物（512 定长）：M7 路线判定的决定性实验——此前只验过它能转换，没验过它能运行
+    check-static) check bge-static.ms 'input_ids:1,512;attention_mask:1,512;token_type_ids:1,512' ;;
     all)     fetch && rewrite && convert && check ;;
     *) echo "用法：bash scripts/model_to_ms.sh [fetch|rewrite|convert|check|all]" >&2; exit 2 ;;
 esac
