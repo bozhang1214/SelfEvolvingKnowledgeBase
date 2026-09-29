@@ -418,32 +418,55 @@ ArkTS (pages/Index.ets)
 - 模拟器 CLI 是完整的：`Emulator [-hvd <name> -path <path> -imageRoot <path>] [-list] [-stop <name>] [-hdcport <port>]`。
   也就是说**一旦有了镜像，模拟器可以脱离 IDE 用命令行起**。
 
-### 四、Preview 构建任务**存在**，但首轮没跑完（如实记录）
+### 四、Preview 构建任务存在，但**在 CLI 下构建失败**（已定位到具体报错）
 
-先确认了任务是否注册——`taskTree` 里有完整的 preview 构建链：
+任务确实注册了（`taskTree` 可见完整链）：
 
 ```
-:entry:PreviewBuild
-+--- :default@PreviewArkTS
-    +--- :default@PreviewUpdateAssets
-        +--- :buildPreviewerResource
-            +--- :default@ReplacePreviewerPage
-                +--- :default@PreviewHookCompileResource
-:entry:default@CopyPreviewProfile
+:entry:PreviewBuild → :default@PreviewArkTS → … → :default@PreviewHookCompileResource
 ```
 
-即 **`PreviewBuild` 是真实任务**，调用形式与 IDE 一致：
+调用形式与 IDE 一致：
 
 ```bash
 hvigorw --mode module -p module=entry@default -p product=default \
         -p requiredDeviceType=phone PreviewBuild --no-daemon
 ```
 
-**第一次跑它时 10 分钟无任何输出、`.tooling/hvigor-home` 下也没有新文件，我据此判定"卡住"并终止了
-——这个判断可能是错的**：ArkTS 首轮编译本来就可能很慢，10 分钟无输出未必等于挂死
-（教训：把"慢"当成"死"会误杀正在做的事）。下一次应当：**放到后台、给足时间（≥20 分钟）、
-并用 `--debug` 观察它停在哪一步**，同时盯着 preview 产物目录是否在增长。
+**结果：715ms 内失败**，且失败点在 ArkTS 预览编译：
 
+```
+ERROR: Failed :entry:default@PreviewArkTS...
+ERROR: The "data" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received undefined
+```
+
+即 hvigor 的预览任务在读一个**未定义**的输入——也就是 IDE 平时会额外传入、而命令行没传的东西
+（`hvigor-ohos-plugin/src/tasks/hook/previewer/preview-build.js` 里没有显式的 `previewerParam` 之类的键，
+说明它来自 IDE 侧注入的上下文）。
+
+> **两条自我更正（都值得记）**：
+> 1. 第一次跑时我以"10 分钟无输出"判定"卡住"并终止——**是错的**，真正原因是失败得太快而我用
+>    `cmd | tail -40` 把输出**缓冲**住了（管道到命令结束才吐字节）。**长任务不要管道给 `tail`**，
+>    要写文件再 `tail`。
+> 2. 修正后复跑，失败是**确定且可复现**的（715ms），这才是有用的信息。
+
+### 五、结论与下一步：**优先走模拟器，而不是继续钻 Preview CLI**
+
+| 路径 | 能验什么 | 卡在谁身上 |
+|---|---|---|
+| **模拟器** | **UI + 功能**（真 OHOS，能跑 `libkn.so` 与 `.ms`） | **只需要 owner 下载镜像**（DevEco Device Manager + 华为账号），CLI 已完备（`Emulator -hvd/-path/-imageRoot`） |
+| Previewer（CLI） | **仅 UI**（`libkn.so` 是 ohosArm64，Preview 里加载不了） | 需要 DevEco 插件内部那个未公开的预览上下文，**投入产出比差** |
+
+**所以建议：owner 花几分钟下载模拟器镜像 + 点一次自动签名，比继续逆推 Preview 的 CLI 参数划算得多**
+——前者一次动作同时解锁"UI 与功能"，后者即使打通也验不了功能。
+
+**不需要 owner 的部分**（下次可做）：
+1. 若仍想试 Preview，用 `--debug` 抓 `PreviewArkTS` 前的完整参数，看 IDE 注入项的键名；
+2. 其余时间投入 Android 侧仍未验的项（重复采样求方差、release R8）。
+
+**需要 owner**（做完这两步，M6 第 3 条运行期与第 4 条才有路）：
+3. DevEco 登录华为账号 → Device Manager 下载 **HarmonyOS 模拟器镜像**（约数 GB，会生成 `lists.json`/实例）；
+4. Device Manager 里点一次**自动生成签名**（`~/.ohos/config/` 目前为空）。
 ### 五、下一步（按"是否需要 owner"分）
 
 **不需要 owner**：

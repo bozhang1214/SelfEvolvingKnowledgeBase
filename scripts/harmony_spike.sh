@@ -84,6 +84,19 @@ build_hap() {
         assembleHap --mode module -p product=default --no-daemon ) || return 1
 }
 
+build_preview() {
+    echo "── Preview 构建（供 macOS Previewer 渲染 ArkUI）──"
+    # ⚠️ 这条产物**只能验 UI，验不了功能**：Previewer 是 macOS arm64 原生程序，
+    # 而 libkn.so（KMP + mindspore_lite）是 ohosArm64 目标 → 预览里加载不了 NAPI 模块。
+    # 功能侧（NAPI↔KMP、.ms 推理、HAP 能装能起）必须在**模拟器**上验。详见 apps/harmony/README.md。
+    #
+    # 任务确实存在（`taskTree` 可见 :entry:PreviewBuild → :default@PreviewArkTS → …）。
+    # 首轮 ArkTS 编译可能很久（>10 分钟无输出是正常的，**不要**据此判定挂死——上一轮我就误判过一次）。
+    ( cd "$HAP_PROJ" && "$DEVECO/tools/hvigor/bin/hvigorw" \
+        --mode module -p module=entry@default -p product=default \
+        -p requiredDeviceType=phone PreviewBuild --no-daemon )
+}
+
 verify_link() {
     echo
     echo "── 验证：HAP 内的 NAPI 模块是否真的引用 KMP 符号 ──"
@@ -179,5 +192,6 @@ case "$ACTION" in
     hap)  build_hap && verify_link ;;
     all)  build_kn && build_hap && verify_link ;;
     mindspore) build_kn && verify_mindspore ;;
+    preview) build_preview ;;
     *) echo "用法：bash scripts/harmony_spike.sh [kn|hap|all|mindspore]" >&2; exit 2 ;;
 esac
