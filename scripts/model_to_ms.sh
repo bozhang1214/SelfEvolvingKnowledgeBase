@@ -57,6 +57,26 @@
 #   ② 放弃 MindSpore Lite，回到社区版 OHOS ONNX Runtime（原方案，需找到预编译产物）；
 #   ③ 按 RFC §4 D2 退路线 B（ArkTS 重写 + 契约夹具，仓库已有 37 条夹具）。
 #
+# ## 路线① 的工作量量化（2026-09-25，纯图结构分析，离线可做）
+#
+# 用 `onnx` 对 `ms-static-1x512.onnx`（静态输入 1×512）做分析，结论有两条关键的：
+#
+# 1. **`Flatten` 只属于动态那份产物**：静态 ONNX 里 `Flatten` 算子数 = **0**
+#    （只有一个**名字**叫 `/m/Flatten`、但 `op_type` 是 `Reshape` 的节点——那是早先重写留下的名字）。
+#    所以动态 `.ms` 的 `FindBackendKernel nullptr: /m/Flatten` 来自**源模型自带的 Flatten**，
+#    而静态产物的 **0 CPU 挂起与 Flatten 无关，另有原因（尚未定位）**。
+# 2. **静态 ONNX 仍带完整动态链**：Shape×9 / ConstantOfShape×2 / Range×3 / Gather×15 / Where×5 / Expand×1
+#    ——输入虽已固定 1×512，这段"掩码展开"仍在图里。以 5 个 `Where` 的输出做**反向切片**：
+#      · 掩码链总规模：**67 节点**
+#      · 其中**不被 `input_ids` 主路径共享**（可安全删除的上界）：**18 节点**
+#        （Unsqueeze×5、Gather×5、ConstantOfShape×2、Cast×2、Slice/Range/Reshape/Mul 各 1）
+#      · 边界消费者：**9 个**（含 `/m/embeddings/Add` ×2）→ 需要重新接线
+#
+# ⚠️ **这是上界估计，不是已验证的修法**：它只说明"要动的图结构是有界的（18 个独占节点 + 9 个接线点）"，
+# **没有证明**删掉这段就能解决 0 CPU 挂起——那目前仍是**假说**。
+# 验证该假说最便宜的一步：造一份"掩码链已被宿主 additive mask 取代"的 ONNX 变体，
+# 重跑 convert + benchmark，看挂起是否消失。
+#
 # 待清理：容器内 6 个 `benchmark` 挂起进程（含 2 个 7 天前的）——0 CPU 无害，
 # 但容器里没有 `pkill`、宿主 PID 又不匹配，需手工 `docker exec <c> kill <容器内PID>`。
 # ============================================================
