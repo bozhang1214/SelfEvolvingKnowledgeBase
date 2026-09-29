@@ -11,3 +11,13 @@
 # 残留限制（如实记录）：若将来要**渲染/提取 PDF 内嵌的 JPEG2000 图像**，必须加回
 # `jp2-android` 依赖，否则那条路径会在运行时抛错。当前无此需求。
 -dontwarn com.gemalto.jp2.JP2Decoder
+
+# ── ONNX Runtime（R8 真机验证抓到的真问题）──────────────────────────────────────
+# 现象：R8 后的 release 包跑自检时**卡在第 11 项 `rag_provider`**（前 10 项 0 FAIL），
+# 无异常、无崩溃、进程存活——即 ONNX 嵌入提供者创建不出来/卡住。
+# 原因：ORT 的 Java API `ai.onnxruntime.**` 通过 **JNI + 反射**加载 native 库与类，
+# R8 看不到这些反射引用，会把相关类/成员剥掉或改名 → 运行时拿不到类。
+# 这正是"R8 必须做一轮 E2E"的价值所在：体积数字好看不代表还能跑。
+-keep class ai.onnxruntime.** { *; }
+-keepclassmembers class ai.onnxruntime.** { *; }
+-dontwarn ai.onnxruntime.**

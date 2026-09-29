@@ -1218,3 +1218,65 @@ R8 会把建议规则写到 `build/outputs/mapping/release/missing_rules.txt`—
 
 即 §1.11 的"把不变量变成自检项"**已生效**：§1.10 那个反向缺陷若再出现，这一项会直接报红。
 （**注意**：这次跑的是设备上的 **debug** 包——因此它验证的是**自检改动**，不是 R8。）
+
+---
+
+## 1.13 R8 运行期验证：**抓到一个真回归**（2026-09-25）
+
+> 背景：§1.12 只验了 R8 的**体积**，运行期一直是缺口，理由正是"R8 可能删坏代码，必须跑一轮 E2E"。
+> 本轮手机短暂解锁，把这个缺口补上了——**然后立刻抓到一个真问题**。
+
+### 已完成的验证
+
+| 步骤 | 结果 |
+|---|---|
+| 构建带签名的 release（复用 debug keystore，可与 debug 包覆盖安装） | ✅ `app-arm64-v8a-release.apk` **20.8 MB** |
+| 安装到真机 | ✅ `Success`；设备 APK **20.8 MB**、**无 `DEBUGGABLE` 标志** → 确认是 release 包 |
+| 跑自检 | ⚠️ **前 10 项 0 FAIL，然后卡在第 11 项** |
+
+### 现象：卡在 `rag_provider`（第 11 项）
+
+```
+[PASS] edge_reachable … [PASS] edge_tool_json        ← 前 10 项全过、0 FAIL
+（此后无任何自检输出；无异常、无崩溃、进程存活）
+```
+
+第 11 项是 **`rag_provider`**——ONNX 嵌入提供者的创建。
+
+### 诊断：ONNX Runtime 的 JNI/反射被 R8 剥掉了
+
+`ai.onnxruntime.**` 的 Java API 通过 **JNI + 反射**加载 native 库与类，R8 **看不到这些反射引用**，
+于是把相关类/成员剥掉或改名 → 运行时创建不出 provider。
+这是 R8 的经典坑，也正是"R8 必须跑一轮 E2E"的价值：**体积数字好看不代表还能跑**。
+
+### 已应用的修法（**待重验**）
+
+`app/proguard-rules.pro` 增加：
+
+```
+-keep class ai.onnxruntime.** { *; }
+-keepclassmembers class ai.onnxruntime.** { *; }
+-dontwarn ai.onnxruntime.**
+```
+
+重建：`BUILD SUCCESSFUL`。
+
+### ⚠️ 重验未完成（如实记录）
+
+补齐 keep 规则后重装失败、且**手机随后从 adb 断开**（设备查询全空），故
+**"加了 keep 规则后第 11 项是否恢复"尚未验证**。下一步只需：
+
+```bash
+SEKB_EDGE_URL=http://127.0.0.1:11434/v1 bash scripts/android.sh release   # 必须带 edge 地址！
+adb install -r apps/android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
+adb shell am start -n com.sekb.ondevice/.MainActivity --ez selftest true   # 看 logcat
+```
+
+### 本轮顺带查清的两条 release 包操作约束
+
+1. **release 包构建必须带 `SEKB_EDGE_URL`**：我第一次构建时忘了带，包内是默认的 `10.0.2.2`
+   （模拟器地址）→ 真机上 `edge_reachable=false`、所有 `edge_*` 全 FAIL。
+   这不是 R8 的问题，是构建参数漏了——但表现很像"R8 把网络搞坏了"，**很容易误判**。
+2. **release 包（非 debuggable）不能用 `run-as`** → `scripts/android.sh push-policy` 会报
+   `run-as: package not debuggable`。因此 3 个策略项在 release 自检里**只能 SKIP**，
+   release 包的满分不是 32 而是约 28（+SKIP）——这个口径要记住，否则会把"推不进策略包"误当成缺陷。
