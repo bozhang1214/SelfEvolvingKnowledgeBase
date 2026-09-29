@@ -22,7 +22,7 @@ class MainActivity : ComponentActivity() {
             runSelfTest()
         }
         // 验收数字入口：工具调用 JSON 合法率的对照实验（约束解码 ON/OFF）
-        //   adb shell am start -n com.sekb.ondevice/.MainActivity --ez eval true
+        //   adb shell am start -n com.sekb.ondevice/.MainActivity --ez eval true [--ez hard true] [--ei repeats 5]
         if (intent?.getBooleanExtra("eval", false) == true) {
             runToolCallEval()
         }
@@ -83,6 +83,8 @@ class MainActivity : ComponentActivity() {
                     val runner = com.sekb.shared.eval.ToolCallEvalRunner(
                         edge = edge, router = router, tools = container.tools, model = model,
                         hard = intent?.getBooleanExtra("hard", false) == true,
+                        // 重复采样次数：`--ei repeats 5`。为 1 时行为与旧版一致（不改变历史口径）
+                        repeats = intent?.getIntExtra("repeats", 1) ?: 1,
                     )
                     Log.i("SEKB_EVAL", "---- 档位 $tier → $model（${if (intent?.getBooleanExtra("hard", false) == true) "难档" else "易档"}）----")
                     val report = runner.run { line -> Log.i("SEKB_EVAL", line) }

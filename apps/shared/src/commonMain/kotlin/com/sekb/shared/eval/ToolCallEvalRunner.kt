@@ -33,6 +33,14 @@ class ToolCallEvalRunner(
      * 语法约束真正要解决的问题。
      */
     val hard: Boolean = false,
+    /**
+     * 每条提示词重复跑几次。
+     *
+     * 为什么必须能重复：§1.4 那轮每条只跑了 **1 次**，40/40「合法」就被写成了结论，
+     * 而 10/10 全对时真实合法率的 95% 置信下界只有约 0.72——**点估计撑不住结论的语气**。
+     * 重复采样后才能给出区间与按提示词的稳定性（见 `EvalStats`）。
+     */
+    val repeats: Int = 1,
 ) {
 
     /** 固定提示词集：全部是"必须查设备才能答"的问题（否则模型不会尝试工具调用）。 */
@@ -67,6 +75,11 @@ class ToolCallEvalRunner(
         val mode: String,
         val eval: ToolCallEvalState,
         val latencyMillis: Long,
+        /** 按提示词看的稳定性（`repeats > 1` 时有意义）。 */
+        val stability: List<EvalStats.Stability> = emptyList(),
+        /** 合法率的 95% 置信区间（Wilson）。分母 = 尝试次数，与 `eval.rate` 同口径。 */
+        val ciLow: Double = 0.0,
+        val ciHigh: Double = 0.0,
     )
 
     data class ToolCallEvalState(
@@ -86,11 +99,20 @@ class ToolCallEvalRunner(
             appendLine("模型 $model，提示词 ${runs.firstOrNull()?.eval?.let { "" } ?: ""}")
             for (r in runs) {
                 appendLine(
-                    "  ${r.mode}：尝试 ${r.eval.attempts}/${promptsCount} " +
-                        "合法 ${r.eval.legal} 非法 ${r.eval.illegal} " +
-                        "幻觉 ${r.eval.hallucinated} → 合法率 " +
-                        "${(r.eval.rate * 100).toInt()}%，平均延迟 ${r.latencyMillis}ms",
+                    "  ${r.mode}：尝试 ${r.eval.attempts} 合法 ${r.eval.legal} " +
+                        "非法 ${r.eval.illegal} 幻觉 ${r.eval.hallucinated} " +
+                        "→ 合法率 ${EvalStats.formatRate(r.eval.legal, r.eval.attempts)}" +
+                        "，平均延迟 ${r.latencyMillis}ms",
                 )
+                val unstable = r.stability.filter { !it.consistent }
+                if (unstable.isNotEmpty()) {
+                    appendLine("    ⚠️ 不稳定的提示词（同一条多次重复结果不一致）：")
+                    unstable.forEach {
+                        appendLine("      ${it.legal}/${it.attempts} 「${it.prompt.take(24)}」")
+                    }
+                } else if (r.stability.isNotEmpty()) {
+                    appendLine("    ✓ ${r.stability.size} 条提示词在重复采样下结果全部一致")
+                }
             }
         }
 
@@ -112,6 +134,9 @@ class ToolCallEvalRunner(
             var illegal = 0
             var hallucinated = 0
             var totalMillis = 0L
+            var calls = 0
+            val perPrompt = LinkedHashMap<String, MutableList<Pair<Boolean, Boolean>>>()
+            for (round in 0 until repeats) {
             for (prompt in activePrompts()) {
                 val messages = listOf(
                     ChatMessage.system(
@@ -136,14 +161,21 @@ class ToolCallEvalRunner(
                 samples.add(
                     Sample(prompt, mode, attempted, isLegal, completion.text.replace("\n", " ").take(60)),
                 )
-                onProgress("[$mode] ${prompt.take(12)}… attempted=$attempted legal=$isLegal")
+                perPrompt.getOrPut(prompt) { mutableListOf() }.add(attempted to isLegal)
+                calls++
+                onProgress("[$mode] r${round + 1}/$repeats ${prompt.take(12)}… attempted=$attempted legal=$isLegal")
+            }
             }
             runs.add(
                 ModeResult(
                     mode = mode,
                     eval = ToolCallEvalState(attempts, legal, illegal, hallucinated,
                         rate = if (attempts == 0) 0.0 else legal.toDouble() / attempts),
-                    latencyMillis = if (activePrompts().isEmpty()) 0 else totalMillis / activePrompts().size,
+                    latencyMillis = if (calls == 0) 0 else totalMillis / calls,
+                    stability = EvalStats.promptStability(perPrompt, repeats),
+                    // 合法率是按"尝试次数"算的，所以区间也按尝试次数给（分母口径必须一致）
+                    ciLow = EvalStats.wilson(legal, attempts).first,
+                    ciHigh = EvalStats.wilson(legal, attempts).second,
                 ),
             )
         }
@@ -153,7 +185,7 @@ class ToolCallEvalRunner(
     /** 把对照结果写成一行行可粘贴的文本。 */
     fun format(report: Report): String = buildString {
         appendLine("=== 工具调用 JSON 合法率对照（$model，${if (hard) "难档" else "易档"}，" +
-            "${activePrompts().size} 条提示词）===")
+            "${activePrompts().size} 条提示词${if (repeats > 1) " × 每条重复 $repeats 次" else ""}）===")
         for (r in report.runs) {
             appendLine(
                 // 原来用 String.format（JVM 专有）→ Fmt；`%-14s`/`%2d`/`%3d` 的对齐效果保持一致
@@ -163,6 +195,18 @@ class ToolCallEvalRunner(
                     "  工具名幻觉 ${r.eval.hallucinated}  合法率 ${Fmt.padStart(Fmt.pct(r.eval.rate), 3)}%" +
                     "  平均延迟 ${r.latencyMillis}ms",
             )
+            // 区间与稳定性：没有它们，"100%" 这句话的样本量撑不住它自己的语气
+            // （10/10 的 95% 下界只有 72%，n=50 才到 93%）
+            appendLine("   95%CI [" + Fmt.pct(r.ciLow * 100) + "%, " + Fmt.pct(r.ciHigh * 100) + "%]（n=${r.eval.attempts}）")
+            val unstable = r.stability.filter { !it.consistent }
+            if (unstable.isNotEmpty()) {
+                appendLine("   ⚠️ 不稳定提示词 ${unstable.size}/${r.stability.size}：")
+                unstable.forEach {
+                    appendLine("      ${it.legal}/${it.attempts} 「${it.prompt.take(24)}」")
+                }
+            } else if (r.stability.isNotEmpty()) {
+                appendLine("   ✓ ${r.stability.size} 条提示词在重复采样下结果全部一致")
+            }
         }
         appendLine("--- 明细（仅列未按预期产出的样本）---")
         for (s in report.samples) {
