@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -92,6 +93,7 @@ import com.sekb.shared.model.Plane
 fun ChatScreen(
     viewModel: ChatViewModel,
     documentCount: Int = 0,
+    onOpenHistory: () -> Unit = {},
     onOpenDocuments: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
@@ -135,6 +137,10 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    // 历史入口常驻：它是"存了要能拿回来"的唯一路径，藏起来等于没存
+                    IconButton(onClick = onOpenHistory) {
+                        Icon(Icons.Filled.History, contentDescription = "历史对话")
+                    }
                     // 已有对话时才给"新对话"：空对话给这个按钮没有意义
                     if (state.bubbles.isNotEmpty()) {
                         IconButton(onClick = viewModel::newConversation) {

@@ -10,7 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /** 端侧宿主的三个页面。 */
-enum class SekbScreen { Chat, Documents, Settings }
+enum class SekbScreen { Chat, History, Documents, Settings }
 
 /**
  * 极简导航壳。
@@ -30,6 +30,7 @@ fun AppShell(viewModel: ChatViewModel) {
     // 进文档页时刷新一次：用户可能刚在系统文件管理器里删过文件
     LaunchedEffect(screen) {
         if (screen == SekbScreen.Documents) viewModel.refreshDocuments()
+        if (screen == SekbScreen.History) viewModel.refreshConversations()
     }
 
     // 子页面必须响应系统返回键，否则用户按返回会直接退出应用（很突兀）
@@ -39,8 +40,15 @@ fun AppShell(viewModel: ChatViewModel) {
         SekbScreen.Chat -> ChatScreen(
             viewModel = viewModel,
             documentCount = state.documents.size,
+            onOpenHistory = { screen = SekbScreen.History },
             onOpenDocuments = { screen = SekbScreen.Documents },
             onOpenSettings = { screen = SekbScreen.Settings },
+        )
+
+        SekbScreen.History -> ConversationListScreen(
+            viewModel = viewModel,
+            onBack = { screen = SekbScreen.Chat },
+            onOpened = { screen = SekbScreen.Chat },
         )
 
         SekbScreen.Documents -> DocumentsScreen(viewModel) { screen = SekbScreen.Chat }

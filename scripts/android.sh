@@ -186,7 +186,11 @@ if [ ${#PROP_FLAGS[@]} -gt 0 ]; then
 fi
 
 STATUS=0
-for task in "$@"; do
+# ⚠️ 用 `while`+`shift` 而不是 `for task in "$@"`：有些任务要带**参数**
+# （如 `push-policy <file>`）。`for` 会把参数也当成"任务"再跑一遍——
+# 表现为 `./gradlew <文件路径>` → BUILD FAILED（实测踩到）。
+while [ $# -gt 0 ]; do
+    task="$1"; shift
     case "$task" in
         test)      ./gradlew :app:testDebugUnitTest --console=plain $MINOR_FLAG ;;
         assemble)  ./gradlew :app:assembleDebug --console=plain $MINOR_FLAG \
@@ -213,10 +217,17 @@ for task in "$@"; do
             # 空间戳必须与端侧 config 一致（否则会（正确地）被 policy_space_mismatch 拒掉）。
             PKG="com.sekb.ondevice"
             DEST="/data/data/${PKG}/files/sekb-e2e-policy.json"
-            ADB="${ANDROID_SDK_ROOT}/platform-tools/adb"
+            ADB="${ADB_BIN}"
             require_device "$ADB"
             POLICY_FILE="${1:-}"
             [ -n "$POLICY_FILE" ] || { echo "用法：bash scripts/android.sh push-policy <policy.json>" >&2; exit 2; }
+            shift   # 消费掉文件参数，别让它被当成下一个任务
+            # ⚠️ 脚本前面已经 `cd "$APP_DIR"`（要跑 ./gradlew），所以**相对路径必须按仓库根解析**，
+            # 否则在仓库根执行 `push-policy apps/...` 会被解析成 apps/android/apps/...（实测踩到）。
+            case "$POLICY_FILE" in
+                /*) : ;;
+                *) POLICY_FILE="$ROOT/$POLICY_FILE" ;;
+            esac
             [ -f "$POLICY_FILE" ] || { echo "找不到策略文件：$POLICY_FILE" >&2; exit 2; }
             cat "$POLICY_FILE" | "$ADB" shell "run-as ${PKG} sh -c 'cat > ${DEST}'"
             echo "✅ 策略已写入 $DEST"

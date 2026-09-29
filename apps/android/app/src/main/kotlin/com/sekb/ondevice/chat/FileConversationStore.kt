@@ -38,6 +38,17 @@ class FileConversationStore(
 
     private fun fileOf(id: String) = File(dir, "$id.json")
 
+    /** 当前会话指针。单独一个文件，**不叫 .json**，因此不会被 [list] 当会话读。 */
+    private fun pointerFile() = File(dir, "current.id")
+
+    override fun saveCurrentId(id: String) {
+        runCatching { pointerFile().writeText(id, Charsets.UTF_8) }
+    }
+
+    override fun currentId(): String? =
+        runCatching { pointerFile().takeIf { it.isFile }?.readText(Charsets.UTF_8)?.trim() }
+            .getOrNull()?.takeIf { !it.isNullOrEmpty() }
+
     override fun list(): List<ConversationSummary> {
         var skipped = 0
         val out = mutableListOf<ConversationSummary>()

@@ -559,8 +559,13 @@ adb logcat -d -s SEKB_SELFTEST:I
 - [ ] **工具调用 JSON 合法率**：约束解码开/关的**同一批提示词对比**（当前只验了"能产出合法 JSON"，
       还没跑成组的合法率对比——需要固定一组提示词 + 各跑 N 次）
 - [x] ~~**UI 手工走一遍**~~ → §1.5（并抓到两个真缺陷：密码明文、徽标漏报客户端升级）
+- [x] ~~**用户可用 UI**~~ → §1.2（三页改版 + Markdown 渲染；真机截图逐页核对）
+- [x] ~~**深色模式**~~ → §1.4（修复 42 处硬编码色 + 机械检查）+ §1.6（真机目视确认）
+- [x] ~~**会话历史持久化**~~ → §1.5（重启恢复）+ §1.7（历史列表页）
+- [x] ~~**真机性能**（TTFT / 端侧嵌入 / 检索耗时）~~ → §1.1（**真机已测**，真机验收 2026-09-24）
+- [x] ~~**L1 策略 apply→rebuild→rollback**~~ → §1.6（真机 E2E 跑通，自检 31 PASS / 0 FAIL / 1 SKIP）
 - [ ] 断网可用性（飞行模式下端侧链路是否仍可用）
-- [ ] 真机性能（decode tok/s、TTFT、内存峰值）——**模拟器测不了**，属 M3
+- [ ] release 开 R8 + 一轮 E2E（见 §1.0.1 的包体结论）
 
 ## 3. 怎么验（模拟器联调步骤）
 
@@ -588,10 +593,15 @@ adb logcat -d -s SEKB_SELFTEST:I
 
 ## 4. 已知限制
 
-- **无真机**：所有性能类结论都不在本仓库产出（RFC §9.1 的 D10 决策）。
-- 设备凭证存储（Keystore AES-GCM）与网络客户端**只做了 JVM 可验的部分**：
-  Keystore 本身、真实 SSE 连接、真实 Ollama 调用都必须在模拟器上验（见 §2）。
-- 未做：Compose UI、Android 运行时装配（把上面这些接起来）、约束解码开关的对比实验。
+> ⚠️ **本节在 2026-09-25 修订**：下面两条曾经成立，但**已不再成立**——留着会误导
+> （我本人就被"未做 Compose UI"误导过一次）。修订而非删除，是为了保留"当时确实没有真机"这个事实。
+
+- ~~**无真机**~~ → **已有真机**（华为 Mate 40 Pro / HarmonyOS 4.2）：性能类结论已在本仓库产出，见 §1.1。
+  仍缺的是 **iOS 真机**与**鸿蒙 NEXT 设备**（鸿蒙改走模拟器/Preview，见 RFC §7 M6/M7）。
+- 设备凭证存储（Keystore AES-GCM）与网络客户端**只做了 JVM 可验的部分**——这一条**仍然成立**：
+  Keystore 本身、真实 SSE 连接、真实 Ollama 调用需要设备/模拟器（见 §2）。
+- ~~未做：Compose UI~~ → **已做**，见 §1.2/§1.4/§1.5/§1.7（三页 + Markdown 渲染 + 深色模式 + 会话历史）。
+- **仍然未做**：约束解码开关的对比实验（见 §2）。
 
 ---
 
@@ -825,3 +835,132 @@ adb logcat -s SEKB_SELFTEST:V      # ⚠️ 必须实时抓：本机日志刷得
   等价于杀进程重启；另覆盖坏文件跳过、`.tmp` 不残留、上限裁剪、同 id 覆盖不重复。
 - ⚠️ **未做**：真机上的"杀掉 App → 重开 → 历史还在"目视确认（验证时手机已断开 adb）；
   文件层已用真实文件系统验过，但端到端仍待一次真机操作。
+
+---
+
+## 1.6 L1 策略真机 E2E 跑通 —— 过程中发现**两个各自致命**的跨端缺陷（2026-09-25）
+
+> 触发：owner 让继续推进遗留项。做「B3：把真机自检里 3 个策略 SKIP 转正」时，
+> 推上签名策略包后**被拒**，顺藤摸出两个缺陷。
+
+### 缺陷 1：开发默认签名密钥两侧不一致 → 端侧拒绝**所有**服务端签发的策略
+
+| 侧 | 值 | 来源 |
+|---|---|---|
+| 服务端（未配 `SEKB_EDGE_POLICY_SECRET` 时） | `sha256("edge-policy:dev-only").hexdigest()` = `8d1c82bf…99b6` | `backend/app/core/edge_policy.py` |
+| 端侧 `BuildConfig.DEFAULT_EDGE_POLICY_KEY` | 原文字面量 `"edge-policy:dev-only"` | `apps/android/app/build.gradle.kts` |
+
+`build.gradle.kts` 的注释写着"服务端未配时会**派生同一个**开发密钥"——**这句话是错的**。
+且**没有任何地方**传 `-PsekbPolicyKey`、也没配 `SEKB_EDGE_POLICY_SECRET`，
+所以默认配置下端侧必然把服务端策略判为 `policy_bad_signature`。
+真机日志里 `policy_refresh — 未应用：policy_bad_signature` 就是这个缺陷在**线上服务器**上的表现。
+
+### 缺陷 2：时间单位不一致（服务端**秒** vs 端侧**毫秒**）→ 每份策略都被判"已过期"
+
+端侧 `EdgePolicy.apply`：
+
+```kotlin
+val expiresAt = payload.optInt("expiresAt", 0)
+if (expiresAt in 1 until nowMillis) return Outcome.Rejected("policy_expired")
+```
+
+而服务端 `issued = int(time.time())`（秒）。实测：`expiresAt = 1790753917` <
+`nowMillis ≈ 1790667517429` → **恒真**，即**每一份策略都立刻过期**。
+
+### 为什么两个缺陷此前都没被发现（结构性原因）
+
+**两侧测试都是"同侧自洽"**：
+
+- 后端：`verify_payload(p, policy_secret(cfg))` —— 自签自验，两侧用同一个**错误**密钥也通过；
+- 端侧：`EdgePolicyTest` 用的是**自选**密钥 `"test-key"`，只验算法不验默认值；
+  且时间字面量是 `nowMillis = 1700000001`（**秒级**），恰好让"秒 vs 毫秒"暴露不出来。
+
+M4.5 验收③（改一次阈值 → 不发版、不重启也生效）因此**从未真正端到端跑通过**，
+此前记录的"⏳ 拉取时机待接""policy_refresh SKIP 无设备凭证"掩盖了它。
+
+### 修法与新增守卫（都是**跨端**的，不是自洽的）
+
+1. `edge_policy.py`：开发默认密钥改为字面量 `DEV_DEFAULT_SECRET = "edge-policy:dev-only"`（与端侧逐字一致）；
+2. `edge_policy.py`：`issuedAt`/`expiresAt` 改为 **epoch 毫秒**（`int(now*1000)`、`ttl_seconds*1000`），
+   并在 docstring 里写明单位契约；
+3. 后端 `test_dev_default_matches_android_build_default`：**直接读 `apps/android/app/build.gradle.kts`**
+   抽出端侧默认值比对——任何一侧单方面改动立刻红；
+4. 后端 `issuedAt/expiresAt > 10**12` 单位守卫；
+5. 端侧新增 `PolicyCrossEndFixtureTest`：加载**由服务端代码签出**的真实策略包
+   （`src/test/resources/policy/server-signed-dev.json`），断言端侧用默认密钥能验过；
+   并有一条**反向守卫**（用当年那个 sha256 派生密钥验签必须被判 `policy_bad_signature`）。
+   夹具测试的时间**必须用真实毫秒**（`System.currentTimeMillis()`）——
+   第一版我写了秒级字面量，结果"恰好"绕过了缺陷 2，这本身就是"用了不真实的时间等于没测时间语义"。
+
+**已验证守卫会红**：把 `build.gradle.kts` 的默认值改成别的 → 后端守卫立刻 FAILED 并打印两侧的值；
+还原 → 回绿。
+
+### 真机 E2E 结果（首次跑通）
+
+推入服务端签发的策略包（`retrievalMinScore=0.7`）后：
+
+```
+[PASS] policy_apply_rebuild — 应用=641466276 阈值 0.5 → 0.7（期望 0.7）重建=true（阈值有变化=true）
+[PASS] policy_threshold_wired — 检索器阈值=0.7（策略=0.7）
+[PASS] policy_rollback_restores_threshold — 先应用到 0.9，回滚后阈值=0.7（期望 0.7）
+自检汇总：PASS=31 FAIL=0 SKIP=1
+```
+
+**真机自检从 `PASS=28 FAIL=0 SKIP=4` → `PASS=31 FAIL=0 SKIP=1`**（3 个策略 SKIP 全部转正，
+剩余 1 个 SKIP 是 `cloud_login`——需要真实设备凭证）。
+这同时证明 **M4.5 验收③ 成立**：改阈值 → 不重新发版、不重启，检索器阈值当场由 0.5 变 0.7。
+
+### 顺带修掉的脚本缺陷（都在 `scripts/android.sh`）
+
+- `push-policy` 读的是 `$1`，而 `$1` 是**任务名** → 报"找不到策略文件：push-policy"。应为 `$2`（后改 `$1`+shift）。
+- 循环是 `for task in "$@"` → 带参数的调用会把**文件路径当成第二个任务**去跑 `./gradlew <路径>` → BUILD FAILED。
+  已改为 `while [ $# -gt 0 ]` + `shift`，并在 `push-policy` 里消费掉文件参数。
+- 相对路径按仓库根解析（脚本前面已 `cd "$APP_DIR"`，否则 `apps/...` 会被解析成 `apps/android/apps/...`）。
+
+### ⚠️ 仍需一次**后端重新部署**
+
+线上 `bos-studio.tech` 跑的还是旧代码（旧密钥 + 秒级时间戳），所以真机 `policy_refresh`
+目前仍显示"未应用：policy_bad_signature"。修好的代码要部署上去，**实时拉取**这条路径才算闭环
+（本次验证走的是"注入本地策略包"的离线路径）。
+
+---
+
+## 1.7 历史对话列表页 + "新对话后重启跳回旧对话"的修复（2026-09-25）
+
+### 为什么要这一页
+
+§1.5 的会话持久化只做到"重启恢复**最近一次**会话"——更早的对话**其实已经落盘**，
+但用户看不到、也点不进去。**存了却拿不出来等于没存**（用户会以为"历史没了"，而文件就在那儿）。
+历史列表页就是把已存的东西变成可访问的。
+
+### 实现
+
+- `ui/ConversationListScreen.kt`：列表卡片（标题 / 相对时间 / 消息条数 / 删除）、空状态、
+  当前对话标记；点开即加载并回到聊天页。
+- `ui/TimeFmt.kt`：相对时间文案（**纯逻辑**，可被 JVM 单测直接跑）——"刚刚 / N 分钟前 / HH:mm /
+  昨天 HH:mm / N 天前 / 日期"分段降级。超过一周改用具体日期：这时"37 天前"反而不如日期直观。
+  **时区与"当前时间"都作为参数注入**，否则测试会在 UTC 的 CI 与 UTC+8 的开发机上给出不同答案。
+- `ChatViewModel`：`refreshConversations` / `openConversation` / `deleteConversation`；
+  "启动恢复"与"列表点开"共用同一个 `loadConversation()`——
+  分成两份实现必然漂移（例如一处忘了清 `history`，接着提问就会把两段对话混在一起）。
+
+### 过程中发现并修掉的体验缺陷：**点「新对话」后重启会跳回旧对话**
+
+发现方式很偶然：我用 `adb input tap` 点历史图标时**点偏到了「新对话」**（"+" 只在有对话时出现，
+位置会随图标数量变化），于是对话被清空；随后重启 App，**旧对话又回来了**。
+
+根因：启动恢复用的是"最近更新的一段"（`latest()`），而**新对话是空的、因而没有落盘**，
+所以 `latest()` 只能把上一段拉回来。用户刚点过「新对话」，重启却回到旧对话——与他的操作相反。
+
+修法：新增**当前会话指针**（`ConversationStore.saveCurrentId/currentId`，
+Android 实现存 `files/conversations/current.id`，文件名**不以 `.json` 结尾**所以不会被列表当成会话）。
+启动时优先按指针恢复；指针指向的新会话没有文件 → 启动就是干净的空对话。
+没有指针时（旧版本数据）退回 `latest()`，保证兼容。
+
+### 验证
+
+- `bash scripts/android.sh test` → **285 用例 / 0 失败**（新增 `TimeFmtTest` 9 条）。
+- **真机**（Mate 40 Pro，深色模式）：历史页显示 `1 段 · 都存在这台设备上`，
+  卡片标题「现在几点了？」+ **`25 分钟前 · 2 条消息`**（相对时间正确）；
+  杀进程重开后聊天页标题与内容正确恢复；顶栏四个入口（历史 / 新对话 / 知识库 / 设置）布局正确。
+- `ThemeColorDisciplineTest` 的"纯逻辑文件不许依赖 Compose"清单已加入 `TimeFmt.kt`。

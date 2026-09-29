@@ -37,12 +37,16 @@ def make_config(*, prefer: str = "edge", guard: int = 60):
 
 class TestPolicyShape:
     def test_payload_has_all_contracted_fields(self):
-        p = build_policy(make_config(), now=1_700_000_000)
+        p = build_policy(make_config(), now=1_700_000_000)   # 秒 → 内部乘 1000 存毫秒
         for key in ("version", "issuedAt", "expiresAt", "embeddingSpace", "rollout", "policy", "signature"):
             assert key in p, key
         assert p["embeddingSpace"] == EMBEDDING_SPACE          # 空间戳绑定
-        assert p["issuedAt"] == 1_700_000_000
+        assert p["issuedAt"] == 1_700_000_000_000
         assert p["expiresAt"] > p["issuedAt"]
+        # **单位守卫**：必须是 epoch 毫秒。曾经这里是秒，端侧按毫秒比较 → 每份策略都被
+        # 判为 policy_expired，而两侧测试都用秒级字面量所以谁都没红。
+        assert p["issuedAt"] > 10**12, f"issuedAt={p['issuedAt']} 不是毫秒（端侧会判为已过期）"
+        assert p["expiresAt"] > 10**12, f"expiresAt={p['expiresAt']} 不是毫秒"
         assert p["deviceProfiles"] == {}                       # 预留字段（本期不实现）
 
     def test_baseline_comes_from_server_config(self):
@@ -150,7 +154,58 @@ class TestEndpoint:
         payload = await edge_route.get_policy(device_id="dev-1", rollout_percent=100)
         assert verify_payload(payload, policy_secret(cfg))
         assert payload["policy"]["streamGuardChars"] == 60
-        assert payload["issuedAt"] <= int(time.time()) <= payload["expiresAt"]
+        assert payload["issuedAt"] <= int(time.time() * 1000) <= payload["expiresAt"]
 
     def test_canonical_json_is_stable(self):
         assert canonical({"b": 1, "a": [1, 2]}) == '{"a":[1,2],"b":1}'
+
+
+# ---------------------------------------------------------------------------
+# 跨端守卫：开发默认密钥必须与 Android 端逐字相同
+# ---------------------------------------------------------------------------
+
+def test_dev_default_matches_android_build_default():
+    """**跨端**守卫：服务端开发默认密钥 == Android `DEFAULT_EDGE_POLICY_KEY` 的默认值。
+
+    为什么必须有这一条：本文件其余测试都是**自签自验**
+    （`verify_payload(p, policy_secret(cfg))`），两侧即使共用同一个**错误**密钥也会通过。
+    历史上真的这样漏过：服务端未配置时返回 `sha256("edge-policy:dev-only").hexdigest()`，
+    而端侧 `BuildConfig` 里是原文字面量 `"edge-policy:dev-only"`，
+    于是默认配置下端侧会把**所有真正由服务端签发的策略**判为 `policy_bad_signature`，
+    M4.5 验收③（改阈值 → 不发版生效）从未端到端跑通。
+
+    这里直接去读 Android 构建脚本里的默认值——任何一侧单方面改动都会立刻红。
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    gradle = root / "apps/android/app/build.gradle.kts"
+    assert gradle.is_file(), f"找不到 Android 构建脚本：{gradle}"
+
+    text = gradle.read_text(encoding="utf-8")
+    m = re.search(r'sekbPolicyKey"\)\s*\?:\s*"([^"]+)"', text)
+    assert m, "在 build.gradle.kts 里没找到 sekbPolicyKey 的默认值（抽取规则需要更新）"
+    android_default = m.group(1)
+
+    server_default = policy_secret(None)  # 无 env、无 config 时的开发默认值
+    assert server_default == android_default, (
+        "服务端与端侧的开发默认策略密钥不一致——端侧会拒绝所有服务端签发的策略。\n"
+        f"  服务端 policy_secret(None) = {server_default}\n"
+        f"  Android BuildConfig 默认值  = {android_default}"
+    )
+
+
+def test_production_secret_is_not_the_dev_default():
+    """生产必须显式配置：有 env 时绝不能再回落到开发默认值。"""
+    import os
+
+    saved = os.environ.get("SEKB_EDGE_POLICY_SECRET")
+    try:
+        os.environ["SEKB_EDGE_POLICY_SECRET"] = "prod-secret-xyz"
+        assert policy_secret(None) == "prod-secret-xyz"
+    finally:
+        if saved is None:
+            os.environ.pop("SEKB_EDGE_POLICY_SECRET", None)
+        else:
+            os.environ["SEKB_EDGE_POLICY_SECRET"] = saved

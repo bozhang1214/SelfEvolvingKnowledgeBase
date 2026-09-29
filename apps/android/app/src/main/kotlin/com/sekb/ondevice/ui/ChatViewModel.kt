@@ -63,6 +63,8 @@ data class ChatUiState(
     val importing: Boolean = false,
     /** 当前会话标题（由第一条用户消息推导；空表示还没开始对话）。 */
     val conversationTitle: String = "",
+    /** 本机已落盘的会话（最近更新在前）——供历史列表页展示。 */
+    val conversations: List<com.sekb.shared.chat.ConversationSummary> = emptyList(),
 ) {
     val documentSummary: String get() =
         if (documents.isEmpty()) "还没有导入本机文档" else
@@ -128,7 +130,26 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * 而端侧要保住的是**用户在本机看到过什么**。
      */
     private fun restoreLatestConversation() {
+        // 优先按"当前会话指针"恢复：用户点过「新对话」时，那段会话是空的、没有文件，
+        // 此时必须**保持空**，而不是把上一段拉回来（否则用户会以为新对话没生效）。
+        val pointed = runCatching { conversations.currentId() }.getOrNull()
+        if (pointed != null) {
+            val conv = runCatching { conversations.load(pointed) }.getOrNull()
+            if (conv != null) loadConversation(conv)
+            return
+        }
+        // 没有指针（旧版本数据）：退回"最近一段"
         val latest = runCatching { conversations.latest() }.getOrNull() ?: return
+        loadConversation(latest)
+    }
+
+    /**
+     * 把一段已落盘的会话装进当前界面。
+     *
+     * 抽出来是因为"启动恢复最近一段"与"历史列表里点开某一段"要做**完全相同**的事——
+     * 分成两份实现必然漂移（例如一处忘了清 `history`，接着提问就会把两段对话混在一起）。
+     */
+    private fun loadConversation(latest: com.sekb.shared.chat.Conversation) {
         if (latest.messages.isEmpty()) return
         history.clear()
         latest.messages.forEach { m ->
@@ -138,6 +159,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
         localConversationId = latest.id
         localTitle = latest.title
+        runCatching { conversations.saveCurrentId(latest.id) }
         _state.update { st ->
             st.copy(
                 conversationTitle = latest.title,
@@ -160,10 +182,34 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 刷新本机会话列表（进历史页时调用）。 */
+    fun refreshConversations() {
+        val list = runCatching { conversations.list() }.getOrDefault(emptyList())
+        _state.update { it.copy(conversations = list) }
+    }
+
+    /** 打开历史里的某一段会话。 */
+    fun openConversation(id: String) {
+        val conv = runCatching { conversations.load(id) }.getOrNull() ?: return
+        loadConversation(conv)
+        refreshConversations()
+    }
+
+    /** 删除一段会话；删的若是当前这段，就顺带清空界面（避免"看着已删的对话继续提问"）。 */
+    fun deleteConversation(id: String) {
+        runCatching { conversations.delete(id) }
+        if (id == localConversationId) {
+            newConversation()
+        }
+        refreshConversations()
+    }
+
     /** 开一段新对话（旧的那段已经落盘，不会丢）。 */
     fun newConversation() {
         localConversationId = com.sekb.shared.core.Ids.random()
         localTitle = ""
+        // 记下指针：新对话是空的（没有文件），所以重启后应当仍是空对话
+        runCatching { conversations.saveCurrentId(localConversationId) }
         history.clear()
         conversationId = null
         _state.update {
@@ -204,7 +250,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
             },
         )
-        runCatching { conversations.save(conv) }
+        runCatching {
+            conversations.save(conv)
+            conversations.saveCurrentId(conv.id)
+        }
     }
 
     // ---------- 本机文档（端侧 RAG 的输入） ----------

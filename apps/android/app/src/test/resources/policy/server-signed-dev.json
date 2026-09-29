@@ -1,0 +1,28 @@
+{
+  "deviceProfiles": {},
+  "embeddingSpace": "BAAI/bge-small-zh-v1.5@512",
+  "expiresAt": 2800000000000,
+  "issuedAt": 1800000000000,
+  "policy": {
+    "escalateOn": [
+      "json_invalid",
+      "empty",
+      "degenerate",
+      "timeout",
+      "low_confidence",
+      "tool_hallucination"
+    ],
+    "maxInputTokens": 2048,
+    "maxOutputTokens": 512,
+    "maxTtftMs": 800,
+    "preferPlane": "edge",
+    "retrievalMinScore": 0.7,
+    "streamGuardChars": 60
+  },
+  "rollout": {
+    "percent": 100,
+    "salt": "2026w39"
+  },
+  "signature": "0a2e43445a0fe130dff75ebe60a247024bd009aba5da086c0a80edd3df2bf35d",
+  "version": 641466276
+}

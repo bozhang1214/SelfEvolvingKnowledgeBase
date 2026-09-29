@@ -57,6 +57,11 @@ RESERVED_KEYS: frozenset[str] = frozenset({"deviceProfiles"})
 #: 签名密钥的环境变量名；未配置时用 jwt_secret 派生（本地开发不至于完全没签名）。
 ENV_SECRET = "SEKB_EDGE_POLICY_SECRET"
 
+#: 未配置任何密钥时的开发默认值。**必须与 Android 端 `BuildConfig.DEFAULT_EDGE_POLICY_KEY`
+#: 的默认值完全一致**（生产两端都要显式配置：服务端 `SEKB_EDGE_POLICY_SECRET` +
+#: 端侧构建期 `-PsekbPolicyKey=<同一个值>`）。
+DEV_DEFAULT_SECRET = "edge-policy:dev-only"
+
 
 class PolicyError(ValueError):
     """策略不合法（未知键 / 越界值 / 签名不符）。"""
@@ -78,7 +83,15 @@ def policy_secret(config: Any = None) -> str:
     if base:
         return hashlib.sha256(f"edge-policy:{base}".encode()).hexdigest()
     logger.warning("未配置策略签名密钥，使用开发默认值（生产必须设 %s）", ENV_SECRET)
-    return hashlib.sha256(b"edge-policy:dev-only").hexdigest()
+    # ⚠️ 这个字符串必须与 Android `BuildConfig.DEFAULT_EDGE_POLICY_KEY` 的默认值**逐字相同**。
+    #
+    # 曾经它是 `sha256(b"edge-policy:dev-only").hexdigest()`，而端侧用的是**原文字面量**，
+    # 于是默认配置下**端侧会把所有真正由服务端签发的策略判为 `policy_bad_signature`**，
+    # M4.5 的验收③（改阈值→不发版生效）因此从未真正端到端跑通。
+    # 为什么旧测试没抓到：后端测试全是**自签自验**（`verify_payload(p, policy_secret(cfg))`），
+    # 两侧用同一个错误密钥也照样通过——跨端不一致只能靠**跨端夹具**发现，见
+    # `tests/unit/test_edge_policy.py::test_dev_default_matches_android_build_default`。
+    return DEV_DEFAULT_SECRET
 
 
 def canonical(payload: dict[str, Any]) -> str:
@@ -118,17 +131,25 @@ def build_policy(
 
     ``overrides`` 是本次要下发的可变项（通常来自配置或人工调参），会与"从配置推导的基线"合并；
     合并结果**先过白名单再签名**——顺序不能反，否则会签出一份自己都不该认的包。
+
+    ⚠️ **`issuedAt` / `expiresAt` / `now` / `ttl_seconds` 一律是 epoch 毫秒**（`ttl_seconds`
+    名字保留但语义是秒的数，内部乘 1000）。必须与端侧一致：端侧 `EdgePolicy.apply` 拿
+    `expiresAt` 与 `nowMillis`（毫秒）比较。曾经这里是 `int(time.time())`（**秒**），
+    于是端侧算出 `expiresAt(1.79e9) < nowMillis(1.79e12)`，**每一份策略都被判为
+    `policy_expired`**——与"签名密钥不一致"是同一个时段引入、同样没被发现的第二个致命缺陷
+    （两侧测试都用了秒级字面量，所以同侧自洽却跨端不通）。
     """
     base = _baseline_from_config(config)
     merged = {**base, **(overrides or {})}
     validate_policy(merged)
 
     version = int(hashlib.sha256(canonical(merged).encode()).hexdigest()[:8], 16)
-    issued = int(now if now is not None else time.time())
+    # 毫秒：端侧按 nowMillis 比较（见 docstring 里那段"第二个致命缺陷"）
+    issued = int((now if now is not None else time.time()) * 1000)
     payload: dict[str, Any] = {
         "version": version,
         "issuedAt": issued,
-        "expiresAt": issued + int(ttl_seconds),
+        "expiresAt": issued + int(ttl_seconds) * 1000,
         "embeddingSpace": EMBEDDING_SPACE,
         "rollout": {"percent": max(0, min(100, int(rollout_percent))),
                     "salt": rollout_salt or time.strftime("%Yw%W")},

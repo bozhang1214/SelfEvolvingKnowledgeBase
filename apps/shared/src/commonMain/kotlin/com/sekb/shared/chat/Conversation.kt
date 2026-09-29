@@ -174,8 +174,20 @@ interface ConversationStore {
 
     fun clear()
 
-    /** 最近一次更新的会话（App 启动时恢复它）。 */
+    /** 最近一次更新的会话。 */
     fun latest(): Conversation? = list().firstOrNull()?.let { load(it.id) }
+
+    /**
+     * 记住"当前正在进行的会话是哪一个"。
+     *
+     * 为什么需要它：只按"最近更新"恢复是不够的——用户点了「新对话」之后，那段新会话**是空的、
+     * 因而没有落盘**，于是重启时 `latest()` 会把**上一段**对话又拉回来，用户会以为"新对话没生效"。
+     * 记住指针后：指针指向的新会话没有文件 → 启动就是干净的空对话（符合用户刚做的动作）。
+     */
+    fun saveCurrentId(id: String) {}
+
+    /** 当前会话 id；从未记录过返回 null。 */
+    fun currentId(): String? = null
 }
 
 /** 内存实现（单测与"不落盘"场景）。 */

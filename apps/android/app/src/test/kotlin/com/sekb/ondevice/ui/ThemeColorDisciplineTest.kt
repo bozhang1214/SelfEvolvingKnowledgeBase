@@ -73,7 +73,7 @@ class ThemeColorDisciplineTest {
     @Test
     fun `pure logic files stay free of compose imports`() {
         val ui = uiSourceDir() ?: return
-        for (name in listOf("Markdown.kt", "PlaneExplain.kt")) {
+        for (name in listOf("Markdown.kt", "PlaneExplain.kt", "TimeFmt.kt")) {
             val f = File(ui, name)
             assertTrue("$name 不存在了？检查需要更新", f.isFile)
             val bad = f.readLines().filter { it.startsWith("import androidx.compose") }
