@@ -480,6 +480,22 @@ object SelfTest {
             record("policy_refresh", result != null, detail)
         }
 
+        // **不变量**：策略校验用的空间必须与检索器**实际使用**的空间同源。
+        //
+        // 为什么要单独列一项：修复前 `config.embeddingSpace` 一直是默认值 `…@512`，而检索器用
+        // `if (int8Available) …-int8@512 else …@512`，本机 int8 生效 → 两者不一致，导致
+        // **空间戳绑定方向反了**（为 int8 调的阈值被拒、为 fp32 调的反而被应用到 int8 检索器）。
+        // 当时没有任何一项检查这个不变量，所以只能靠人肉比对日志发现。
+        val cfgSpace = container.config.embeddingSpace
+        // 用**向量库**的空间：库里存的就是这套向量，策略阈值必须与它匹配
+        val retrieverSpace = runCatching { container.vectorStore.space.id }.getOrDefault("")
+        record(
+            "policy_space_stamp_same_source",
+            cfgSpace.isNotEmpty() && cfgSpace == retrieverSpace,
+            "策略校验空间=$cfgSpace 向量库实际空间=$retrieverSpace" +
+                if (cfgSpace == retrieverSpace) "" else " ⚠️ 不一致 → 空间戳绑定会判错方向",
+        )
+
         if (payload.isNullOrBlank()) {
             record("policy_apply_rebuild", null, "未注入策略包（files/sekb-e2e-policy.json）→ 跳过")
             record("policy_rollback_restores_threshold", null, "同上")
@@ -490,6 +506,23 @@ object SelfTest {
         // 2) 应用 → 重建 → 阈值生效
         val before = container.retriever
         val applied = runCatching { container.debugApplyPolicy(payload) }.getOrNull()
+
+        // 注入的策略被**拒绝**时，这三项无法演示——但"被拒"本身可能是**正确行为**
+        // （空间戳不符 / 签名不符 / 过期 / 灰度未命中）。
+        // 以前这里直接记 FAIL，看起来像产品坏了（我自己就先误读了一次）。
+        // 现在：拒绝 → SKIP + 打印原因；而"该不该拒"由上面那条 `policy_space_stamp_same_source`
+        // 不变量单独把关——这样既不会误报，也不会把真缺陷藏起来。
+        val rejection = (applied as? com.sekb.shared.policy.PolicyRefreshResult.Skipped)?.reason
+        if (rejection != null) {
+            val why = "注入的策略被拒绝：$rejection —— 若这是**预期**的可拒原因（空间/签名/过期/灰度），" +
+                "本次即无法演示该流程；请用与本机空间一致的策略包重推。" +
+                "注意：策略是否**该**被拒由 policy_space_stamp_same_source 判定"
+            record("policy_apply_rebuild", null, why)
+            record("policy_threshold_wired", null, "同上（策略未应用，接线无从验证）")
+            record("policy_rollback_restores_threshold", null, "同上（未应用则无从回滚）")
+            container.debugResetPolicy()
+            return
+        }
         val after = container.retriever
         val scoreInPayload = com.sekb.shared.policy.EdgePolicy.retrievalMinScore(payload) ?: 0.5
         // 通过标准是「阈值正确」；`重建`只在阈值确实变化时才是必要条件——
