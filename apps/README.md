@@ -16,7 +16,7 @@ apps/
 >
 > | 端 | 状态 | 自检 | 备注 |
 > |---|---|---|---|
-> | Android | ✅ 已完成 | 30 PASS / 0 FAIL / 2 SKIP | 231 单测（含契约夹具逐 37 个 case 断言） |
+> | Android | ✅ 已完成 | 30 PASS / 0 FAIL / 2 SKIP | 291 单测（含契约夹具逐 37 个 case 断言） |
 > | iOS | ✅ 已完成 | 26 PASS / 0 FAIL / 1 SKIP | 唯一 SKIP = Keychain 往返（需真实签名身份） |
 > | Mac | ✅ 已完成 | 26 PASS / 0 FAIL / 1 SKIP | 与 iOS **同一份 Swift 源码** |
 > | 鸿蒙 | 🟡 spike 未收口 | — | NAPI↔KMP 链路 + `.ms` 模型转换已通；**运行期/装机等真机** |
@@ -68,7 +68,7 @@ Android `app/src/main` 2,695 行 / 15 文件、iOS `App/` 1,118 行 / 5 文件�
 
 ```bash
 # Android
-bash scripts/android.sh test            # 231 单测，无需模拟器
+bash scripts/android.sh test            # 291 单测，无需模拟器
 bash scripts/android.sh assemble        # 打 debug APK
 bash scripts/emulator.sh --background   # 起模拟器（状态全在 .tooling/ 内）
 bash scripts/android.sh install         # 装到已连接的模拟器/真机
