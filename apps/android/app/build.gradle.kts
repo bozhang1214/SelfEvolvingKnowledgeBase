@@ -66,6 +66,11 @@ android {
             isMinifyEnabled = false
         }
         release {
+            // ⚠️ 联调用签名：复用 `.tooling/android-home/debug.keystore`。
+            // 目的有两个：① 未签名的 release 包**根本装不上**，"R8 后还能不能跑"就无法验证；
+            // ② 与 debug 包共用同一把 key，`install -r` 才能**覆盖安装**（换了 key 会签名冲突）。
+            // **生产必须换成正式签名**（见 apps/android/README 的发布说明）。
+            signingConfig = signingConfigs.getByName("debug")
             // R8 打开：debug 的 dex 是包体大头（见 VERIFICATION §1.0.1/§1.12）。
             // shrinkResources 只在 minify 打开时才有意义；两者一起开才能同时瘦 dex 与资源。
             isMinifyEnabled = true

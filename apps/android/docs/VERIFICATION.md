@@ -1192,8 +1192,29 @@ R8 会把建议规则写到 `build/outputs/mapping/release/missing_rules.txt`—
 - ✅ **R8 没删掉自检入口**：`mapping.txt` 里有 `com.sekb.ondevice.SelfTest.*`，且 release dex 里
   仍存在 `SEKB_SELFTEST` 字符串 → 签名后的 release 包仍能跑自检做 E2E。
 - ✅ **关键类未被删**：`MainActivity`、`tom_roush.pdfbox.text.PDFTextStripper` 均在 mapping 中。
-- ❌ **"R8 后还能不能正常跑"未验证**：产出的是 `app-release-unsigned.apk`，
-  **未签名的包装不上**；而当前手机装包需要**华为统一身份验证**（生物识别），我无法通过。
-  要闭环需要：① 给 release 配一个签名（如复用 `.tooling` 里的 debug keystore 仅供联调）；
-  ② 装机跑一轮自检 E2E（证明被 R8 删/改的代码没有破坏运行时）。
-  **这是本次唯一的缺口，已如实记录。**
+- ❌ **"R8 后还能不能正常跑"仍未验证**（本次唯一的缺口）：
+  - 已加联调签名（`release.signingConfig = debug`，复用 `.tooling/android-home/debug.keystore`，
+    与 debug 包**同一把 key** → `install -r` 可覆盖安装），产出 `app-arm64-v8a-release.apk` **20.8 MB**（已签名）。
+  - 但**装不上**：`adb install -r` 停在设备侧确认/验证上超过 10 分钟无进展，
+    且屏幕已灭/锁（`mResumedActivity` 查询为空），我无法交互。判定依据是设备上 APK 仍是 **43.3 MB（debug）**。
+  - **闭环只差一步**：手机解锁后跑
+    `adb install -r apps/android/app/build/outputs/apk/release/app-arm64-v8a-release.apk`，
+    再 `am start … --ez selftest true` 跑一轮自检（R8 后能否 32 PASS 即证明 R8 没删坏代码）。
+
+> ⚠️ **生产必须换正式签名**：把 `release.signingConfig` 指向 debug keystore **仅用于联调**，
+> 不可用于发布。
+
+### 顺带：本轮的"新不变量项"已真机验证（在 debug 包上）
+
+自检新增的 `policy_space_stamp_same_source` 在真机跑出：
+
+```
+[PASS] policy_space_stamp_same_source — 策略校验空间=BAAI/bge-small-zh-v1.5-int8@512 向量库实际空间=BAAI/bge-small-zh-v1.5-int8@512
+[PASS] policy_apply_rebuild — 应用=0 阈值 0.5 → 0.62
+[PASS] policy_threshold_wired — 检索器阈值=0.62
+[PASS] policy_rollback_restores_threshold — 先应用到 0.9，回滚后阈值=0.62
+自检汇总：PASS=32 FAIL=0 SKIP=1        （新增 1 项后由 31 → 32）
+```
+
+即 §1.11 的"把不变量变成自检项"**已生效**：§1.10 那个反向缺陷若再出现，这一项会直接报红。
+（**注意**：这次跑的是设备上的 **debug** 包——因此它验证的是**自检改动**，不是 R8。）
