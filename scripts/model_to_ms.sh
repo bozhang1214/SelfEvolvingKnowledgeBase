@@ -77,6 +77,32 @@
 # 验证该假说最便宜的一步：造一份"掩码链已被宿主 additive mask 取代"的 ONNX 变体，
 # 重跑 convert + benchmark，看挂起是否消失。
 #
+# ## ✅ 路线① 假说**已证实**：掩码链就是 0 CPU 挂起的成因（2026-09-25）
+#
+# `scripts/model_to_ms_maskfree.py` 造出"去掩码链"变体后：
+#   · 转换：**CONVERT RESULT SUCCESS:0** → `bge-nomask.ms` 95,850,768 B、魔数 `MSL2`
+#   · 运行：**Run Benchmark bge-nomask.ms Success.**（不再是 0 CPU 挂起）
+#         PrepareTime = 148.073 ms；AvgRunTime = **66.810 ms**（512 长、2 线程、CPU）
+#
+# 即：**MindSpore Lite 是能用的**——之前跑不起来的原因是那段动态掩码展开链，
+# 而不是 MindSpore Lite 本身缺算子。M7 的路线排序因此改变：**① 可行**，不必退回路线③。
+#
+# 关键的两个坑（都不是"猜"出来的，是报错直接指出来的）：
+#   1. `SetMetaGraphInput] input Parameter_1 not found in graph`
+#      → 掩码链是 `attention_mask` 的**唯一消费者**；删链后该输入成了"声明了但没人用"的死输入，
+#        转换器按内部名去找它就失败。修法：**同步裁掉无消费者的图输入**（这才语义自洽——
+#        无掩码模型本就只该吃 input_ids/token_type_ids），而不是加个假消费者去哄转换器。
+#   2. 只删节点、不清元数据会留下陈旧的 `value_info` 与未引用的 `initializer`
+#      （实测清掉 38 个 initializer）。
+#
+# ⚠️ **仍未完成的一步（生产化）**：本变体把 additive mask 固定成**全零常量**，
+#    因此**只在无 padding 时严格等价**（已用 ORT 证明：关闭优化逐位相同）。要用于生产，
+#    需把 additive mask 改为**模型输入**、由宿主按实际 padding 计算后喂入——
+#    这条路现在已被证明走得通（图里不再有动态链），但还没做。
+#
+# ⚠️ 数字口径：66.8 ms 是 **Linux-aarch64 CPU** 上的数，**不是鸿蒙设备数**；
+#    鸿蒙端的真实性能仍须在模拟器/设备上测（M6 第 4 条）。
+#
 # ## 复现性缺口：**已闭合**（2026-09-25）
 #
 # 上一轮记录"产出 `bge-static.ms` 的配方没固化在脚本里"。本轮查清并修好：
@@ -201,6 +227,10 @@ case "${1:-all}" in
     convert) convert ;;
     # 静态化配方（四步重写后的 ONNX → 静态 .ms）；用 all 跑不出来，必须显式指定
     convert-static) convert ms-static-1x512.onnx bge-static ;;
+    # 去掩码链变体（假说检验用；由 scripts/model_to_ms_maskfree.py 生成）
+    convert-nomask) convert ms-static-nomask.onnx bge-nomask ;;
+    # 去掩码链变体的运行期检验（输入里已无 attention_mask）
+    check-nomask)  check bge-nomask.ms 'input_ids:1,512;token_type_ids:1,512' ;;
     check)   check ;;
     # 静态化产物（512 定长）：M7 路线判定的决定性实验——此前只验过它能转换，没验过它能运行
     check-static) check bge-static.ms 'input_ids:1,512;attention_mask:1,512;token_type_ids:1,512' ;;

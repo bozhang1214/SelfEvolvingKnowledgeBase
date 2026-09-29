@@ -83,11 +83,54 @@ def rewire_and_prune(model: onnx.ModelProto) -> tuple[onnx.ModelProto, int, int]
         removed += len(dropped)
         del g.node[:]
         g.node.extend(keep)
+
+    # ── 3) 清理图元数据（**这一步是转换能否通过的关键**）──
+    # 只删节点、不管元数据会留下两类"幽灵"：
+    #   · `value_info` 里指向已不存在张量的形状记录；
+    #   · 不再被任何节点引用的 `initializer`（onnxruntime 会为此刷一屏 warning）。
+    # 转 MindSpore Lite 时 `SetMetaGraphInput failed` 很可能就来自这种不一致——
+    # 图结构自身"看起来"没问题，但元数据与节点对不上。
+    live_inputs = {i for n in g.node for i in n.input}
+    live_names = {o for n in g.node for o in n.output} | outputs | {i.name for i in g.input}
+
+    keep_vi = [v for v in g.value_info if v.name in live_names]
+    dropped_vi = len(g.value_info) - len(keep_vi)
+    del g.value_info[:]
+    g.value_info.extend(keep_vi)
+
+    keep_init = [t for t in g.initializer if t.name in live_inputs]
+    dropped_init = len(g.initializer) - len(keep_init)
+    del g.initializer[:]
+    g.initializer.extend(keep_init)
+
+    # ── 4) 裁掉"没有消费者"的图输入 ──
+    # 这一步是转换能通过的关键：掩码链被删后，`attention_mask` **不再被任何节点使用**
+    # （它原本唯一的作用就是展开成 additive mask）。留着它会留下"声明了但没人用"的输入，
+    # 而 MindSpore 的转换器会按内部名去找它并失败：
+    #     SetMetaGraphInput] input Parameter_1 not found in graph
+    # 对"无掩码"这个变体而言，模型本来就只该吃 input_ids（+ token_type_ids），
+    # 所以把它从图输入里去掉才是**语义自洽**的做法，而不是为了哄转换器加一个假消费者。
+    keep_inputs = [i for i in g.input if i.name in live_inputs or i.name in outputs]
+    dropped_in = [i.name for i in g.input if i not in keep_inputs]
+    del g.input[:]
+    g.input.extend(keep_inputs)
+
+    print(f"  元数据清理：value_info -{dropped_vi}，initializer -{dropped_init}，"
+          f"无消费者的图输入 -{len(dropped_in)} {dropped_in}")
     return model, rewired, removed
 
 
-def run(path: str, feeds: dict[str, np.ndarray]) -> np.ndarray:
-    sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+def run(path: str, feeds: dict[str, np.ndarray], exact: bool = False) -> np.ndarray:
+    """exact=True 时**关闭 ORT 图优化**。
+
+    判据必须用 exact：默认优化下 ONNX Runtime 会做融合/重排，浮点归约顺序一变就会出现
+    1e-6 量级差异（上一轮实测 5.2e-06）。**那是融合噪声，不是语义差异**——
+    用 `array_equal` 在默认优化下判等，会把一个本来正确的变换判成"有误"（我上一轮就差点如此）。
+    """
+    so = ort.SessionOptions()
+    if exact:
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    sess = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
     return sess.run(None, feeds)[0]
 
 
@@ -112,19 +155,28 @@ def main() -> int:
     full = {"input_ids": ids,
             "attention_mask": np.ones((1, 512), dtype=np.int64),
             "token_type_ids": np.zeros((1, 512), dtype=np.int64)}
-    y0, y1 = run(a.src, full), run(a.dst, full)
-    same = np.array_equal(y0, y1)
-    md = float(np.max(np.abs(y0 - y1)))
-    print(f"  【全 1 mask】逐位相同={same} 最大绝对差={md:.3e}")
-    if not same:
-        print("  ❌ 无 padding 时都不同 → 变换有误，停止", file=sys.stderr)
+    # 变体已把 attention_mask 从图输入里裁掉（它的唯一消费者就是掩码链），
+    # 所以两个模型要喂**不同的**输入集合——这不是取巧，而是变体的语义本就如此。
+    var = {k: v for k, v in full.items() if k != "attention_mask"}
+
+    # 正确性判据：关闭优化的逐位相同
+    e0, e1 = run(a.src, full, exact=True), run(a.dst, var, exact=True)
+    exact_same = np.array_equal(e0, e1)
+    # 参考信息：默认优化下的差异（预期非 0，属融合噪声）
+    d0, d1 = run(a.src, full), run(a.dst, var)
+    md = float(np.max(np.abs(d0 - d1)))
+    print(f"  【全 1 mask】关闭优化逐位相同={exact_same}（判据）"
+          f"；默认优化最大差={md:.3e}（融合噪声，非语义差异）")
+    if not exact_same:
+        print("  ❌ 无 padding 且关闭优化时仍不同 → 变换有误，停止", file=sys.stderr)
         return 1
 
     if a.check_padded:
         padded = dict(full)
         padded["attention_mask"] = np.ones((1, 512), dtype=np.int64)
         padded["attention_mask"][0, 300:] = 0          # 后半段当作 padding
-        z0, z1 = run(a.src, padded), run(a.dst, padded)
+        z0 = run(a.src, padded)
+        z1 = run(a.dst, {k: v for k, v in padded.items() if k != "attention_mask"})
         d = float(np.max(np.abs(z0 - z1)))
         print(f"  【带 padding】最大绝对差={d:.6f}（**预期非 0**：本变体不含掩码，"
               f"所以它只能用于「无 padding」场景——生产须改由宿主喂入 additive mask）")
