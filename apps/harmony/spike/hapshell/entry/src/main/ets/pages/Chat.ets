@@ -23,14 +23,8 @@
  * 主色 `#1677FF`、浅灰底、白卡片、执行位置用语义色（本机=绿、云端=金）。
  */
 
-/** 一条消息。`plane` 为空表示还没结果（流式中）。 */
-interface ChatMessage {
-  id: string;
-  fromUser: boolean;
-  text: string;
-  /** 'edge' | 'cloud' | '' —— 执行位置徽章的数据来源 */
-  plane: string;
-}
+import { ChatMessage, Plane, badgeOf, badgeColor, explainReason } from '../model/Types';
+import { currentAgent, AgentReply } from '../model/EdgeAgent';
 
 @Entry
 @Component
@@ -39,6 +33,7 @@ struct Chat {
   @State input: string = '';
   /** 端侧是否就绪（真实实现应由 PolicyFetcher / 端点探针驱动） */
   @State edgeReady: boolean = true;
+  @State busy: boolean = false;
   private seq: number = 0;
 
   /** 空状态示例问题：与 Android 端一致，都是这台设备真的答得了的 */
@@ -48,33 +43,32 @@ struct Chat {
     '现在几点了？',
   ];
 
-  private badgeOf(m: ChatMessage): string {
-    if (m.fromUser) return '';
-    if (m.plane === 'edge') return '本机完成';
-    if (m.plane === 'cloud') return '云端完成';
-    return '';
-  }
-
-  private badgeColor(m: ChatMessage): string {
-    return m.plane === 'edge' ? '#389E0D' : '#D48806';
+  private push(fromUser: boolean, text: string, plane: Plane = '',
+               escalated: number = 0, reason: string = '', escalateReason: string = ''): void {
+    this.seq++;
+    this.messages.push({
+      id: (fromUser ? 'u' : 'a') + this.seq.toString(),
+      fromUser: fromUser, text: text, plane: plane,
+      escalated: escalated, reason: reason, escalateReason: escalateReason,
+    });
   }
 
   private send(text: string): void {
     const t = text.trim();
     if (t.length === 0) return;
-    this.seq++;
-    const uid = 'u' + this.seq.toString();
-    this.messages.push({ id: uid, fromUser: true, text: t, plane: '' });
-    // ⚠️ 这里是**占位回答**，不是推理结果：NAPI 接线后应替换为真实流式回调。
-    // 现在写成占位是为了让"界面上能看到一条回答长什么样"，而不是假装已经跑通。
-    this.seq++;
-    this.messages.push({
-      id: 'a' + this.seq.toString(),
-      fromUser: false,
-      text: '（界面骨架：此处将显示端侧模型的回答。推理链路待 M6 第 4 条在模拟器上验证后接入。）',
-      plane: 'edge',
-    });
+    this.push(true, t);
     this.input = '';
+    this.busy = true;
+
+    // 走契约接口；**未接线时桩会明确抛错**，这里把错误如实显示成一条回答——
+    // 而不是伪造一条"看起来像回答"的文本（那会让人以为链路通了）。
+    currentAgent().ask(t).then((r: AgentReply) => {
+      this.busy = false;
+      this.push(false, r.text, r.plane, r.escalated, r.reason, r.escalateReason);
+    }).catch((e: Error) => {
+      this.busy = false;
+      this.push(false, '⚠️ ' + e.message, '', 0, 'edge_unavailable', '');
+    });
   }
 
   build() {
@@ -131,10 +125,10 @@ struct Chat {
                 .justifyContent(m.fromUser ? FlexAlign.End : FlexAlign.Start)
 
                 // 执行位置徽章：产品承诺的可视化，必须每条回答都标
-                if (this.badgeOf(m).length > 0) {
+                if (badgeOf(m).length > 0) {
                   Row() {
-                    Circle({ width: 6, height: 6 }).fill(this.badgeColor(m))
-                    Text(this.badgeOf(m)).fontSize(11).fontColor(this.badgeColor(m)).margin({ left: 4 })
+                    Circle({ width: 6, height: 6 }).fill(badgeColor(m))
+                    Text(badgeOf(m)).fontSize(11).fontColor(badgeColor(m)).margin({ left: 4 })
                   }.margin({ top: 4, left: 38 })
                 }
               }.width('100%')
