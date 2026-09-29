@@ -102,8 +102,17 @@ build_preview() {
 verify_link() {
     echo
     echo "── 验证：HAP 内的 NAPI 模块是否真的引用 KMP 符号 ──"
+    # ⚠️ **必须确定性地选产物**：原来用 `find … -name '*.hap' | head -1`，
+    # 而 find 的输出顺序**不保证**，中间产物/旧产物都可能被选中——
+    # 于是出现过"链接检查过、模型检查却报没有模型"的自相矛盾（2026-09-25 实测）。
+    # 现在：优先 `outputs/` 下的产物，并在同目录内按**修改时间取最新**。
     local hap
-    hap="$(find "$HAP_PROJ/entry/build" -name '*.hap' 2>/dev/null | head -1)"
+    hap="$(find "$HAP_PROJ/entry/build" -path '*outputs*' -name '*.hap' 2>/dev/null \
+           | while read -r f; do stat -f '%m %N' "$f"; done | sort -rn | head -1 | cut -d' ' -f2-)"
+    if [ -z "$hap" ]; then
+        hap="$(find "$HAP_PROJ/entry/build" -name '*.hap' 2>/dev/null \
+               | while read -r f; do stat -f '%m %N' "$f"; done | sort -rn | head -1 | cut -d' ' -f2-)"
+    fi
     [ -n "$hap" ] || { echo "❌ 没找到 HAP 产物" >&2; return 1; }
     echo "HAP: ${hap#$ROOT/}（$(du -h "$hap" | cut -f1)）"
 
@@ -133,7 +142,15 @@ verify_link() {
     if unzip -l "$hap" 2>/dev/null | grep -q 'rawfile/bge-small-fixed512.ms'; then
         echo "   ✅ 模型 rawfile 在包内（真机首启会复制到应用私有目录）"
     else
+        # 失败时**把候选产物全列出来**：上次这条警告与"磁盘上唯一的 HAP 明明含模型"矛盾，
+        # 却因为信息不足无法定位。报错信息必须够定位问题，否则等于没报。
         echo "   ⚠️ 包里没有模型 rawfile —— 真机日界面会直接显示失败步骤码（先跑 scripts/model_to_ms.sh all）"
+        echo "      已检查的产物: $hap"
+        echo "      工程内所有 .hap（含是否带模型）:"
+        find "$HAP_PROJ/entry/build" -name '*.hap' 2>/dev/null | while read -r f; do
+            local has; has="$(unzip -l "$f" 2>/dev/null | grep -c 'rawfile/bge-small-fixed512.ms')"
+            echo "        [模型=$has] $f"
+        done
     fi
     rm -rf "$tmp"
     [ "$ok" = "0" ] || return 1
