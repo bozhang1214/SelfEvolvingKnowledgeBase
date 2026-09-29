@@ -66,7 +66,10 @@ android {
             isMinifyEnabled = false
         }
         release {
-            isMinifyEnabled = false
+            // R8 打开：debug 的 dex 是包体大头（见 VERIFICATION §1.0.1/§1.12）。
+            // shrinkResources 只在 minify 打开时才有意义；两者一起开才能同时瘦 dex 与资源。
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"),
                           "proguard-rules.pro")
         }

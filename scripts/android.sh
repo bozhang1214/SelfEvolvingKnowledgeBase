@@ -198,6 +198,12 @@ while [ $# -gt 0 ]; do
         # install 与 assemble 传**同一组**属性：只传一边是上面那个 bug 的根源
         install)   ./gradlew :app:installDebug --console=plain $MINOR_FLAG \
                        ${PROP_FLAGS[@]+"${PROP_FLAGS[@]}"} ;;
+        release)
+            # R8 后的 release 包：**体积对照与"R8 有没有把东西删坏"都在这里出数**。
+            # 默认不带签名（产出 app-release-unsigned.apk）——量体积不需要签名；
+            # 但"能不能装、能不能跑"必须签名的包 + 一轮 E2E（见 VERIFICATION §1.12 的缺口说明）。
+            ./gradlew :app:assembleRelease --console=plain $MINOR_FLAG \
+                ${PROP_FLAGS[@]+"${PROP_FLAGS[@]}"} ;;
         install-real)
             # 面向"装一次要过华为确认框"的真机：gradle 只出 APK，安装交给 adb + 自动确认
             ./gradlew :app:assembleDebug --console=plain $MINOR_FLAG \

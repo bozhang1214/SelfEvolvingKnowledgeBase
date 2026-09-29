@@ -1147,3 +1147,53 @@ if (space.isNotEmpty() && space != current.embeddingSpace) return Rejected("poli
   （`com.huawei.coauthservice/…UnifiedAuthenticationDialogActivity`）需要指纹/密码，
   我无法通过；`lastUpdateTime` 仍是上一版，说明新包**没装上**。
   故本条的两条验证（正确空间→全 PASS、错误空间→SKIP 而非 FAIL）**待 owner 解锁手机后补跑**。
+
+---
+
+## 1.12 release 开 R8：dex 64.7 MB → 2.8 MB（2026-09-25）
+
+### 为什么做
+
+§1.0.1 做完 P0 瘦身后留下的结论是："未做：release 开 R8（dex 仍约 66 MB，是下一个大头）"。
+本轮把它做掉——**量体积这半不需要装包**，因此不受真机安装受限的影响。
+
+### 改动
+
+- `app/build.gradle.kts`：`release { isMinifyEnabled = true; isShrinkResources = true }`
+  （`shrinkResources` 只在 minify 打开时才有意义，两者一起开才能同时瘦 dex 与资源）。
+- `app/proguard-rules.pro`：加 `-dontwarn com.gemalto.jp2.JP2Decoder`。
+
+### 遇到的唯一阻塞（R8 自己给出了答案）
+
+```
+ERROR: Missing class com.gemalto.jp2.JP2Decoder (referenced from: …pdfbox.filter.JPXFilter…)
+```
+
+`com.gemalto.jp2` 是 **PDFBox 的可选依赖**，只有解析 PDF 内嵌的 **JPEG2000 图像**时才需要。
+本项目的 `PdfExtractor` **只用 `PDFTextStripper` 抽文本、不走图像路径**，
+所以该缺失不可能影响现有能力；加 `-dontwarn` 让 R8 剥离它，而不是为一个用不到的解码器把包体做大。
+R8 会把建议规则写到 `build/outputs/mapping/release/missing_rules.txt`——照它加即可。
+
+> **残留限制（如实记录）**：若将来要渲染/提取 PDF 内嵌的 JPEG2000 图像，必须加回 `jp2-android`
+> 依赖，否则那条路径会在运行时抛错。当前无此需求。
+
+### 结果（真机同源构建，arm64）
+
+| | debug | **release（R8）** | 降幅 |
+|---|---|---|---|
+| APK | 43.3 MB | **20.8 MB** | **−52%** |
+| dex 合计 | 64.7 MB | **2.8 MB** | **−96%** |
+
+（debug 的 dex 分布：`classes.dex` 42.5 MB、`classes13` 12.4 MB、`classes14` 8.9 MB，其余为碎片。）
+
+### 已验证 / 未验证（务必分清）
+
+- ✅ **体积**：上面是实测数字（`scripts/android.sh release`，新增该动作，可复现）。
+- ✅ **R8 没删掉自检入口**：`mapping.txt` 里有 `com.sekb.ondevice.SelfTest.*`，且 release dex 里
+  仍存在 `SEKB_SELFTEST` 字符串 → 签名后的 release 包仍能跑自检做 E2E。
+- ✅ **关键类未被删**：`MainActivity`、`tom_roush.pdfbox.text.PDFTextStripper` 均在 mapping 中。
+- ❌ **"R8 后还能不能正常跑"未验证**：产出的是 `app-release-unsigned.apk`，
+  **未签名的包装不上**；而当前手机装包需要**华为统一身份验证**（生物识别），我无法通过。
+  要闭环需要：① 给 release 配一个签名（如复用 `.tooling` 里的 debug keystore 仅供联调）；
+  ② 装机跑一轮自检 E2E（证明被 R8 删/改的代码没有破坏运行时）。
+  **这是本次唯一的缺口，已如实记录。**
