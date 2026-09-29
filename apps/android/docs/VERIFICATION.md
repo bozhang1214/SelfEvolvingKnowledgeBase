@@ -1053,3 +1053,66 @@ Android 实现存 `files/conversations/current.id`，文件名**不以 `.json` �
 
 `--ei repeats N`（默认 1，行为与旧版一致）+ `EvalStats`（Wilson 区间/稳定性，均有单测），
 以后任何"比例类"结论都不必再靠单次采样。
+
+---
+
+## 1.10 空间戳绑定失效（硬约束方向反了）——真缺陷 + 修复 + 双向验证（2026-09-25）
+
+### 怎么发现的
+
+§1.8 跑断网自检时注意到一处不一致：`rag_device_only_guard` 报告设备**实际使用**的嵌入空间是
+`BAAI/bge-small-zh-v1.5-int8@512`，而 §1.6 推入并**成功应用**的策略包空间戳是
+`BAAI/bge-small-zh-v1.5@512`（**不带 int8**）——**却通过了校验**。
+
+### 根因
+
+`EdgePolicy.apply` 比对的是 `current.embeddingSpace`，即 `EdgeRuntimeConfig.embeddingSpace`：
+
+```kotlin
+val space = payload.optString("embeddingSpace", "")
+if (space.isNotEmpty() && space != current.embeddingSpace) return Rejected("policy_space_mismatch:…")
+```
+
+而 `EdgeRuntimeConfig` 是在 `SekbApp` **第 56 行**构造的，那时还不知道本机跑 fp32 还是 int8
+（`int8Available` 要到第 100 行才算），于是 `embeddingSpace` 一直是**默认值** `…@512`；
+检索器用的却是 `if (int8Available) …-int8@512 else …@512`。**本机 int8 生效 → 两者不一致。**
+
+于是这道硬约束**方向反了**（它的目的正是"防止为某个嵌入空间调的阈值被用到另一个空间上把检索改坏"）：
+
+| 策略的空间戳 | 修复前 | 应当是 |
+|---|---|---|
+| `…-int8@512`（本机真正需要的） | **被拒** ❌ | 接受 |
+| `…@512`（fp32） | **被接受并应用到 int8 检索器** ❌ | 拒绝 |
+
+### 修复
+
+在嵌入器就绪后**把 config 的空间对齐到嵌入器实际的 `space.id`**（`config = config.copy(embeddingSpace = embeddingProvider.space.id)`）——
+**由构造保证同源**，而不是靠"记得同步"。已加详细注释说明这个坑。
+
+### 双向验证（真机，服务端签名的两份策略包）
+
+| 用例 | 修复前 | 修复后 |
+|---|---|---|
+| 推**int8 空间**策略（`minScore=0.62`） | `[FAIL] policy_apply_rebuild — 应用=null`（被拒） | ✅ `应用=0 阈值 0.5 → 0.62` + `检索器阈值=0.62` |
+| 推**fp32 空间**策略（`minScore=0.71`） | 被接受（**错误**） | ✅ 被拒（`应用=null`，阈值不变） |
+
+修复后恢复正确策略，自检回到 **PASS=31 FAIL=0 SKIP=1**。
+
+### ⚠️ 顺带发现：自检把"策略被正确拒绝"报成了 FAIL
+
+推入 fp32 策略（**应当**被拒）时自检报 `PASS=28 FAIL=3`：
+
+```
+[FAIL] policy_apply_rebuild — 应用=null 阈值 0.5 → 0.5（期望 0.71）
+```
+
+但这是**正确行为**——自检的这几项假定"注入的策略一定合法"，把"被拒"与"应用后阈值不对"混为一谈。
+**我自己就先误读了一次**（以为是修复没生效）。这三项应当：① 打印拒绝原因；
+② 在拒绝原因属于"预期可拒"（空间不符/签名不符）时记 **SKIP 并说明**，而不是 FAIL。
+**留待下一轮修改**（不影响本次结论）。
+
+### 顺带说明：单元测试里的跨端夹具不受影响
+
+`src/test/resources/policy/server-signed-dev.json` 的空间戳是 `@512`，而单测里
+`config()` 也是显式构造成 `@512` 的——它验的是**签名/规范化 JSON 的跨端一致性**，
+与"设备实际用哪个空间"是两件事，因此仍然有效。

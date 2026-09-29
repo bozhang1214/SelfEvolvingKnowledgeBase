@@ -115,6 +115,24 @@ class AppContainer(context: Context) {
         DeterministicEmbedding()
     }
 
+    init {
+        // ⚠️ 空间戳绑定必须**与检索器同源**（真机自检发现的一处真缺陷）。
+        //
+        // `EdgePolicy.apply` 会拿策略里的 `embeddingSpace` 与 `config.embeddingSpace` 比对，
+        // 不符就整包拒绝；其目的是"防止为某个嵌入空间调的阈值被用到另一个空间上，把检索改坏"。
+        //
+        // 但 `config` 在第 56 行就构造好了，那时还不知道本机跑 fp32 还是 int8（`int8Available`
+        // 要到第 100 行才算出），于是它一直保留**默认值** `…@512`；而检索器用的是
+        // `if (int8Available) …-int8@512 else …@512`。真机 int8 生效 → **两者不一致**：
+        //   · 为 int8 空间调的阈值（本机真正需要的）会被 `policy_space_mismatch` 拒掉；
+        //   · 为 fp32 空间调的阈值反而被接受，并应用到 int8 检索器上。
+        // 正好是这道硬约束要防的事，只是方向反了。
+        //
+        // 修法：嵌入器就绪后把 config 的空间对齐到嵌入器**实际**的 `space.id`——
+        // 两者由**构造**保证同源，而不是靠"记得同步"。
+        config = config.copy(embeddingSpace = embeddingProvider.space.id)
+    }
+
     /**
      * 端侧知识索引（SQLite 持久化：索引要能跨 App 重启存活）。
      *
