@@ -40,7 +40,7 @@ MASK_TARGETS = [f"/m/encoder/layer.{i}/attention/self/Where_output_0" for i in r
 CONST_NAME = "sekb_additive_mask_zero"
 
 
-def rewire_and_prune(model: onnx.ModelProto) -> tuple[onnx.ModelProto, int, int]:
+def rewire_and_prune(model: onnx.ModelProto, mask_input: bool = False) -> tuple[onnx.ModelProto, int, int]:
     g = model.graph
     consumers: dict[str, list[str]] = {}
     for n in g.node:
@@ -59,11 +59,18 @@ def rewire_and_prune(model: onnx.ModelProto) -> tuple[onnx.ModelProto, int, int]
     if rewired != len(MASK_TARGETS):
         raise SystemExit(f"❌ 只重接了 {rewired}/{len(MASK_TARGETS)} 处注意力掩码输入，图结构与预期不符，停止")
 
-    # 加全零常量（若已存在则复用）
-    if not any(t.name == CONST_NAME for t in g.initializer):
-        g.initializer.append(
-            numpy_helper.from_array(np.zeros((1, 1, 512, 512), dtype=np.float32), CONST_NAME)
+    if mask_input:
+        # **生产形态**：additive mask 作为**模型输入**，由宿主按实际 padding 计算后喂入。
+        # 实测该张量在带 padding 时取值为 {-inf, 0}（四层完全相同 → 单个输入即够）。
+        g.input.append(
+            onnx.helper.make_tensor_value_info(CONST_NAME, onnx.TensorProto.FLOAT, [1, 1, 512, 512])
         )
+    else:
+        # 诊断形态：全零常量（只在无 padding 时严格等价）
+        if not any(t.name == CONST_NAME for t in g.initializer):
+            g.initializer.append(
+                numpy_helper.from_array(np.zeros((1, 1, 512, 512), dtype=np.float32), CONST_NAME)
+            )
 
     # ── 2) 迭代死代码消除 ──
     # 反复删除"所有输出都无人消费"的节点；被删节点释放的输入可能让上游也可删 → 直到不动点。
@@ -110,7 +117,8 @@ def rewire_and_prune(model: onnx.ModelProto) -> tuple[onnx.ModelProto, int, int]
     #     SetMetaGraphInput] input Parameter_1 not found in graph
     # 对"无掩码"这个变体而言，模型本来就只该吃 input_ids（+ token_type_ids），
     # 所以把它从图输入里去掉才是**语义自洽**的做法，而不是为了哄转换器加一个假消费者。
-    keep_inputs = [i for i in g.input if i.name in live_inputs or i.name in outputs]
+    keep_inputs = [i for i in g.input
+                   if i.name in live_inputs or i.name in outputs or i.name == CONST_NAME]
     dropped_in = [i.name for i in g.input if i not in keep_inputs]
     del g.input[:]
     g.input.extend(keep_inputs)
@@ -138,13 +146,15 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="src", default=".tooling/mindspore-lite/work/ms-static-1x512.onnx")
     ap.add_argument("--out", dest="dst", default="/tmp/ms-static-nomask.onnx")
+    ap.add_argument("--mask-input", action="store_true",
+                    help="把 additive mask 作为模型输入（生产形态），而不是全零常量")
     ap.add_argument("--check-padded", action="store_true",
                     help="额外在带 padding 的输入上比对（**预期不一致**，用于量化等价边界）")
     a = ap.parse_args()
 
     model = onnx.load(a.src)
     before = len(model.graph.node)
-    model, rewired, removed = rewire_and_prune(model)
+    model, rewired, removed = rewire_and_prune(model, mask_input=a.mask_input)
     onnx.save(model, a.dst)
     print(f"  重接 {rewired} 处掩码输入；死代码消除删除 {removed} 个节点；"
           f"节点数 {before} → {len(model.graph.node)}")

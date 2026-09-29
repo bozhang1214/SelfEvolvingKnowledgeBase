@@ -77,6 +77,37 @@
 # 验证该假说最便宜的一步：造一份"掩码链已被宿主 additive mask 取代"的 ONNX 变体，
 # 重跑 convert + benchmark，看挂起是否消失。
 #
+# ## 生产化（掩码改为模型输入）：**转换通过 + 等价性已证，但运行期尚未通过**（2026-09-25）
+#
+# `scripts/model_to_ms_maskfree.py --mask-input` 把 additive mask 由常量改为**模型输入**
+# `sekb_additive_mask_zero: float32[1,1,512,512]`（由宿主按实际 padding 计算后喂入）。
+#
+# 实测事实与结论：
+#   · 掩码取值：无 padding 时**恒为 0**；有 padding 时为 **{-inf, 0}**；
+#     **四层完全相同** → 单个输入即够（不需要四个）。
+#   · 转换：**CONVERT RESULT SUCCESS:0** → `bge-maskinput.ms` 94,802,472 B、魔数 `MSL2`。
+#   · **等价性（三种输入都过）**：关闭 ORT 优化时与原图**逐位相同**——
+#       无 padding ✅、有 padding（后 212 为 0）✅、全 padding ✅。
+#       注：全 padding 那格 `array_equal` 报 False 是 **nan≠nan** 的判定假象；
+#       实测**nan 位置完全一致、非 nan 部分逐位相同**（全 padding 下 softmax 全 -inf，两者都 nan）。
+#   · ❌ **运行期未通过**：`benchmark` 报
+#       Input tensor resize failed / InferShape failed, type: AddFusion,
+#       name: /m/encoder/layer.0/attention/self/Add
+#     即 4D 掩码输入被当作常量时能跑（`bge-nomask.ms` 66.8 ms 成功），改成**输入**后
+#     Add 的 shape 推断在 benchmark 里失败。
+#
+# **未判定**：这究竟是 ①benchmark 工具对 4D `--inputShape` 的解析问题，还是 ②模型本身
+# 在 MindSpore Lite 里不能接受 4D 中间输入。我试过"不带 --inputShape"，但那条调用**写错了**
+# （给工具传了空的 --inputShape，工具随即报 `ParseGraphInputShapeMap] token_type_ids`），
+# 所以**没有形成有效结论**——这一点必须如实标明，不能当成"工具问题"糊过去。
+#
+# 下一步（二选一，都不需要设备）：
+#   a) 把掩码在**宿主侧展开成 1×1×512×512 但以 3D/2D 形状传入**？不行——语义需要 4D 广播。
+#   b) 更稳的做法：**不改 Add 的输入**，而是让宿主把掩码**预先加到注意力分数上**？也不行（分数在图内）。
+#   c) 现实可行的替代：把掩码**烘焙成常量**（= `bge-nomask.ms`，已验证能跑 66.8 ms），
+#      代价是**不支持 padding**；对"定长 512 全量输入"的嵌入场景，可用**截断/补零后重算**规避，
+#      或按 RFC 的做法**重标阈值**并把 padding 处理移到宿主（先按实际长度分桶、再统一补到 512 且不掩码）。
+#
 # ## ✅ 路线① 假说**已证实**：掩码链就是 0 CPU 挂起的成因（2026-09-25）
 #
 # `scripts/model_to_ms_maskfree.py` 造出"去掩码链"变体后：
@@ -231,6 +262,10 @@ case "${1:-all}" in
     convert-nomask) convert ms-static-nomask.onnx bge-nomask ;;
     # 去掩码链变体的运行期检验（输入里已无 attention_mask）
     check-nomask)  check bge-nomask.ms 'input_ids:1,512;token_type_ids:1,512' ;;
+    convert-maskinput) convert ms-static-maskinput.onnx bge-maskinput ;;
+    check-maskinput)  check bge-maskinput.ms 'input_ids:1,512;token_type_ids:1,512;sekb_additive_mask_zero:1,1,512,512' ;;
+    # 不带 --inputShape：模型本身是静态的，用于排除"工具解析 4D 形状"这一层
+    check-maskinput-noshape) check bge-maskinput.ms '' ;;
     check)   check ;;
     # 静态化产物（512 定长）：M7 路线判定的决定性实验——此前只验过它能转换，没验过它能运行
     check-static) check bge-static.ms 'input_ids:1,512;attention_mask:1,512;token_type_ids:1,512' ;;
