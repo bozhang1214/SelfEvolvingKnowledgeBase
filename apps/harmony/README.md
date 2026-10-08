@@ -717,3 +717,45 @@ hdc list targets  →  127.0.0.1:5555
 打包并安装，不需要手工配签名。
 若想手工配置：**File → Project Structure → Signing Configs**（该页的"自动生成签名"需先**登录华为账号**才会出现；
 DevEco 6 里也可能在 **Project Structure → Project** 下）。
+
+---
+
+## ✅ 模拟器上跑起来了 + ❌ MindSpore 仍 `-5`（2026-09-25，最新进展）
+
+### 已经成立的（重要的两条）
+
+1. **HAP 在鸿蒙模拟器上装起并运行** —— 而且**未签名的 HAP 也能装**：
+   ```
+   hdc install entry-default-unsigned.hap → install bundle successfully
+   ```
+   即 **owner 问的"自动生成签名"对模拟器不是阻塞**（`~/.ohos/config/` 至今为空，也不需要）。
+2. **NAPI↔KMP 在真实 OHOS 运行时上跑通**（截图证据）：
+   ```
+   sekb_spike_ping() = 42
+   echo_len() = "端侧知识库" → 5
+   ```
+   这是 M6 spike 第 1 条的**运行期**那一半，也说明 KMP 产物在设备上真的被调用到了。
+
+**并且我已能自行驱动完整闭环**（不需要 IDE）：
+`bash scripts/harmony_spike.sh all` → `hdc install` → `hdc shell aa start -a EntryAbility -b com.sekb.ohos.spike`
+→ `hdc shell snapshot_display -f …` → `hdc file recv` → 看截图。
+
+### 仍未通过：MindSpore 端侧嵌入返回 `-5`
+
+`-5` = `MsStep.BAD_DTYPE`（见 `MsLite.kt` 的 `object MsStep`）。本轮修掉了**两个确实成立的原因**，但它**仍然**返回 -5：
+
+| # | 已修的成因 | 依据 |
+|---|---|---|
+| 1 | 探测函数里遗留的"**所有输入都必须是 int64**"判据 —— 模型现在有一个 float32 的掩码输入，该判据**在设计上就为假** | `inputsAreInt64` → 改为按名逐个校验 |
+| 2 | **按名字找输入不可靠**：`.ms` 文件里存的是 ONNX 原名（实测含 `sekb_additive_mask_zero`，无 `attention_mask`），但运行时暴露的名字可能是转换器内部的 `Parameter_N`（转换阶段报过 `Parameter_1 not found in graph`） | 改为**按类型识别角色**：恰好 1 个 float32 = 掩码，2 个 int64 按声明顺序 = ids/types |
+
+### ⚠️ 下一步该做什么（**不要再猜**）
+
+现在缺的是**设备上实际看到的输入名与类型**。最省事的做法是把它们**报告出来**，二选一：
+
+- 在 `MindSporeProbe` 里把 `s.inputIsInt64`（名字→是否 int64）编码进返回值（例如
+  `-(100 + int64数*10 + f32数)`），重建后读截图即可；或
+- 用 `hilog` 打印后 `hdc shell hilog | grep SEKB`。
+
+拿到真实的名字/类型后，`-5` 就能一次定位（很可能是：转换器把掩码输入**折叠/省略**了，
+运行时只剩 int64 输入；或 `OH_AI_TensorGetDataType` 的取值与预期不同）。

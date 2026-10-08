@@ -80,12 +80,21 @@ class MsSession private constructor(
         }
     }
 
-    /** 输入是否都是 int64（不是就说明拿错模型了，早报比"向量不对"好查得多）。 */
-    val inputsAreInt64: Boolean = OH_AI_ModelGetInputs(model).useContents {
-        (0 until handle_num.toInt()).all { i ->
-            handle_list?.get(i)?.let { OH_AI_TensorGetDataType(it) == OH_AI_DATATYPE_NUMBERTYPE_INT64 } ?: false
+    /**
+     * 输入名 → **是否 int64**（`false` 即 float32）。
+     *
+     * ⚠️ 不要再用"所有输入都是 int64"这种全局判据：模型现在有一个 **float32** 的
+     * `sekb_additive_mask_zero` 输入（掩码改由宿主喂入后新增），
+     * 那个判据在**设计上**就已经为假，会让调用方在真正尝试之前就误判为"拿错模型"
+     * （真机/模拟器上实测症状：返回 `BAD_DTYPE(-5)`，看起来像模型不对，其实是判据过时）。
+     */
+    val inputIsInt64: Map<String, Boolean> = OH_AI_ModelGetInputs(model).useContents {
+        (0 until handle_num.toInt()).mapNotNull { i ->
+            val t = handle_list?.get(i) ?: return@mapNotNull null
+            val name = OH_AI_TensorGetName(t)?.toKString() ?: return@mapNotNull null
+            name to (OH_AI_TensorGetDataType(t) == OH_AI_DATATYPE_NUMBERTYPE_INT64)
         }
-    }
+    }.toMap()
 
     /** 输出元素数（batch=1 时为 `seq * hidden`）。 */
     val outputElementNum: Int

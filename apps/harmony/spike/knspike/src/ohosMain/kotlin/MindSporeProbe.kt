@@ -48,9 +48,23 @@ fun sekbSpikeMindSporeSelfTest(modelPath: String): Int {
         }
         val s = session!!
         if (s.inputs.isEmpty()) return MsStep.NO_INPUT
-        if (!s.inputsAreInt64) return MsStep.BAD_DTYPE
 
-        val seqLen = s.inputs.firstOrNull { it.first == "input_ids" }?.second ?: return MsStep.NO_INPUT
+        // ⚠️ **不要按名字找输入**：`.ms` 文件里存的是 ONNX 原名（实测确实含
+        // `input_ids`/`token_type_ids`/`sekb_additive_mask_zero`），但 MindSpore 运行时
+        // 暴露的张量名可能是转换器内部命名的 `Parameter_N`（转换阶段就报过
+        // `Parameter_1 not found in graph`，即它内部就是这套命名）。
+        // 按名字匹配会导致"明明喂对了却报类型不符"（实测 -5 BAD_DTYPE，且很难从现象看出原因）。
+        //
+        // 改为**按类型识别角色**：恰好 1 个 float32 输入 = additive mask；另 2 个 int64
+        // 按声明顺序 = input_ids / token_type_ids（与 ONNX 声明顺序一致）。
+        val int64Names = s.inputIsInt64.filterValues { it }.keys.toList()
+        val f32Names = s.inputIsInt64.filterValues { !it }.keys.toList()
+        if (int64Names.size != 2 || f32Names.size != 1) return MsStep.BAD_DTYPE
+        val idsName = int64Names[0]
+        val typesName = int64Names[1]
+        val maskName = f32Names[0]
+
+        val seqLen = s.inputs.firstOrNull { it.first == idsName }?.second ?: return MsStep.NO_INPUT
         val elemNum = s.outputElementNum
         if (elemNum <= 0) return MsStep.NO_OUTPUT
         val hidden = elemNum / seqLen
@@ -75,9 +89,9 @@ fun sekbSpikeMindSporeSelfTest(modelPath: String): Int {
         // 而那段动态链已被移除）；改为宿主算好 additive mask，用 float32 喂进去。
         s.predictTyped(
             mapOf(
-                "input_ids" to MsSession.Feed.I64(ids),
-                "token_type_ids" to MsSession.Feed.I64(types),
-                "sekb_additive_mask_zero" to MsSession.Feed.F32(additiveMask(mask)),
+                idsName to MsSession.Feed.I64(ids),
+                typesName to MsSession.Feed.I64(types),
+                maskName to MsSession.Feed.F32(additiveMask(mask)),
             ),
         )
 
@@ -117,9 +131,9 @@ fun sekbSpikeMindSporeFirstFloat(modelPath: String): Int {
         // 而那段动态链已被移除）；改为宿主算好 additive mask，用 float32 喂进去。
         s.predictTyped(
             mapOf(
-                "input_ids" to MsSession.Feed.I64(ids),
-                "token_type_ids" to MsSession.Feed.I64(types),
-                "sekb_additive_mask_zero" to MsSession.Feed.F32(additiveMask(mask)),
+                idsName to MsSession.Feed.I64(ids),
+                typesName to MsSession.Feed.I64(types),
+                maskName to MsSession.Feed.F32(additiveMask(mask)),
             ),
         )
         val v0 = s.readOutputFloats(1)[0]
