@@ -890,12 +890,30 @@ for (j in values.indices) p[j] = values[j]
 `elemNum=262144` 为正 = 走到了"成功"分支（`Index.ets` 判 `n > 0`），
 `firstFloat` 是真实非零输出 → **MindSpore Lite 端侧嵌入第一次在 OHOS 上完整算完并取到向量**。
 
-### ⚠️ 遗留（下次接手先看这条）
+### ⚠️ 遗留：`kotlin-pending/` 那处同源实现（已修，但仍**未经编译验证**）
 
-`knspike/src/ohosMain/kotlin-pending/MindSporeBgeEmbedding.kt:165` **还有同样的
-`OH_AI_TensorSetData(t, src)` 写法**。它在 `kotlin-pending/`（未编入构建），
-所以没被这次验证覆盖——**一旦启用就会重演同一个 double free**，启用前必须一并改成
-`OH_AI_TensorGetMutableData` 写法。
+`knspike/src/ohosMain/kotlin-pending/MindSporeBgeEmbedding.kt` 里是**同一处** double free 写法
+（`OH_AI_TensorSetData(t, src)`），**已按同样方式改掉**（新增 `fillI64`，写模型自有缓冲）。
+
+但它**无法在当前工程里编译或真机验证**，原因是结构性的：
+
+- 它在 `kotlin-pending/`——不是任何 sourceSet 的源码目录（`knspike/build.gradle.kts` 只配了
+  `ohosMain`），所以从未参与构建；
+- 它依赖 `apps/shared` 的 `EmbeddingProvider` / `BertWordPieceTokenizer` / `EmbeddingSpace`，
+  而 **`apps/shared` 没有 ohos 目标**（只有 android/ios/macos），`spike/settings.gradle.kts`
+  也只 `include(":knspike")`。
+
+**所以启用它是一个功能级任务**（给 `apps/shared` 加 ohos 目标 + 接线 + 接入口 + 真机跑通），
+不是改一行就能验的。交接时请把"编译验证"和"接线"当成同一件事做。
+
+### 🛡️ 防回归：构建期守卫（`scripts/harmony_spike.sh`）
+
+`kn|hap|all|mindspore` 四个动作现在都会先跑 `verify_no_tensor_setdata`：
+一旦任何 `.kt`（**含 `kotlin-pending/`**）里出现 `OH_AI_TensorSetData(` 调用，就在**构建前**
+失败并指出文件:行号与正确写法。
+
+已做 A/B 验证：放一个真实违规调用 → 守卫拦下、退出码 1、不进构建；移除后 → 放行且
+`kn` 构建正常（exit 0，两个 ABI 的 `libkn.so` 均产出）。
 
 **过程教训**（与上一轮那条呼应）：崩溃栈里的 `#10 OH_AI_ModelDestroy` 一开始很容易被读成
 "销毁时参数用错"，但真正要看的是 `LastFatalMessage` 的 **double free** 与 `FreeData` 这一帧——

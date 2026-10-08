@@ -206,11 +206,34 @@ verify_mindspore() {
     echo "      所以这一项只能靠真机判定（见 apps/harmony/README.md）。"
 }
 
+# ── 守卫：禁止把调用方缓冲交给 `OH_AI_TensorSetData` ────────────────────────
+# 为什么要有它（实测崩溃，2026-10-08）：该 API 会把**调用方的**指针交给张量
+# （内存归张量所有、析构时 free 它）；而我们的缓冲常来自 `memScoped`（离开作用域已 free）
+# → **double free**：`OH_AI_ModelDestroy → Graph::~Graph → LiteSession::~LiteSession
+#    → Tensor::~Tensor → Tensor::FreeData` → musl `SIGTRAP` + "may double free"。
+# 正确写法：写 `OH_AI_TensorGetMutableData` 返回的**模型自有**缓冲
+# （参考 `MsLite.kt` 的 `fillI64` / `fillF32`）。
+# ⚠️ 连 `kotlin-pending/` 一起扫：那里有未编入构建的同源实现，
+#    不扫就会等到启用那天才踩同一个坑（本轮已修掉那一处）。
+verify_no_tensor_setdata() {
+    local hits
+    hits="$(grep -rn "OH_AI_TensorSetData[[:space:]]*(" --include=*.kt "$SPIKE/knspike/src" 2>/dev/null \
+        | grep -v "^[^:]*:[0-9]*:[[:space:]]*\(//\|\*\)" || true)"
+    if [ -n "$hits" ]; then
+        echo "❌ 发现 OH_AI_TensorSetData 调用（double free 风险）：" >&2
+        echo "$hits" | sed 's/^/     /' >&2
+        echo "   → 改为写 OH_AI_TensorGetMutableData 返回的模型自有缓冲" >&2
+        echo "     （参考 apps/harmony/spike/knspike/src/ohosMain/kotlin/MsLite.kt 的 fillI64/fillF32）" >&2
+        return 1
+    fi
+    echo "   ✅ 未发现 OH_AI_TensorSetData 调用（无 double free 风险）"
+}
+
 case "$ACTION" in
-    kn)   build_kn ;;
-    hap)  build_hap && verify_link ;;
-    all)  build_kn && build_hap && verify_link ;;
-    mindspore) build_kn && verify_mindspore ;;
+    kn)   verify_no_tensor_setdata && build_kn ;;
+    hap)  verify_no_tensor_setdata && build_hap && verify_link ;;
+    all)  verify_no_tensor_setdata && build_kn && build_hap && verify_link ;;
+    mindspore) verify_no_tensor_setdata && build_kn && verify_mindspore ;;
     preview) build_preview ;;
     *) echo "用法：bash scripts/harmony_spike.sh [kn|hap|all|mindspore]" >&2; exit 2 ;;
 esac

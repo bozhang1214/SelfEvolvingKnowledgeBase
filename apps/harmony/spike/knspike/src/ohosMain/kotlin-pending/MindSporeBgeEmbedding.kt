@@ -27,12 +27,11 @@ package com.sekb.ohos.spike
 import com.sekb.shared.embed.BertWordPieceTokenizer
 import com.sekb.shared.embed.EmbeddingProvider
 import com.sekb.shared.embed.EmbeddingSpace
+import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.COpaquePointerVar
-import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.LongVar
 import kotlinx.cinterop.alloc
-import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.get
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
@@ -59,7 +58,6 @@ import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorGetElementNum
 import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorGetMutableData
 import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorGetName
 import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorHandleArray
-import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorSetData
 import kotlin.math.sqrt
 
 /**
@@ -138,31 +136,23 @@ class MindSporeBgeEmbedding(
             mask[i] = 1L
         }
 
-        memScoped {
-            // 数据必须在 `Predict` 期间一直有效 → 在本 memScoped 内分配并填充
-            val idsArr = allocArray<LongVar>(seqLen)
-            val maskArr = allocArray<LongVar>(seqLen)
-            val typeArr = allocArray<LongVar>(seqLen)   // token_type_ids 恒为 0（sentence-transformers 模板）
-            for (i in 0 until seqLen) {
-                idsArr[i] = row[i]
-                maskArr[i] = mask[i]
-                typeArr[i] = 0L
-            }
+        val zeros = LongArray(seqLen)   // token_type_ids 恒为 0（sentence-transformers 模板）
 
+        memScoped {
             OH_AI_ModelGetInputs(model).useContents {
                 for (i in 0 until handle_num.toInt()) {
                     val t = handle_list?.get(i) ?: continue
                     val name = OH_AI_TensorGetName(t)?.let { kotlinx.cinterop.toKString(it) } ?: continue
-                    val src: CPointer<LongVar> = when (name) {
-                        "input_ids" -> idsArr
-                        "attention_mask" -> maskArr
-                        "token_type_ids" -> typeArr
+                    // 直接写进**模型自有**输入缓冲（见 [fillI64] 的说明）。
+                    // ⚠️ 不要把 `memScoped` 里的指针交给 `OH_AI_TensorSetData`：那会 double free
+                    // （2026-10-08 实测崩溃：OH_AI_ModelDestroy → LiteSession::~LiteSession → Tensor::FreeData）。
+                    when (name) {
+                        "input_ids" -> fillI64(t, row)
+                        "attention_mask" -> fillI64(t, mask)
+                        "token_type_ids" -> fillI64(t, zeros)
                         // 与 Android 一样：模型出现未预期输入就明确报错，不静默忽略
                         else -> throw IllegalStateException("模型出现了未预期的输入：$name")
                     }
-                    // 注意：`OH_AI_TensorSetData` 返回 void，**没有状态可查**；
-                    // 若形状对不上，症状会是"向量不对"而不是报错 —— 所以上面才要主动校验数据类型。
-                    OH_AI_TensorSetData(t, src)
                 }
             }
 
@@ -185,6 +175,23 @@ class MindSporeBgeEmbedding(
         val floats = raw.reinterpret<kotlinx.cinterop.FloatVar>()
         val v = FloatArray(space.dim) { floats[it] }   // CLS = 前 dim 个浮点
         return l2Normalize(v)
+    }
+
+    /**
+     * 把 int64 写进**模型自有**的输入缓冲。
+     *
+     * ⚠️ 不要改用 `OH_AI_TensorSetData(t, buf)`：它把**调用方的**指针交给张量（内存归张量所有，
+     * 析构时 free 它），而缓冲若来自 `memScoped` 则离开作用域已被释放一次 → **double free**。
+     * 实测崩溃栈（2026-10-08，与 `MsLite.kt` 同一根因）：
+     * `OH_AI_ModelDestroy → Graph::~Graph → LiteSession::~LiteSession → Tensor::FreeData → SIGTRAP`。
+     *
+     * 注意：本文件在 `kotlin-pending/`（未编入构建，`apps/shared` 也还没有 ohos 目标），
+     * 所以改法与 `MsLite.kt` 保持一致但**未经编译/真机验证**；启用本文件时请连同构建接线一起验证。
+     */
+    private fun fillI64(t: COpaquePointer, values: LongArray) {
+        val dst = OH_AI_TensorGetMutableData(t) ?: throw IllegalStateException("取输入数据指针失败")
+        val p = dst.reinterpret<LongVar>()
+        for (j in values.indices) p[j] = values[j]
     }
 
     override fun close() {
