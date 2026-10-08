@@ -127,4 +127,32 @@ class KnowledgeIndexTest {
         assertTrue(e is IllegalArgumentException)
         assertTrue(e!!.message!!.contains("维度不符"))
     }
+
+    @Test
+    fun `provider returning fewer vectors is padded instead of crashing`() {
+        // 嵌入端口是**跨语言**的（Kotlin ↔ Swift/ArkTS）：契约是"返回同数量"，但各端实现未必守得住。
+        // 破坏它的代价原本是**崩溃**（`vector = vectors[i]` 裸索引；iOS 实测 EXC_BREAKPOINT，
+        // 栈顶 Kotlin_NSArrayAsKList_get）——比"一条错误消息"严重得多。
+        // 现在：补齐零向量 + 在 IngestReport 里报出补齐条数（不允许静默）。
+        val short = object : com.sekb.shared.embed.EmbeddingProvider {
+            override val space = provider.space
+            override val isOnDevice = true
+            override fun embed(texts: List<String>): List<FloatArray> =
+                texts.take(1).map { provider.embedOne(it) }   // 故意只回一条
+        }
+        val store = InMemoryVectorStore(provider.space)
+        // 显式给小的分块尺寸，让"多片"这件事**确定**发生（默认 maxChars 较大，短文本只会出 1 片，
+        // 那样这条测试就成了空跑——本轮实测踩到：第一版用 30 次重复仍只切出 1 片）。
+        val index = KnowledgeIndex(short, store, maxChars = 40, overlapChars = 0)
+        val report = index.ingest("short", "端侧推理为什么省电。".repeat(30))
+
+        assertTrue("至少要切出多片才验得到这条", report.chunks >= 2)
+        assertEquals("补齐条数必须报出来（静默补齐会掩盖真实缺陷）",
+            report.chunks - 1, report.zeroFilled)
+        assertEquals("全部切片都要入库，不能只剩第一条", report.chunks, store.size())
+
+        // 被补零的切片：与任何向量余弦为 0 ⇒ 必然排在最后且不得分（安全失败，不是"意外命中"）
+        val out = Retriever(provider, store, minScore = 0.0).retrieve("端侧推理为什么省电", topK = report.chunks)
+        assertEquals("补齐的零向量切片必须垫底", 0.0, out.hits.last().score, 1e-9)
+    }
 }

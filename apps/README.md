@@ -16,7 +16,7 @@ apps/
 >
 > | 端 | 状态 | 自检 | 备注 |
 > |---|---|---|---|
-> | Android | ✅ **功能完整可用**（四页 UI） | 32 PASS / 0 FAIL / 1 SKIP（release 与 debug 一致） | 294 单测（含契约夹具逐 37 个 case 断言） |
+> | Android | ✅ **功能完整可用**（四页 UI） | 32 PASS / 0 FAIL / 1 SKIP（release 与 debug 一致） | 295 单测（含契约夹具逐 37 个 case 断言） |
 > | iOS | 🟡 **核心已完成，UI 四页进行中** | 26 PASS / 0 FAIL / 1 SKIP | 唯一 SKIP = Keychain 往返（需真实签名身份）；**自检页之外的用户界面正在补齐** |
 > | Mac | 🟡 **核心已完成，UI 随 iOS 同源补齐** | 26 PASS / 0 FAIL / 1 SKIP | 与 iOS **同一份 Swift 源码** |
 > | 鸿蒙 | 🟡 **M6 四条全达成，H1→H8 进行中** | — | 模拟器实测：未签名 HAP 可装 ✅、NAPI↔KMP 通 ✅、MindSpore 端侧推理跑通 ✅；端口/UI/自检表**未做**（见 `docs/多端跨端-鸿蒙端方案.md`） |
@@ -74,7 +74,7 @@ iOS `App/` 5,399 行 / 25 文件（**Mac 复用同一份源码**，不复制）�
 
 ```bash
 # Android
-bash scripts/android.sh test            # 294 单测，无需模拟器
+bash scripts/android.sh test            # 295 单测，无需模拟器
 bash scripts/android.sh assemble        # 打 debug APK
 bash scripts/emulator.sh --background   # 起模拟器（状态全在 .tooling/ 内）
 bash scripts/android.sh install         # 装到已连接的模拟器/真机

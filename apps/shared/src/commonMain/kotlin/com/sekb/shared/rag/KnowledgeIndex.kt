@@ -25,6 +25,15 @@ class KnowledgeIndex(
         val chunks: Int,
         val embedded: Int,
         val space: String,
+        /**
+         * 因嵌入条数不符而**被补成零向量**的切片数（正常为 0）。
+         *
+         * 存在的理由：嵌入端口是**跨语言**的（Kotlin ↔ Swift/ArkTS），"返回数量必须一致"
+         * 这条契约各端实现未必守得住；一旦少返回，下面的索引就按切片数**越界崩溃**
+         * （iOS 实测 `EXC_BREAKPOINT`，栈顶 `Kotlin_NSArrayAsKList_get`）。
+         * 这里防御性补齐，并把降级次数**报出来**——静默补齐会掩盖真实缺陷。
+         */
+        val zeroFilled: Int = 0,
     )
 
     fun ingest(
@@ -36,7 +45,15 @@ class KnowledgeIndex(
     ): IngestReport {
         val chunks = Chunking.split(text, sourceId, maxChars, overlapChars)
         if (chunks.isEmpty()) return IngestReport(sourceId, 0, 0, store.space.id)
-        val vectors = provider.embed(chunks.map { it.text })
+        val embeddedRaw = provider.embed(chunks.map { it.text })
+        // ⚠️ 防御：**条数不符时补零向量，绝不做 `vectors[i]` 式的裸索引**。
+        // 契约是"实现返回同数量"（见 `EmbeddingProvider.embed`），但这条契约跨语言、跨实现，
+        // 破坏它的代价是**崩溃**而不是一条错误消息。零向量与任何向量余弦为 0 ⇒ 检索不命中，
+        // 属于安全失败；同时把补齐条数放进 `IngestReport.zeroFilled` 供自检断言（不允许静默）。
+        val zeroFilled = (chunks.size - embeddedRaw.size).coerceAtLeast(0)
+        val vectors: List<FloatArray> =
+            if (zeroFilled == 0) embeddedRaw
+            else embeddedRaw + List(zeroFilled) { FloatArray(provider.space.dim) }
         store.upsert(
             chunks.mapIndexed { i, c ->
                 VectorRecord(
@@ -53,7 +70,7 @@ class KnowledgeIndex(
                 addedAtMillis = nowMillis(), deviceOnly = deviceOnly,
             ),
         )
-        return IngestReport(sourceId, chunks.size, vectors.size, store.space.id)
+        return IngestReport(sourceId, chunks.size, vectors.size, store.space.id, zeroFilled)
     }
 
     /**

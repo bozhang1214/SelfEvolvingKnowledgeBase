@@ -554,7 +554,7 @@ SelfEvolvingKnowledgeBase/
 
 | 端 | 目录 | 状态 | 构建 / 验收 |
 |---|---|---|---|
-| Android | `apps/android/` | ✅ **功能完整可用**（四页 UI；294 单测 / 0 失败；自检 32 PASS / 0 FAIL / 1 SKIP） | `bash scripts/android.sh assemble`（单测：`… test`） |
+| Android | `apps/android/` | ✅ **功能完整可用**（四页 UI；295 单测 / 0 失败；自检 32 PASS / 0 FAIL / 1 SKIP） | `bash scripts/android.sh assemble`（单测：`… test`） |
 | iOS | `apps/ios/` | 🟡 核心已通（四端口 + 自检 26 PASS）；**四页 SwiftUI UI 本轮补齐中** | `bash scripts/ios_app.sh run`（冒烟：`bash scripts/ios.sh smoke`） |
 | Mac | `apps/mac/` | 🟡 与 iOS **同一份 Swift 源码**（自检 26 PASS） | `bash scripts/mac_app.sh run` |
 | 鸿蒙 | `apps/harmony/` | 🟡 M6 spike 四条全达成（模拟器上 HAP 可装、NAPI↔KMP 通、MindSpore 推理跑通）；**H1→H8 落地中** | `bash scripts/harmony.sh build \| install \| selftest`（见 `docs/多端跨端-鸿蒙端方案.md`） |
