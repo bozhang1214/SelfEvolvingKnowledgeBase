@@ -317,6 +317,19 @@ def main() -> int:
             # private / protected → 不跨语言，Swift 调不到，不要求
             if re.search(r"\b(private|protected)\b", decl):
                 continue
+            # ⚠️ **函数自己 catch 掉的抛出不算**（2026-10-08 实测补）：
+            # `HostOllamaEmbedding.embed` 是"try { … throw … } catch { 返回零向量 }"——
+            # 内部 throw 是**控制流**，异常没有跨出函数，Swift 侧不会崩。
+            # 判据：把 `throw …` 所在的**同一行**出现在 `catch` 之后、或函数体里有 `catch` 且
+            # 抛出都在 try/catch 之内 → 视为已处理。这里用"函数体含 catch 且 throw 全在 try 块内"来判。
+            throws = [m.start() for m in re.finditer(r"\bthrow\s", body)]
+            handled = False
+            if "catch" in body and "try" in body:
+                # 简化判定：catch 之前的 throw 属于 try 块（内部）；catch 之后的才外泄
+                catch_at = body.find("catch")
+                handled = all(t < catch_at for t in throws)
+            if handled:
+                continue
             # 声明正上方 160 字符内要有 `@Throws(...)`
             if "@Throws(" not in code[max(0, pos - 160):pos]:
                 line_no = code[:pos].count("\n") + 1
@@ -325,7 +338,56 @@ def main() -> int:
         errors.append(
             "共享层公开方法会抛异常但没标 `@Throws`（Swift 侧只能崩，"
             "于是各端会各自重写一份客户端）：\n     " + "\n     ".join(missing_throws)
-            + "\n     补 `@Throws(SekbApiException::class)`（或改返回 Result 类型）。"
+            + "\n     补 `@Throws(SekbApiException::class)`；"
+            + "\n     若该方法的契约本来就是「失败降级、用返回值表达」，应改成内部 catch（见 EmbeddingProvider.embed 的注释）。"
+        )
+
+    # ⑥b **接口与实现的 `@Throws` 过滤器必须一致**。
+    #
+    # 为什么（2026-10-25 收到实测报错后补）：`@Throws` **只写在 override 上**时，
+    # Kotlin/Native 是**硬编译错误**：
+    #   `Member overrides different '@Throws' filter from 'interface EmbeddingProvider : Any'`
+    # 而 **JVM 侧宽容**——所以 Android 变体编得过、292 单测全绿，只有 iOS/鸿蒙 target 会挂，
+    # 且一轮 native 构建 17–18 分钟才报出来。这类"平台差异错误"值得一条 30 毫秒的静态检查。
+    filter_mismatch: list[str] = []
+    for path in sorted(glob.glob(os.path.join(ROOT, "apps/shared/src/commonMain/**/*.kt"), recursive=True)):
+        rel = os.path.relpath(path, ROOT)
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+        if "@Throws(" not in raw:
+            continue
+        code = re.sub(r"/\*.*?\*/", "", raw, flags=re.S)
+        code = "\n".join(l if not l.strip().startswith("//") else "" for l in code.splitlines())
+
+        def _declared(name: str) -> str | None:
+            m = re.search(
+                r"(@Throws\([^)]*\))?\s*\n?\s*"
+                r"(?:(?:public|internal|private|protected|open|final|override|suspend|inline|operator|tailrec|external)\s+)*"
+                rf"fun\s+{re.escape(name)}\s*\(", code)
+            return m.group(1) if m else None
+
+        interfaces = re.findall(r"interface\s+(\w+)[^{]*\{(.*?)\n\}", code, re.S)
+        for _iface, ibody in interfaces:
+            for m in re.finditer(r"(@Throws\([^)]*\)\s*)?fun\s+(\w+)\s*\(", ibody):
+                ann, mname = m.group(1), m.group(2)
+                for om in re.finditer(rf"override\s+fun\s+{re.escape(mname)}\s*\(", code):
+                    head = code[max(0, om.start() - 120):om.start()]
+                    oann = "@Throws(" in head
+                    if bool(ann) != oann:
+                        line_no = code[:om.start()].count("\n") + 1
+                        if oann and not ann:
+                            filter_mismatch.append(
+                                f"{rel}:{line_no} `{mname}()` 在 override 上有 `@Throws` 而接口没有"
+                                " → **Kotlin/Native 直接编译失败**（JVM 宽容，所以只在 iOS/鸿蒙暴露）")
+                        else:
+                            filter_mismatch.append(
+                                f"{rel}:{line_no} `{mname}()` 接口有 `@Throws`、override 却没有"
+                                " → 各实现语义不一致（有的抛、有的不抛）")
+    if filter_mismatch:
+        errors.append(
+            "接口与实现的 `@Throws` 过滤器不一致（这类错只在 native target 暴露）：\n     "
+            + "\n     ".join(filter_mismatch)
+            + "\n     定一处：过滤器写**接口**上（override 不再写），或整体不写。"
         )
 
     # ⑦ **注释块语法**：行首 ` *` 出现在块注释之外、或块注释未闭合。

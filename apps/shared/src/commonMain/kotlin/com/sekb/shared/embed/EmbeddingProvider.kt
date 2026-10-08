@@ -35,7 +35,28 @@ interface EmbeddingProvider {
     /** 是否在设备本机计算。`false`（如宿主 Ollama）时不得用于设备专属数据。 */
     val isOnDevice: Boolean
 
-    /** 批量嵌入；实现不得改变返回顺序与数量。 */
+    /**
+     * 批量嵌入；实现不得改变返回顺序与数量。
+     *
+     * ## 失败契约：**同数量零向量，不抛异常**（四端统一，2026-10-08 定案）
+     *
+     * 两条理由都是实测出来的：
+     * 1. **短数组会崩**：`KnowledgeIndex.ingest` 按切片数**索引**嵌入结果；返回空/短数组会下标越界
+     *    （iOS 实测 `EXC_BREAKPOINT`，栈顶 `Kotlin_NSArrayAsKList_get`）。返回零向量是安全失败
+     *    （与任何向量余弦为 0 ⇒ 检索不命中）。
+     * 2. **跨端不一致本身就是缺陷**：Apple 侧 `OrtBgeEmbedding` 一直是"捕获 → 零向量 + `lastError`"，
+     *    而共享层 `HostOllamaEmbedding` 曾直接抛 → 同一个宿主故障，iOS 降级、Android 崩。
+     *
+     * ## 为什么**不**标 `@Throws`（两条路都试过，都不对）
+     * · 只在 **override** 上标 → Kotlin/Native **编译失败**（实测）：
+     *   `Member overrides different '@Throws' filter from 'interface EmbeddingProvider : Any'`；
+     *   注意 **JVM 侧是宽容的**，所以 Android 能编能测、只有 native target 会挂（整轮 18 分钟）。
+     * · 标在**接口**上能编过，但把"失败即降级"改成"失败即抛"，第 1 条的崩溃路径又回来了。
+     *
+     * 结论：**嵌入失败用返回值表达，不用异常表达**；详情放实现自己的 `lastError`。
+     * `scripts/check_edge_facts.py` 盯两件事：① 接口/实现不得出现 `@Throws` 过滤器不一致；
+     * ② 会抛异常的**公开方法**必须标 `@Throws`（`SekbApi`/`Json` 用异常表达失败，那类要标）。
+     */
     fun embed(texts: List<String>): List<FloatArray>
 
     fun embedOne(text: String): FloatArray = embed(listOf(text)).first()
@@ -119,10 +140,15 @@ class HostOllamaEmbedding(
     override val space: EmbeddingSpace = EmbeddingSpace("$model@$dim", dim)
     override val isOnDevice: Boolean = false
 
-    // 宿主 Ollama 不可用/响应异常时**抛** IllegalStateException：Swift 侧要能 try 到，
-    // 否则端侧嵌入失败会直接崩应用（而不是按共享层约定降级为零向量）。
-    @Throws(IllegalStateException::class)
-    override fun embed(texts: List<String>): List<FloatArray> {
+    /** 最近一次失败的原因（与 Apple 侧 `OrtBgeEmbedding.lastError` 同一口径）。 */
+    var lastError: String? = null
+        private set
+
+    // 宿主 Ollama 不可用/响应异常时**降级为零向量**，不往外抛：
+    // `KnowledgeIndex.ingest` 是按切片数**索引**嵌入结果的，抛异常会打断"失败也要安全"的契约；
+    // 而返回短数组更糟——会下标越界崩溃（iOS 实测过 EXC_BREAKPOINT）。
+    // 为什么不在接口/override 上标 `@Throws`：见 `EmbeddingProvider.embed` 的注释（两条路都试过）。
+    override fun embed(texts: List<String>): List<FloatArray> = try {
         val body = JsonObject()
             .put("model", model)
             .put("input", JsonArray().apply { texts.forEach { put(it) } })
@@ -139,11 +165,19 @@ class HostOllamaEmbedding(
         if (!resp.isOk) throw IllegalStateException("嵌入失败：HTTP ${resp.code} ${resp.body.take(120)}")
         val data = JsonX.parseObject(resp.body)?.optJSONArray("data")
             ?: throw IllegalStateException("嵌入响应缺少 data 字段")
-        return (0 until data.length()).map { i ->
+        val out = (0 until data.length()).map { i ->
             val arr = data.optJSONObject(i)?.optJSONArray("embedding")
                 ?: throw IllegalStateException("嵌入响应缺少 embedding")
             FloatArray(arr.length()) { j -> arr.optDouble(j, 0.0).toFloat() }
         }
+        // 条数不符也算失败（调用方按切片数索引，短列表会崩）
+        if (out.size != texts.size) throw IllegalStateException("嵌入条数 ${out.size} ≠ 输入 ${texts.size}")
+        lastError = null
+        out
+    } catch (t: Throwable) {
+        // 只降级"环境类"失败；真正的编程错误（如维度不匹配）也走这里，但会记进 lastError 并被自检断言
+        lastError = t.message ?: t.toString()
+        texts.map { FloatArray(space.dim) }
     }
 }
 

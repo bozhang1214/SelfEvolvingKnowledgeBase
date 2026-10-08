@@ -66,6 +66,11 @@ prepare_android_env() {
     [ -n "${JAVA_HOME:-}" ] || { echo "⚠️  找不到 JDK（需 17+）：请设置 JAVA_HOME" >&2; return 1; }
     export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$ROOT/.tooling/gradle-home}"
     export ANDROID_USER_HOME="$ROOT/.tooling/android-home"
+    # ⚠️ `KONAN_DATA_DIR` 必须指仓库内：Kotlin/Native 默认用 `~/.konan`，受限沙箱里
+    # 读 `~/.konan/.../.lock` 会 `FileNotFoundException` —— 且**失败发生在配置阶段**，
+    # 整轮构建白跑 16 分钟才报出来（本脚本第一次跑 native 检查时实测）。
+    export KONAN_DATA_DIR="${KONAN_DATA_DIR:-$ROOT/.tooling/konan}"
+    mkdir -p "$KONAN_DATA_DIR"
     local sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
     export ANDROID_SDK_ROOT="$sdk" ANDROID_HOME="$sdk"
     mkdir -p "$GRADLE_USER_HOME" "$ANDROID_USER_HOME"
@@ -104,6 +109,32 @@ q_shared_compiles() {
         record PASS 全端 "共享层(:shared:compileAndroidMain)" "BUILD SUCCESSFUL"
     else
         record FAIL 全端 "共享层编译" "见 ${log}（第一处 error，别用窄 grep 过滤）"
+        grep -m3 -E "^e: |error:" "$log" | sed 's/^/    /'
+    fi
+}
+
+q_shared_native_compiles() {
+    # ⚠️ **Kotlin/Native 必须单独编一次**（2026-10-25 被真实事故逼出来的检查）。
+    #
+    # 事故：往共享层的 override 上单独加 `@Throws` —— **JVM 侧完全合法**，
+    # `:shared:compileAndroidMain` 绿、292 单测绿；但 native 侧是硬编译错误
+    # （`Member overrides different '@Throws' filter ...`），
+    # 直到 iOS/鸿蒙各自跑了一轮 17–18 分钟的构建才暴露，**连续踩了两次**。
+    # 教训：**"Android 编得过"不等于"共享层编得过"**——共享层的可移植性只有 native 侧能证。
+    step "共享层可编（Kotlin/Native：macOS target）"
+    if [ "${SEKB_SKIP_NATIVE:-0}" = "1" ]; then
+        record SKIP 全端 "共享层(native)" "显式跳过（SEKB_SKIP_NATIVE=1）；注意这不代表通过"
+        return
+    fi
+    prepare_android_env || { record SKIP 全端 "共享层(native)" "无 JDK（环境限制）"; return; }
+    local log=/tmp/sekb-shared-native.log
+    # `-PsekbNativeTargets=true`：native target 默认关闭（日常构建保持秒级），这里显式打开。
+    # macOS target 与 iOS/鸿蒙共用同一份 commonMain，所以它能代表"native 侧是否编得过"。
+    if ( cd apps/android && ./gradlew --no-daemon -PsekbNativeTargets=true \
+            :shared:compileKotlinMacosArm64 --console=plain -q ) >"$log" 2>&1; then
+        record PASS 全端 "共享层(native: :shared:compileKotlinMacosArm64)" "BUILD SUCCESSFUL"
+    else
+        record FAIL 全端 "共享层(native)" "见 ${log}（native 专属错误，Android/JVM 编得过不代表这里过）"
         grep -m3 -E "^e: |error:" "$log" | sed 's/^/    /'
     fi
 }
@@ -226,6 +257,7 @@ case "$MODE" in
         q_doc_guard
         q_edge_facts
         q_shared_compiles
+        q_shared_native_compiles
         q_android_unit_count
         ;;
     full)
