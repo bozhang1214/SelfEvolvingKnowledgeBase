@@ -728,7 +728,12 @@ DevEco 6 里也可能在 **Project Structure → Project** 下）。
    ```
    hdc install entry-default-unsigned.hap → install bundle successfully
    ```
-   即 **owner 问的"自动生成签名"对模拟器不是阻塞**（`~/.ohos/config/` 至今为空，也不需要）。
+   即 **"自动生成签名"对模拟器不是阻塞**。
+
+> ⚠️ **本节曾有一处说法不准确，已更正**：早前写"`~/.ohos/config/` 至今为空、未签名才能装"——
+> 实测 `build-profile.json5` **已含 `signingConfigs`**（绝对路径），`~/.ohos/config/` 下的
+> `.cer/.csr/.p12/.p7b/material` **均在**（10-08 16:17）。结论"未签名可装"仍然成立，
+> 但"签名材料不存在"是错的。另：模拟器是 **arm**（`lists.json` 的 `"abi": "arm"`），不是 x86_64。
 2. **NAPI↔KMP 在真实 OHOS 运行时上跑通**（截图证据）：
    ```
    sekb_spike_ping() = 42

@@ -7,6 +7,7 @@
 
 | 工作流 | 负责人 | 涉及文件（重点） | 开始时间 |
 |---|---|---|---|
+| 鸿蒙端开发（H1→H8：KMP 目标 + 端口 + UI） | DSH Agent | `apps/shared/**`、`apps/harmony/**`、`apps/contract/README.md`、`scripts/harmony.sh`、`docs/多端跨端-*.md`、`docs/RFC-多端跨端方案.md` | 2026-10-25（接手会话） |
 
 > 端云协同 M0–M3（`docs/RFC-端云协同与端侧Agent.md` / 实施记录）已于 2026-09-20 暂停存档，
 > 真机到货后从实施记录 §0 的恢复指引继续。

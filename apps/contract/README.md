@@ -31,10 +31,10 @@ apps/contract/
 
 | 端 | runner | 现状 |
 |---|---|---|
-| Android | `apps/android/app/src/test/kotlin/com/sekb/ondevice/ContractFixturesTest.kt`（JVM 单测，读本目录） | ✅ 已接（routing / signals / privacy，共 32 个 case / 4 个测试） |
-| iOS | `apps/ios` 测试 target 复用同一份 JSON | ⬜ M5 |
-| 鸿蒙 | ArkTS 测试或 HAP 内自检项读同一份 JSON | ⬜ M6/M7 |
-| Mac | 复用 iOS 的 Swift runner | ⬜ M8 |
+| Android | `apps/android/app/src/test/kotlin/com/sekb/ondevice/ContractFixturesTest.kt`（JVM 单测，读本目录） | ✅ 已接（routing / signals / privacy，共 **37** 个 case / 4 个测试） |
+| iOS | 需在 `apps/ios` 里新建测试 target 复用同一份 JSON | ⚠️ **未接 runner**（iOS **功能已交付**，但夹具 runner 没接——是"未接"不是"待做"） |
+| 鸿蒙 | HAP 内自检项读同一份 JSON（共享层已可用则直接复用 JVM 侧逻辑） | ⚠️ **未接**（排期 **H2**，见《鸿蒙端方案》§7.2） |
+| Mac | 复用 iOS 的 Swift runner | ⚠️ **未接 runner**（Mac **功能已交付**，夹具 runner 没接） |
 | JVM（桌面/CI） | 与 Android 同一份 runner（无 Android 依赖） | ✅ 已接 |
 
 **Runner 的硬要求**（否则夹具会"假绿"）：
