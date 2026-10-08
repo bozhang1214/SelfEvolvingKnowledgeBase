@@ -1280,3 +1280,34 @@ adb shell am start -n com.sekb.ondevice/.MainActivity --ez selftest true   # 看
 2. **release 包（非 debuggable）不能用 `run-as`** → `scripts/android.sh push-policy` 会报
    `run-as: package not debuggable`。因此 3 个策略项在 release 自检里**只能 SKIP**，
    release 包的满分不是 32 而是约 28（+SKIP）——这个口径要记住，否则会把"推不进策略包"误当成缺陷。
+
+---
+
+## 1.14 ✅ R8 回归已修复：release 包自检与 debug **完全一致**（2026-09-25）
+
+§1.13 记下"加 keep 规则后第 11 项是否恢复尚未验证"。手机重新接上后补验完成：
+
+```bash
+SEKB_EDGE_URL=http://127.0.0.1:11434/v1 bash scripts/android.sh release   # 38s
+adb install -r apps/android/app/build/outputs/apk/release/app-arm64-v8a-release.apk   # Success
+adb shell am start -n com.sekb.ondevice/.MainActivity --ez selftest true
+```
+
+```
+[PASS] rag_provider  — 嵌入=ONNX BAAI/bge-small-zh-v1.5-int8@512 空间=…-int8@512 本机计算=true
+[PASS] rag_model_path — …/bge-small-zh-v1.5=true | …-int8=true
+自检汇总：PASS=32 FAIL=0 SKIP=1
+```
+
+**结论**：`-keep class ai.onnxruntime.** { *; }` 生效。
+**R8 release 包的自检结果与 debug 包完全一致（32 PASS / 0 FAIL / 1 SKIP）** ——
+即 **R8 只瘦身、没有改变行为**，这一条终于有了运行期证据，而不只是体积数字。
+
+> 备注：release 包（非 debuggable）本不能用 `run-as` 推策略包，但此处策略项仍 PASS ——
+> 因为应用数据在同一 package + 同一签名 key 的**覆盖安装**中被保留，之前注入的策略包还在
+> `files/sekb-e2e-policy.json`。这也顺带验证了"release 与 debug 可覆盖安装"这条联调路径。
+
+### Android 侧遗留项状态：**全部收尾**
+
+深色模式、重启恢复会话、L1 策略 apply→rebuild→rollback、断网可用性、约束解码重复采样、
+会话列表页、**release R8（体积 + 运行期）** —— 全部完成或已验证。
