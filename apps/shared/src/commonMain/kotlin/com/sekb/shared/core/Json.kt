@@ -161,19 +161,28 @@ class JsonObject internal constructor(private val map: MutableMap<String, Any?>)
     fun optJSONArray(key: String): JsonArray? = map[key] as? JsonArray
 
     /** 严格读法：缺失即抛。只在"缺了就是程序错误"的地方用（协议被改坏要早暴露）。 */
+    //
+    // ⚠️ 这四个"严格读法"**会抛异常**，所以必须标 `@Throws`：Kotlin 异常跨到
+    // Swift/Objective-C 时，没有声明就变成未捕获异常、直接崩进程（Apple 侧实测过
+    // `SekbApiException` 崩溃 → 逼出过一份重复实现的 Swift 客户端）。
+    // `scripts/check_edge_facts.py` 会检查"公开方法会 throw 但没标 @Throws"。
+    @Throws(NoSuchElementException::class)
     fun getString(key: String): String {
         if (!map.containsKey(key)) throw NoSuchElementException(key)
         return optString(key)
     }
 
+    @Throws(NoSuchElementException::class)
     fun getInt(key: String): Int {
         if (!map.containsKey(key)) throw NoSuchElementException(key)
         return optInt(key)
     }
 
+    @Throws(NoSuchElementException::class)
     fun getJSONObject(key: String): JsonObject =
         optJSONObject(key) ?: throw NoSuchElementException(key)
 
+    @Throws(NoSuchElementException::class)
     fun getJSONArray(key: String): JsonArray =
         optJSONArray(key) ?: throw NoSuchElementException(key)
 

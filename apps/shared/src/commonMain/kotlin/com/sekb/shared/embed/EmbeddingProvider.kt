@@ -119,6 +119,9 @@ class HostOllamaEmbedding(
     override val space: EmbeddingSpace = EmbeddingSpace("$model@$dim", dim)
     override val isOnDevice: Boolean = false
 
+    // 宿主 Ollama 不可用/响应异常时**抛** IllegalStateException：Swift 侧要能 try 到，
+    // 否则端侧嵌入失败会直接崩应用（而不是按共享层约定降级为零向量）。
+    @Throws(IllegalStateException::class)
     override fun embed(texts: List<String>): List<FloatArray> {
         val body = JsonObject()
             .put("model", model)

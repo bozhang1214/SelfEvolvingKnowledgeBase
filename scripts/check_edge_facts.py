@@ -210,7 +210,6 @@ def main() -> int:
                           "（端侧会少测而不报错——这正是最危险的漂移）")
 
     # ⑤ **每类升级信号都必须被夹具覆盖**（只看 case 总数是不够的）。
-    #
     # 为什么（2026-10-25 补）：`signals.json` 的"≥13"只保证**数量**——把某类信号的 3 个 case
     # 删到只剩 1 个、或用别的信号 case 顶上，总数照样够，而**那一类行为就没人测了**。
     # 6 类信号是端云两侧"升级率可比"的语义基础（`PlaneRouter.evaluate` 与服务端 plane_router 同口径），
@@ -287,6 +286,100 @@ def main() -> int:
             + f"\n     若确有必要（例如自己实现格式化器），在文件里写明 `// {allow_marker}: <理由>` 显式豁免。"
         )
 
+    # ⑥ 共享层的**公开方法**若会抛异常，必须标 `@Throws`。
+    #
+    # 为什么（2026-10-25 补，有实测证据）：Kotlin 异常跨到 Swift/Objective-C 时，
+    # 没有 `@Throws` 声明就**变成未捕获异常、直接崩进程**——Apple 侧实测：
+    # `SekbApi.login` 收到 HTTP 500 → `Uncaught Kotlin exception: SekbApiException` → 应用崩溃。
+    # 后果不是"报错难看"，而是**架构退化**：iOS 为了不崩，重写了一份 `SekbApiBridge.swift`
+    # （248 行，把 5 个协议路径与响应解析又抄了一遍）——正是 RFC 最反对的"制造第二套事实"。
+    # 这条检查把"新增公开 API 忘了标 `@Throws`"变成机械可判。
+    # 只查**会 throw 且公开**（public / 无修饰符 / internal）的函数；private 的不会跨到 Swift。
+    func_throws = re.compile(
+        r"^[ \t]*(?:(?:public|internal|private|protected|open|final|override|suspend|inline|operator|tailrec|external)\s+)*"
+        r"fun\s+(?:<[^>]*>\s*)?(?:[\w.<>?, ]+\.)?(\w+)\s*\(", re.M)
+    missing_throws: list[str] = []
+    for path in sorted(glob.glob(os.path.join(ROOT, "apps/shared/src/commonMain/**/*.kt"), recursive=True)):
+        rel = os.path.relpath(path, ROOT)
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+        if "throw " not in raw:
+            continue
+        # 去掉块注释与行注释：注释里出现 `throw`/`fun` 都不该算
+        code = re.sub(r"/\*.*?\*/", "", raw, flags=re.S)
+        code = "\n".join(l if not l.strip().startswith("//") else "" for l in code.splitlines())
+        decls = [(m.start(), m.group(1), m.group(0)) for m in func_throws.finditer(code)]
+        for idx, (pos, name, decl) in enumerate(decls):
+            end = decls[idx + 1][0] if idx + 1 < len(decls) else len(code)
+            body = code[pos:end]
+            if "throw " not in body:
+                continue
+            # private / protected → 不跨语言，Swift 调不到，不要求
+            if re.search(r"\b(private|protected)\b", decl):
+                continue
+            # 声明正上方 160 字符内要有 `@Throws(...)`
+            if "@Throws(" not in code[max(0, pos - 160):pos]:
+                line_no = code[:pos].count("\n") + 1
+                missing_throws.append(f"{rel}:{line_no} `{name}()` 会抛异常但没有 `@Throws(...)`")
+    if missing_throws:
+        errors.append(
+            "共享层公开方法会抛异常但没标 `@Throws`（Swift 侧只能崩，"
+            "于是各端会各自重写一份客户端）：\n     " + "\n     ".join(missing_throws)
+            + "\n     补 `@Throws(SekbApiException::class)`（或改返回 Result 类型）。"
+        )
+
+    # ⑦ **注释块语法**：行首 ` *` 出现在块注释之外、或块注释未闭合。
+    #
+    # 为什么（2026-10-25 补，**我自己刚踩过**）：给 `SekbApi` 的 KDoc 追加
+    # `@Throws` 说明时，脚本把一个 ` */` 插在了原注释中间——于是第 26–33 行的 ` * …`
+    # 落在注释**外面**，成为顶层语法错误：
+    #   `e: SekbApi.kt:33:17 Syntax error: Expecting a top level declaration.`
+    # 后果不是"我这一处坏"，而是**所有端的构建一起失败**（iOS / Mac / 鸿蒙都链接 `:shared`），
+    # 而 iOS 侧那轮构建跑了 17 分钟才报出来——代价很大。Kotlin 的这类断法**没有别的静态检查**，
+    # 所以补一条 30 毫秒可跑、不需要工具链的检查。
+    comment_errors: list[str] = []
+    comment_roots = [
+        "apps/shared/src/commonMain", "apps/shared-core/src",
+        "apps/harmony/spike/knspike/src", "apps/ios/App", "apps/mac",
+    ]
+    for rel_root in comment_roots:
+        root_dir = os.path.join(ROOT, rel_root)
+        if not os.path.isdir(root_dir):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root_dir):
+            dirnames[:] = [d for d in dirnames if d not in {"build", ".gradle", "node_modules", ".cxx"}]
+            for fname in sorted(filenames):
+                if not fname.endswith((".kt", ".swift")):
+                    continue
+                full = os.path.join(dirpath, fname)
+                rel = os.path.relpath(full, ROOT)
+                in_block = False
+                with open(full, encoding="utf-8") as fh:
+                    for lineno, line in enumerate(fh, 1):
+                        stripped = line.strip()
+                        if not in_block and stripped.startswith("*"):
+                            comment_errors.append(
+                                f"{rel}:{lineno} 行首是 `*` 但**不在块注释里**（`*/` 被提前闭合？）"
+                                f" → {stripped[:60]}")
+                        # ⚠️ 统计块注释标记时必须排除行注释：
+                        #   ① Kotlin 的 `//` 后面可能出现 `/*`（注释里讨论注释）；
+                        #   ② Swift 的文档注释是 `///`，用朴素正则 `.*/\*` 会把 `/// x` 误判成"块注释开始"
+                        #      （实测把 SekbApiBridge.swift 判成"块注释未闭合"，是**假阳性**）。
+                        # 做法：先砍掉本行的行注释部分再计数。
+                        code_part = re.sub(r"//.*$", "", line)
+                        opens, closes = code_part.count("/*"), code_part.count("*/")
+                        if opens > closes:
+                            in_block = True
+                        elif closes > opens:
+                            in_block = False
+                if in_block:
+                    comment_errors.append(f"{rel} 块注释**没有闭合**（`/*` 多于 `*/`）")
+    if comment_errors:
+        errors.append(
+            "注释块语法错误（会让**所有端**的构建一起失败，而这类断法没有别的静态检查）：\n     "
+            + "\n     ".join(comment_errors)
+        )
+
     if not args.quiet:
         print("── 端侧事实：实测值 ──")
         for name, value in sorted(actual.items()):
@@ -297,6 +390,8 @@ def main() -> int:
         if covered:
             print("   升级信号覆盖：" + "、".join(sorted(covered)))
         print(f"   commonMain 的 JVM 专有 API：{len(leaks)} 处（另有 {len(allowed)} 处显式豁免）")
+        print(f"   会抛异常却缺 `@Throws` 的公开方法：{len(missing_throws)} 处")
+        print(f"   端侧源码的注释块语法问题：{len(comment_errors)} 处")
         if allowed:
             for a in allowed:
                 print(f"     · 已豁免：{a}")

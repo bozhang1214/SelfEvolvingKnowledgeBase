@@ -22,6 +22,14 @@ class SekbApiException(val code: Int, val detail: String) :
  *
  * 只有五个动作：换账号令牌 → 换设备凭证 → 轮换 → 上报路由事件 → 聊天（SSE）。
  * 每个动作的错误都**分类**抛出（401/403/404/429/503 的处理方式完全不同，见协议 §8）。
+ *
+ * ⚠️ **每个公开方法都标了 `@Throws(SekbApiException::class)`**：Kotlin 异常跨到
+ * Swift/Objective-C 时会变成**未捕获异常直接崩溃进程**，除非用 `@Throws` 声明
+ * （`NSError**` 出参）或返回 Result 类型。Apple 侧实测：
+ * `SekbApi.login` 收到 HTTP 500 → `Uncaught Kotlin exception: com.sekb.shared.net.SekbApiException`
+ * → 应用崩溃。这正是 Apple 侧一度**重写一份 SekbApiBridge**（内容会漂移）的原因；
+ * 补上 `@Throws` 之后 Swift 侧可以 `try` 到 `NSError`，就能回到"逻辑一份"。
+ * 新增公开方法时**别忘了标**（`scripts/check_edge_facts.py` 会检查这一条）。
  */
 class SekbApi(
     private val transport: HttpTransport,
@@ -33,6 +41,7 @@ class SekbApi(
 
     // ---------- 账号与设备凭证 ----------
 
+    @Throws(SekbApiException::class)
     fun login(email: String, password: String): String {
         val body = JsonObject().put("email", email).put("password", password).toString()
         val resp = transport.postJson("$baseUrl/api/v1/auth/login", jsonHeaders(), body)
@@ -47,6 +56,7 @@ class SekbApi(
     }
 
     /** 用**用户 token** 换设备凭证（设备首次接入调一次）。 */
+    @Throws(SekbApiException::class)
     fun enroll(userToken: String, name: String, platform: String = "android",
                appVersion: String, embeddingSpace: String): DeviceCredentials {
         val body = JsonObject()
@@ -61,18 +71,21 @@ class SekbApi(
     }
 
     /** 设备 token 轮换：**旧 token 立即失效**（服务端语义），所以必须落盘新凭证。 */
+    @Throws(SekbApiException::class)
     fun refresh(deviceToken: String): DeviceCredentials {
         val resp = transport.postJson("$baseUrl/api/v1/device/refresh", authHeaders(deviceToken), "{}")
         if (!resp.isOk) throw SekbApiException(resp.code, errorDetail(resp.body))
         return parseCredentials(resp.body)
     }
 
+    @Throws(SekbApiException::class)
     fun heartbeat(deviceToken: String, appVersion: String, embeddingSpace: String): Boolean {
         val body = JsonObject().put("app_version", appVersion).put("embedding_space", embeddingSpace).toString()
         val resp = transport.postJson("$baseUrl/api/v1/device/heartbeat", authHeaders(deviceToken), body)
         return resp.isOk
     }
 
+    @Throws(SekbApiException::class)
     fun listDevices(token: String): List<Map<String, String>> {
         val resp = transport.get("$baseUrl/api/v1/device/list", authHeaders(token))
         if (!resp.isOk) throw SekbApiException(resp.code, errorDetail(resp.body))
@@ -91,6 +104,7 @@ class SekbApi(
      *
      * 服务端的 `token` 已在调用前逐段交给 [onToken]，这里只回最终信息。
      */
+    @Throws(SekbApiException::class)
     fun chatStream(
         deviceToken: String,
         message: String,
@@ -143,6 +157,7 @@ class SekbApi(
      * **为什么端侧非要上报**：端侧自己完成的推理不经过服务端，不上报的话
      * "端侧完成率/升级率"永远只统计到一半（协议 §4）。
      */
+    @Throws(SekbApiException::class)
     fun reportRouteEvent(deviceToken: String, event: RouteEventPayload): Boolean {
         val body = JsonObject()
             .put("event_id", event.eventId)
@@ -166,6 +181,7 @@ class SekbApi(
     }
 
     /** 两个北极星指标（给 UI 的"端云协同"面板用）。 */
+    @Throws(SekbApiException::class)
     fun routeStats(token: String): Map<String, String> {
         val resp = transport.get("$baseUrl/api/v1/edge/routes/stats", authHeaders(token))
         if (!resp.isOk) throw SekbApiException(resp.code, errorDetail(resp.body))
