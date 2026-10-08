@@ -69,12 +69,43 @@ class EmbeddingProviderTest {
     }
 
     @Test
-    fun `host ollama http error is loud`() {
+    fun `host ollama http error degrades to zero vectors instead of throwing`() {
+        // 2026-10-09 改：这条原来断言 `embed` **抛** IllegalStateException。那一版被推翻了——
+        // 它让同一个接口出现两种失败语义（Apple 侧一直是"捕获→零向量+lastError"，而这里抛），
+        // 而且会打断 `KnowledgeIndex.ingest` 的既有不变量（按切片数**索引**嵌入结果）。
+        // 现在的契约：**失败返回同数量零向量**，详情进 `lastError`。
         val t = FakeTransport()
         t.enqueueJson("""{"error":"model not found"}""", code = 404)
         val p = HostOllamaEmbedding(t, "http://x/v1", "nope", dim = 3)
-        val e = runCatching { p.embed(listOf("甲")) }.exceptionOrNull()
-        assertTrue(e is IllegalStateException)
-        assertTrue(e!!.message!!.contains("404"))
+
+        val vectors = p.embed(listOf("甲", "乙"))   // 不抛
+
+        assertEquals("条数必须与输入一致（短数组会让 ingest 下标越界）", 2, vectors.size)
+        vectors.forEach { v ->
+            assertEquals(3, v.size)
+            assertTrue("失败时必须是零向量（余弦 0 ⇒ 检索不命中，安全失败）", v.all { it == 0f })
+        }
+        assertTrue("失败原因要留痕，否则自检/UI 看不到", p.lastError!!.contains("404"))
+    }
+
+    @Test
+    fun `host ollama success clears lastError and keeps raw values`() {
+        val t = FakeTransport()
+        t.enqueueJson("""{"data":[{"embedding":[0.1,0.2,0.3]}]}""")
+        val p = HostOllamaEmbedding(t, "http://x/v1", "bge-m3", dim = 3)
+        val v = p.embed(listOf("甲"))
+        assertEquals(null, p.lastError)
+        assertEquals(0.2f, v[0][1], 1e-6f)
+    }
+
+    @Test
+    fun `host ollama count mismatch is treated as failure, not as a short list`() {
+        // 服务端少回一条：绝不能把短列表交给调用方（ingest 会按切片数索引）
+        val t = FakeTransport()
+        t.enqueueJson("""{"data":[{"embedding":[0.1,0.2,0.3]}]}""")
+        val p = HostOllamaEmbedding(t, "http://x/v1", "bge-m3", dim = 3)
+        val vectors = p.embed(listOf("甲", "乙", "丙"))
+        assertEquals(3, vectors.size)
+        assertTrue(p.lastError!!.contains("条数"))
     }
 }

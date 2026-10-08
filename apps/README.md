@@ -16,7 +16,7 @@ apps/
 >
 > | 端 | 状态 | 自检 | 备注 |
 > |---|---|---|---|
-> | Android | ✅ **功能完整可用**（四页 UI） | 32 PASS / 0 FAIL / 1 SKIP（release 与 debug 一致） | 292 单测（含契约夹具逐 37 个 case 断言） |
+> | Android | ✅ **功能完整可用**（四页 UI） | 32 PASS / 0 FAIL / 1 SKIP（release 与 debug 一致） | 294 单测（含契约夹具逐 37 个 case 断言） |
 > | iOS | 🟡 **核心已完成，UI 四页进行中** | 26 PASS / 0 FAIL / 1 SKIP | 唯一 SKIP = Keychain 往返（需真实签名身份）；**自检页之外的用户界面正在补齐** |
 > | Mac | 🟡 **核心已完成，UI 随 iOS 同源补齐** | 26 PASS / 0 FAIL / 1 SKIP | 与 iOS **同一份 Swift 源码** |
 > | 鸿蒙 | 🟡 **M6 四条全达成，H1→H8 进行中** | — | 模拟器实测：未签名 HAP 可装 ✅、NAPI↔KMP 通 ✅、MindSpore 端侧推理跑通 ✅；端口/UI/自检表**未做**（见 `docs/多端跨端-鸿蒙端方案.md`） |
@@ -50,9 +50,14 @@ apps/
 | **UI** | 聊天 / 来源 / 文档 / 设置 | ✅ **各端原生，不用跨端统一 UI**（owner 已定 D1）：Compose（Android）/ SwiftUI（iOS + Mac **共用一份源码**）/ ArkUI（鸿蒙）。~~目标 `shared/ui`（Compose Multiplatform）~~ **已否决**，CMP 评估归档为备选 |
 
 现状：纯逻辑已经**真的搬进 KMP 模块**（不是"目标"）——`apps/shared/src/commonMain`
-**37 文件 / 4,394 行零平台依赖**，各端只留薄的平台实现：
-Android `app/src/main` 4,785 行 / 25 文件（含 Compose 四页 UI）、iOS `App/` 1,118 行 / 5 文件（Mac 复用同一份）。
-⚠️ 上表三处数字是**实测**（`find … | wc -l`）；历史文档里出现过的 35/4,066、15/2,695 是搬层当时的快照，已过时。
+**37 文件 / 4,434 行零平台依赖**，各端只留薄的平台实现：
+Android `app/src/main` 4,785 行 / 25 文件（含 Compose 四页 UI）、
+iOS `App/` 5,399 行 / 25 文件（**Mac 复用同一份源码**，不复制）。
+⚠️ 这些规模数字是**实测**（`python3 scripts/check_edge_facts.py` 会打印 `shared_main_*` /
+`android_main_*` / `ios_app_*`）；它们**没有**做成 `fact:` 守门项——理由与 `android_unit_cases`
+不同：**每加一个 UI 文件/一次改动就会变**，做成阻断门禁会让每次提交都要同步文档。
+所以这里只保证"抄下来时是实测值"，**要引用就现跑那个脚本**，不要从别处二次转抄
+（历史文档里的 35/4,066、15/2,695、iOS 1,118/5 都是当时的快照，已过时）。
 
 ⚠️ **鸿蒙的旧结论已过期**：2026-06 HDC 华为发布了 KMP/CMP 鸿蒙社区版 Beta（Kotlin/Native 新增
 `OHOS_ARM64` target），"ArkTS 不能复用 Kotlin" 不再是唯一选项。新的路线判断、spike 验收标准与
@@ -69,7 +74,7 @@ Android `app/src/main` 4,785 行 / 25 文件（含 Compose 四页 UI）、iOS `A
 
 ```bash
 # Android
-bash scripts/android.sh test            # 292 单测，无需模拟器
+bash scripts/android.sh test            # 294 单测，无需模拟器
 bash scripts/android.sh assemble        # 打 debug APK
 bash scripts/emulator.sh --background   # 起模拟器（状态全在 .tooling/ 内）
 bash scripts/android.sh install         # 装到已连接的模拟器/真机
