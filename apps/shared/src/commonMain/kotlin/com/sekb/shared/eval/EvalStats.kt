@@ -1,5 +1,6 @@
 package com.sekb.shared.eval
 
+import com.sekb.shared.core.Fmt
 import kotlin.math.sqrt
 
 /**
@@ -40,7 +41,13 @@ object EvalStats {
     fun formatRate(successes: Int, n: Int): String {
         if (n <= 0) return "n/a"
         val (lo, hi) = wilson(successes, n)
-        val pct = { v: Double -> "%.1f%%".format(v * 100) }
+        // ⚠️ 这里原来写的是 `"%.1f%%".format(v * 100)` —— **JVM 专有**，`commonMain` 编不过。
+        // 它是 2026-10-25 在鸿蒙（ohosArm64）上第一次编共享层时暴露的：
+        //   e: EvalStats.kt:43:43 Unresolved reference 'format'.
+        // 也就是说 **iOS/Mac 的 framework 从没编过这个文件**（native target 默认关闭，
+        // iOS 侧只跑了 `ios.sh smoke` 那个不含 EvalStats 的子集）——是鸿蒙这一侧把它逼了出来。
+        // 改用共享层自己的 `Fmt.fixed`（同一文件集里已有，且 `FmtTest` 钉住了它与 `%.1f` 等价）。
+        val pct = { v: Double -> Fmt.fixed(v * 100, 1) + "%" }
         return "${pct(successes.toDouble() / n)} (95%CI ${pct(lo)}–${pct(hi)}, n=$n)"
     }
 

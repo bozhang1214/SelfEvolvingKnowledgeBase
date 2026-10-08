@@ -58,10 +58,13 @@ repos:
       # ---------- 文档守卫：断链 / 引用越界 / 符号不存在 / 文档过期（阻断）----------
       # 2026-09-16 技术文档复核后新增：此前这些校验一个都没在必经之路上，
       # 导致技术文档的行号与事实能静默漂移 200+ 个提交。
-      # 只改到 Markdown 或代码时才跑（代码改动会移动行号，必须一起查引用）。
+      # 只改到 Markdown / 代码 / 端侧脚本时才跑（代码改动会移动行号、也会改变实测数字）。
+      # ⚠️ 2026-10-25 补 `kt|kts|swift|ets`：端侧源码当时**不在触发集**里——
+      # 于是「加一个测试→用例数变了」这类提交根本不会触发守卫，
+      # 而 doc_guard 第 7 项正是按端侧源码实测值校验文档数字的（实测漏跑过）。
       - id: docs-guard
-        name: docs guard (links + citations + freshness)
+        name: docs guard (links + citations + freshness + edge facts)
         entry: bash docs/tech/.validation/doc_guard.sh --no-warn
         language: system
-        files: \.(md|py|ts|tsx|yaml|yml|sh)$
+        files: \.(md|py|ts|tsx|kt|kts|swift|ets|yaml|yml|sh)$
         pass_filenames: false

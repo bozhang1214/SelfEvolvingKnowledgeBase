@@ -61,6 +61,21 @@ class EvalStatsTest {
         assertEquals("n/a", EvalStats.formatRate(0, 0))
     }
 
+    /**
+     * `formatRate` 的输出格式**必须与 JVM 的 `"%.1f".format` 逐字符相同**。
+     *
+     * 为什么单独立一条（2026-10-25 补）：实现从 JVM 专有的 `"%.1f%%".format(...)`
+     * 改成了共享层的 `Fmt.fixed(...)` —— 原因是**前者在 `commonMain` 编不过**
+     * （鸿蒙 ohosArm64 第一次编共享层时暴露：`Unresolved reference 'format'`），
+     * 也就是说 iOS/Mac 的 framework 从来没编过这个文件。
+     * 原测试只 `contains("95%CI")`，**改错了也照样绿**；这条把确切字符串钉死。
+     */
+    @Test
+    fun `formatRate keeps the exact JVM format`() {
+        assertEquals("100.0% (95%CI 72.2%–100.0%, n=10)", EvalStats.formatRate(10, 10))
+        assertEquals("0.0% (95%CI 0.0%–27.8%, n=10)", EvalStats.formatRate(0, 10))
+    }
+
     @Test
     fun `prompt stability flags inconsistent prompts and sorts worst first`() {
         val perPrompt = mapOf(

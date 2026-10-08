@@ -552,21 +552,33 @@ SelfEvolvingKnowledgeBase/
 
 一个仓库装下**服务端 + 所有端侧应用**：一次 clone 拿到全量代码，按需编译各端。
 
-| 端 | 目录 | 状态 | 构建 |
+| 端 | 目录 | 状态 | 构建 / 验收 |
 |---|---|---|---|
-| Android | `apps/android/` | ✅ 可用（96 单测、模拟器 E2E 14/14） | `bash scripts/android.sh assemble` |
-| iOS | `apps/ios/` | 📋 规划中（本机 Xcode 26.6 + iOS 26.3/26.4 模拟器已就绪） | 见 `apps/ios/README.md` |
-| 鸿蒙 | `apps/harmony/` | 📋 规划中（本机 DevEco Studio + hvigor/ohpm 已就绪） | 见 `apps/harmony/README.md` |
+| Android | `apps/android/` | ✅ **功能完整可用**（四页 UI；292 单测 / 0 失败；自检 32 PASS / 0 FAIL / 1 SKIP） | `bash scripts/android.sh assemble`（单测：`… test`） |
+| iOS | `apps/ios/` | 🟡 核心已通（四端口 + 自检 26 PASS）；**四页 SwiftUI UI 本轮补齐中** | `bash scripts/ios_app.sh run`（冒烟：`bash scripts/ios.sh smoke`） |
+| Mac | `apps/mac/` | 🟡 与 iOS **同一份 Swift 源码**（自检 26 PASS） | `bash scripts/mac_app.sh run` |
+| 鸿蒙 | `apps/harmony/` | 🟡 M6 spike 四条全达成（模拟器上 HAP 可装、NAPI↔KMP 通、MindSpore 推理跑通）；**H1→H8 落地中** | `bash scripts/harmony.sh build \| install \| selftest`（见 `docs/多端跨端-鸿蒙端方案.md`） |
 
-端云协同的**协议**是三方共享的契约，见 [`docs/ops/16-端云协同协议.md`](docs/ops/16-端云协同协议.md)；
-设计动机与决策见 [`docs/RFC-端云协同与端侧Agent.md`](docs/RFC-端云协同与端侧Agent.md)。
+**一条命令看四端现状**（2026-10-25 新增）：
+
+```bash
+bash scripts/verify_all_ends.sh quick   # 约 45 秒：文档守卫 7 项 + 端侧活数字 + 共享层可编 + 用例数
+bash scripts/verify_all_ends.sh full    # 分钟级：Android 单测 / iOS 冒烟 / Mac 自检 / 鸿蒙 KMP+冒烟
+```
+
+SKIP 表示**未验**（会写清缺什么），不等于通过——与各端 README 的"验证记录"同一口径。
+
+端云协同的**协议**是四端共享的契约，见 [`docs/ops/16-端云协同协议.md`](docs/ops/16-端云协同协议.md)；
+设计动机与决策见 [`docs/RFC-端云协同与端侧Agent.md`](docs/RFC-端云协同与端侧Agent.md)；
+四端收敛方案与当前进度见 [`docs/RFC-多端跨端方案.md`](docs/RFC-多端跨端方案.md)
+与 [`docs/多端跨端-阶段汇总.md`](docs/多端跨端-阶段汇总.md)。
 
 为什么放在同一个仓库（而不是各端独立成仓）：**① 用户一次 clone 拿到全量**；
-**② 协议文档与三端实现能在同一个提交里改**，避免"文档说 A、代码做 B"；
-**③ 跨端纯逻辑只写一遍**（`route/` `net/` `tools/` `chat/` 这批不依赖 `android.*` 的代码
-将被抽成 Kotlin Multiplatform 的 `shared/`，Android 与 iOS 共用）。
+**② 协议文档与四端实现能在同一个提交里改**，避免"文档说 A、代码做 B"；
+**③ 跨端纯逻辑只写一遍**（`apps/shared/src/commonMain` **37 文件 / 4,394 行**零平台依赖，
+经 Kotlin Multiplatform 供 Android / iOS / Mac / 鸿蒙共用；各端只留薄的平台端口实现）。
 
-构建状态（Gradle 缓存、Android debug keystore）统一落在仓库内的 `.tooling/`，
+构建状态（Gradle 缓存、Android debug keystore、Kotlin/Native konan、hvigor home）统一落在仓库内的 `.tooling/`，
 因此**构建与测试不需要任何仓库外的写权限**。
 
 ---

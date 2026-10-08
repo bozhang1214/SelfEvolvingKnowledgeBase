@@ -43,7 +43,7 @@ related: [docs/多端跨端-KMP方案, docs/多端跨端-CMP方案评估, docs/�
 
 | 端 | UI | 共享逻辑 | 端侧推理 | 顺序 | 工作量 | 本机现在能验什么 |
 |---|---|---|---|---|---|---|
-| **Android** | Jetpack Compose（**四页已完成**：聊天/历史/文档/设置） | KMP `shared` | ONNX 嵌入（已有，fp32/int8 均实测）+ 宿主 Ollama | ✅ 已完成（M0–M3） | — | 真机/release 自检 **32 PASS / 0 FAIL / 1 SKIP**、**291** 单测（含契约夹具 4 条测试逐 37 个 case 断言）、检索评测 ✅ |
+| **Android** | Jetpack Compose（**四页已完成**：聊天/历史/文档/设置） | KMP `shared` | ONNX 嵌入（已有，fp32/int8 均实测）+ 宿主 Ollama | ✅ 已完成（M0–M3） | — | 真机/release 自检 **32 PASS / 0 FAIL / 1 SKIP**、**292** 单测（含契约夹具 4 条测试逐 37 个 case 断言）、检索评测 ✅ |
 | **iOS** | **SwiftUI 原生** | 同上 | **ONNX Runtime iOS ✅ 已完成**（C API，静态 framework）；LLM 用宿主 Ollama（模拟器 `127.0.0.1:11434`） | ✅ 核心（M5）；🟡 **UI 四页进行中** | 实际 ≈ 2 天（vs 原估 12–16）**仅指端口+自检页** | 自检 **26 PASS / 0 FAIL / 1 SKIP**；**检索评测五个阈值与 Android 逐项相同**（见 §7 M5）；真机性能 ✗ |
 | **鸿蒙** | **ArkUI 原生** | 同上（经 **CPF-KMP-CMP** 的 Kotlin/Native `OHOS_ARM64`） | **改用系统自带 MindSpore Lite**（原计划"自建 ONNX Runtime"已作废，理由见 §4 D4） | 🟡 **M6 四条已达成 → H1→H8 进行中**（见《鸿蒙端方案》§7.2） | 12–16 天（H1→H8） | 模拟器实测：未签名 HAP 可装 ✅、NAPI↔KMP 通 ✅、MindSpore 端侧推理跑通 ✅；端口/UI/自检表**未做** |
 | **Mac** | **SwiftUI 原生（复用 iOS 的 UI 代码 + `macosArm64` target）** | 同上 | **ONNX Runtime macOS 切片 ✅**（与 iOS 同一个 xcframework）+ Ollama 宿主（M0） | ✅ 核心（M8）；🟡 **UI 随 iOS 一份源码一起补齐** | 实际 ≈ 1 天（vs 原估 4–6）**仅指端口+自检页** | 自检 **26 PASS / 0 FAIL / 1 SKIP**，与 iOS 同一张表；性能真值来自这台机器 |
@@ -66,7 +66,7 @@ related: [docs/多端跨端-KMP方案, docs/多端跨端-CMP方案评估, docs/�
 | 事实 | 数字 | 出处 |
 |---|---|---|
 | Android 端 main 代码 | 拆成两块：**`apps/shared/commonMain` 37 文件 / 4,394 行纯逻辑**（零平台 import；含 `androidMain`+`appleMain` 共 4 个 `actual` 文件）+ `apps/android/app` **25 文件 / 4,785 行**（Compose UI 四页/OkHttp/Keystore/SQLite/ONNX/设备工具/装配/自检） | `apps/shared`、`apps/android/app/src/main` |
-| 单测 | **291 条全绿**（`scripts/android.sh test` → 291 用例 / 0 失败 / 0 跳过，36 个测试类）；其中契约夹具 4 条测试逐 **37** 个 case 断言 | `apps/android/app/src/test`、`app/build/test-results` |
+| 单测 | **292 条全绿**（`scripts/android.sh test` → 292 用例 / 0 失败 / 0 跳过，36 个测试类）；其中契约夹具 4 条测试逐 **37** 个 case 断言 | `apps/android/app/src/test`、`app/build/test-results` |
 | 端口接口**已经存在** | 5 个：`HttpTransport`/`EmbeddingProvider`/`VectorStore`/`DocumentRegistry`/`CredentialStore` | `apps/android/.../net`、`embed`、`rag`、`device` |
 | 共享逻辑单次开销（JVM 实测） | `PlaneRouter.decide` **1.135 μs**、`ToolCallJson.parse` **0.923 μs**、`Chunking.split(2KB)` **9.040 μs** | 2026-09-21 微基准（临时测试，已删） |
 | 相对端到端 | 一次聊天十几 μs ≈ 端到端 **119ms** 的 **0.008%** | 同上 + M1 实测 |
@@ -294,7 +294,7 @@ apps/
 
 | 阶段 | 内容 | 工作量 | 验收（可证伪） |
 |---|---|---|---|
-| **M4** 共享层 | 契约夹具 ✅ + 去平台化 + `shared/` + iOS/Mac target + Kotlin 升级 | **8–12 天** | ✅ Android 单测（M4 当时 **231**，**现 291**）+ 自检 32 PASS / 0 FAIL / 1 SKIP + 检索数字不回归；`shared` 在 JVM 与 `iosSimulatorArm64`/`macosArm64` 均可编译并通过共享单测；**P1** 微基准 ≤100 µs（Kotlin/Native 版）、**P3** iOS 包体积增量 ≤5 MB |
+| **M4** 共享层 | 契约夹具 ✅ + 去平台化 + `shared/` + iOS/Mac target + Kotlin 升级 | **8–12 天** | ✅ Android 单测（M4 当时 **231**，**现 292**）+ 自检 32 PASS / 0 FAIL / 1 SKIP + 检索数字不回归；`shared` 在 JVM 与 `iosSimulatorArm64`/`macosArm64` 均可编译并通过共享单测；**P1** 微基准 ≤100 µs（Kotlin/Native 版）、**P3** iOS 包体积增量 ≤5 MB |
 | **M4.5** L1 策略热修（**本期实现**） | 服务端 `GET /edge/policy`（版本化 + 签名 + 灰度桶）**✅ 已完成**（`edge_policy.py` + 端点 + 19 条测试）；**端侧校验与应用也已实现**（`EdgePolicy.kt`：验签/有效期/空间戳/白名单/灰度 → 合并进 `EdgeRuntimeConfig`，含**跨语言签名向量测试**）；⏳ 拉取时机与双槽持久化/审计落盘待接；**「设备适配」子集只预留字段** | ✅ 主体完成 | ① 单测：非法/过期/空间不符/越白名单的策略**必须被拒**且留痕；② 灰度：同版本策略按设备分桶生效，可一键回滚到上一版；③ 端到端：改一次阈值 → 不发版、不重启也能生效（日志可证）；④ 后端全量测试不回归（**当轮基线 971**：955 单元 + 16 集成；**当前实测 994** = 978 单元 + 16 集成） |
 | **M5** iOS 端 | SwiftUI UI + NSURLSession/Keychain/ONNX/PDFKit 四端口 + 自检入口 | 原估 **12–16 天**，实际 ≈2 天 | ✅ **已完成**。自检 **26 PASS / 0 FAIL / 1 SKIP**（SKIP = Keychain 往返，见下）；**检索评测与 Android 逐项相同**：阈值 0.20/0.30/0.40/0.50/0.60 的 Hit@1/Hit@3/MRR/误召回全部一致（0.40 → 26/30、30/30、0.928、0/3）；`embed_onnx_sanity` 无关文本余弦 0.244、L2 范数 1.0000；`rag_retrieve` 首条分 0.630。**唯一 SKIP**：Keychain 往返需真实签名身份（三种实测失败码见 `apps/mac/README.md`），其余失败仍记 FAIL |
 | **M6** 鸿蒙 spike | D2 四条 | **3 天** | ✅ **4/4 达成**：第 1 条"构建+链接"✅、第 2 条"产物可解析"✅、第 3 条"可行性 + 模型链"✅（离线三项全通，见 §10 E11）、第 4 条"HAP 能装能起 + 真的调通"✅ —— 实测**未签名 HAP 可装**、模拟器上 **NAPI↔KMP 通过**（`sekb_spike_ping()=42`、`echo_len()=5`）、模型在设备上跑通。**"需真机+签名"这一前提已作废**（《鸿蒙端方案》§6） |
@@ -308,7 +308,7 @@ apps/
 
 | # | 风险 | 影响 | 概率 | 对策 / 回退 |
 |---|---|---|---|---|
-| R1 | 依赖可移植性（`org.json`/OkHttp/`java.*`/ONNX JVM API） | 共享层抽不出 | **高（确定发生）** | §5.2 步 2 先做，有单测兜底（搬层时 **231**，**现 291**） |
+| R1 | 依赖可移植性（`org.json`/OkHttp/`java.*`/ONNX JVM API） | 共享层抽不出 | **高（确定发生）** | §5.2 步 2 先做，有单测兜底（搬层时 **231**，**现 292**） |
 | R2 | Kotlin/Native 体积/启动超预期 | 包体积、冷启动 | 中 | P3 实测；DCE、静态 framework、裁剪依赖面 |
 | R3 | Kotlin/Compose 升级打破现有 Android 基线 | 已验证基线失效 | 中 | §5.2 步 5 隔离提交 + 回滚 tag + 全量复跑 |
 | R4 | 鸿蒙 `ohos_arm64` 依赖产物供给不足 | 鸿蒙 KMP 走不通 | 中 | spike 四条第 2 项专门验；失败退路线 B |
