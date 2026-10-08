@@ -918,3 +918,24 @@ for (j in values.indices) p[j] = values[j]
 **过程教训**（与上一轮那条呼应）：崩溃栈里的 `#10 OH_AI_ModelDestroy` 一开始很容易被读成
 "销毁时参数用错"，但真正要看的是 `LastFatalMessage` 的 **double free** 与 `FreeData` 这一帧——
 它直接把"谁释放了两次"这个问题摆出来了，比继续猜 dtype/缓冲大小省了一整轮。
+
+---
+
+## 下一步：整体方案见 `docs/多端跨端-鸿蒙端方案.md`（2026-10-08）
+
+owner 已定口径：**鸿蒙的验收标准与 Android 端侧 App 同级（功能完整可用）**，**没有真机、全部在模拟器上验收**。
+方案（H0–H8，每阶段可证伪）在 [`docs/多端跨端-鸿蒙端方案.md`](../../docs/多端跨端-鸿蒙端方案.md)。
+
+写方案时顺带核实出**三处本文件与 RFC 已过时的说法**（以方案 §1.4 为准）：
+
+1. **"未签名不能装 / `~/.ohos/config/` 为空"** —— 已过时：模拟器上未签名 HAP 能装（本文件末尾也记了），
+   而 `hapshell/build-profile.json5` 其实**已含签名材料**、`~/.ohos/config/` 下 `.cer/.csr/.p12/.p7b` 都在。
+2. **"模拟器是 x86_64、必须同时开 `ohosX64`"** —— 对本机实例不成立：`~/.Huawei/Emulator/deployed/lists.json` 显示
+   实例 `nova 16 Pro` / HarmonyOS 6.0.2 / **`"abi": "arm"`**，即 **arm64**；x86_64 那份 `libkn.so` 目前用不上。
+3. **"M6 第 4 条（HAP 能装能起 + 真的调通）待验"** —— 事实上**已达成**：装起 + `ping=42` + 推理出向量都有设备侧实测记录
+   （RFC §7 M6 与 `docs/多端跨端-阶段汇总.md` 的状态需同步更新）。
+
+**距离"可用 App"还差什么**（方案 §1.3 有 15 条带证据的缺口清单，最关键的几条）：
+共享层完全没接（`apps/shared` 无 ohos 目标、无 `ohosMain` 的 `Clock`/`Hmac`）、`kotlin-pending/MindSporeBgeEmbedding.kt`
+零引用且**输入口径已过期**（模型现在吃 `sekb_additive_mask_zero`）、`vocab.txt` 未进包、`module.json5` 无 INTERNET 权限、
+无存储（`relationalStore`/HUKS）、`pages/Chat.ets` 注册了但**不可达**、无契约夹具 runner、自检还不是 PASS/FAIL/SKIP 表。
