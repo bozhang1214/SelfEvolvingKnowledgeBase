@@ -52,11 +52,16 @@ export KONAN_DATA_DIR="${KONAN_DATA_DIR:-$ROOT/.tooling/konan}"
 ACTION="${1:-all}"
 
 build_kn() {
-    echo "── 1/2 编译 KMP 产物（libkn.so：ohosArm64 真机 + ohosX64 模拟器）──"
+    echo "── 1/2 编译 KMP 产物（libkn.so：**只编 ohosArm64**，见 C4）──"
     grep -q 'android' "$SPIKE/settings.gradle.kts" 2>/dev/null || true
+    # ⚠️ C4（owner 2026-10-25 拍板）：**只保留 ohosArm64**，去掉 ohosX64 产物。
+    # 依据：本机模拟器实例 `nova 16 Pro` 的 abi 就是 `arm`（`~/.Huawei/Emulator/deployed/lists.json`），
+    # x86_64 那份 native 体积用不上，HAP 白大一截。
+    # 真需要 x86_64 开发机时：给 knspike 与 shared-core 各加回 `ohosX64 {}`，
+    # 并把这里的任务列表与下面循环的 `ohosX64:x86_64` 一起加回来。
     ( cd "$SPIKE" && ./gradlew --no-daemon \
-        :knspike:linkDebugSharedOhosArm64 :knspike:linkDebugSharedOhosX64 --console=plain -q ) || return 1
-    for abi_dir in ohosArm64:arm64-v8a ohosX64:x86_64; do
+        :knspike:linkDebugSharedOhosArm64 --console=plain -q ) || return 1
+    for abi_dir in ohosArm64:arm64-v8a; do
         local from="${abi_dir%%:*}" to="${abi_dir##*:}"
         local so="$SPIKE/knspike/build/bin/$from/debugShared/libkn.so"
         [ -f "$so" ] || { echo "❌ 缺少 $so" >&2; return 1; }
@@ -81,6 +86,24 @@ build_hap() {
         echo "   已放入模型 rawfile（$(du -h "$ms" | cut -f1)）"
     else
         echo "   ⚠️ 没找到 ${ms} —— 先跑 bash scripts/model_to_ms.sh all；HAP 会**不带模型**（界面会显示失败步骤码）"
+    fi
+    # H2：契约夹具进包（`apps/contract/*.json`）。App 启动时由 ArkTS 读 rawfile 传给 native runner。
+    # **不新增夹具**：拷的就是仓库里那一份，所以四端跑的是同一批 case。
+    # 同时把源文件哈希记到 `.tooling/harmony/contract-manifest.txt`，
+    # `bash scripts/harmony.sh contract` 会先核对它——这是鸿蒙侧的"防假绿"接线：
+    # 改了夹具却没重建/重装，哈希就对不上，校验直接失败（而不是安静地跑旧夹具）。
+    local contract_src="$ROOT/apps/contract"
+    if [ -d "$contract_src" ]; then
+        mkdir -p "$raw/contract" "$ROOT/.tooling/harmony"
+        cp "$contract_src"/routing.json "$contract_src"/signals.json "$contract_src"/privacy.json "$raw/contract/"
+        : > "$ROOT/.tooling/harmony/contract-manifest.txt"
+        for f in routing.json signals.json privacy.json; do
+            printf '%s  %s\n' "$(shasum -a 256 "$contract_src/$f" | cut -d' ' -f1)" "$f" \
+                >> "$ROOT/.tooling/harmony/contract-manifest.txt"
+        done
+        echo "   已放入契约夹具 rawfile（3 份）并记录哈希清单"
+    else
+        echo "   ⚠️ 找不到 ${contract_src} —— HAP 会不带契约夹具（contract 动作会失败）"
     fi
     ( cd "$HAP_PROJ" && "$DEVECO/tools/hvigor/bin/hvigorw" \
         assembleHap --mode module -p product=default --no-daemon ) || return 1
@@ -120,7 +143,7 @@ verify_link() {
     local tmp; tmp="$(mktemp -d)"
     unzip -q -o "$hap" -d "$tmp" 'libs/*' 2>/dev/null
     local ok=0
-    for abi in arm64-v8a x86_64; do
+    for abi in arm64-v8a; do
         # 三个断言缺一不可：
         #   a) libknspike.so 存在（NAPI 模块编出来了）
         #   b) libkn.so 同包（KMP 产物被真的打进 HAP，而不是只拷到工程目录）
@@ -130,13 +153,13 @@ verify_link() {
         [ -f "$spike_so" ] || { echo "❌ $abi: 缺 libknspike.so" >&2; ok=1; continue; }
         [ -f "$kn_so" ]    || { echo "❌ $abi: HAP 里没有 libkn.so（KMP 产物没进包）" >&2; ok=1; continue; }
         local undef
-        # 现在 HAP 侧用到 4 个 KMP 入口（2 个链路探针 + 2 个 MindSpore 真机日入口）——
+        # 现在 HAP 侧用到 5 个 KMP 入口（2 个链路探针 + 2 个 MindSpore 真机日入口 + 1 个 H1 共享层冒烟）——
         # 断言数量要与真实依赖一致，否则校验比依赖弱，将来漏接一个符号也发现不了。
-        undef="$("$nm" -D --undefined-only "$spike_so" 2>/dev/null | grep -cE 'sekb_spike_(ping|echo_len|mindspore_selftest|mindspore_first_float)')"
-        if [ "$undef" = "4" ]; then
-            echo "   ✅ $abi: libknspike.so 引用 4 个 KMP 入口（undefined，由同包 libkn.so 解析）"
+        undef="$("$nm" -D --undefined-only "$spike_so" 2>/dev/null | grep -cE 'sekb_spike_(ping|echo_len|mindspore_selftest|mindspore_first_float|smoke|contract|contract_pair)')"
+        if [ "$undef" = "7" ]; then
+            echo "   ✅ $abi: libknspike.so 引用 7 个 KMP 入口（undefined，由同包 libkn.so 解析）"
         else
-            echo "   ❌ $abi: 只找到 $undef/4 个 KMP 符号引用" >&2; ok=1
+            echo "   ❌ $abi: 只找到 $undef/7 个 KMP 符号引用" >&2; ok=1
         fi
     done
     if unzip -l "$hap" 2>/dev/null | grep -q 'rawfile/bge-small-fixed512.ms'; then
@@ -171,7 +194,8 @@ verify_mindspore() {
     local re
     re="$(dirname "$nm")/llvm-readelf"
     local ok=0
-    for target in ohosArm64 ohosX64; do
+    # C4：只产 ohosArm64（x86_64 那份用不上，理由见 build_kn 的注释）
+    for target in ohosArm64; do
         local so="$SPIKE/knspike/build/bin/$target/debugShared/libkn.so"
         [ -f "$so" ] || { echo "❌ 缺少 ${so}（先跑 kn）" >&2; ok=1; continue; }
         echo "-- $target"
@@ -194,6 +218,15 @@ verify_mindspore() {
             echo "   ✅ DT_NEEDED 含 libmindspore_lite_ndk.so（linkerOpts 生效）"
         else
             echo "   ❌ DT_NEEDED 里没有 libmindspore_lite_ndk.so" >&2; ok=1
+        fi
+        # d) H1：共享层符号必须真的在这份产物里（apps/shared/src/commonMain → :shared-core → libkn.so）
+        #    口径：共享层没有 @CName，**不会**出现在动态符号表，只能查完整符号表（debug 未 strip）
+        local n_shared
+        n_shared="$("$nm" "$so" 2>/dev/null | grep -c 'com\.sebk\.shared')"
+        if [ "$n_shared" -gt 0 ]; then
+            echo "   ✅ $n_shared 个 com.sebk.shared.* 符号（共享层已编入）"
+        else
+            echo "   ❌ 产物里没有 com.sebk.shared.* 符号（共享层没编进来）" >&2; ok=1
         fi
     done
     [ "$ok" = "0" ] || return 1
@@ -229,11 +262,21 @@ verify_no_tensor_setdata() {
     echo "   ✅ 未发现 OH_AI_TensorSetData 调用（无 double free 风险）"
 }
 
+# 只重打 HAP（不重编 KMP、不重拷 rawfile）——给"改包内夹具做反向验证"用。
+# 为什么单独一个动作：`contract-red` 要的正是"包内夹具与仓库源**故意不一致**"，
+# 所以那一步绝不能顺手再跑 `build_hap`（它会把仓库那份拷回来，把实验抹掉）。
+build_hap_only() {
+    echo "── 只重打 HAP（不重编 KMP、不重拷 rawfile）──"
+    ( cd "$HAP_PROJ" && "$DEVECO/tools/hvigor/bin/hvigorw" \
+        assembleHap --mode module -p product=default --no-daemon ) || return 1
+}
+
 case "$ACTION" in
     kn)   verify_no_tensor_setdata && build_kn ;;
     hap)  verify_no_tensor_setdata && build_hap && verify_link ;;
     all)  verify_no_tensor_setdata && build_kn && build_hap && verify_link ;;
     mindspore) verify_no_tensor_setdata && build_kn && verify_mindspore ;;
+    haponly) build_hap_only ;;
     preview) build_preview ;;
-    *) echo "用法：bash scripts/harmony_spike.sh [kn|hap|all|mindspore]" >&2; exit 2 ;;
+    *) echo "用法：bash scripts/harmony_spike.sh [kn|hap|all|mindspore|haponly]" >&2; exit 2 ;;
 esac

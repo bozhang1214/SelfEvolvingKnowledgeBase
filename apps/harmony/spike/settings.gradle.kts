@@ -15,4 +15,13 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "sekb-ohos-spike"
+
+// H1：共享层在本构建里以 `:shared-core` 的形态参与编译。
+//
+// 为什么不是 `includeBuild("../../shared")`（复合构建）：H1 实测在**插件应用阶段**就失败
+// （apps/shared 用 AGP 9 专属插件，本构建的 fork 配套 AGP 8.11.2）——证据见 apps/shared-core/README.md。
+// 现在：`apps/shared-core` 是**不含 Android 插件**的纯 KMP 模块，`srcDirs` 直接指向
+// `apps/shared/src/commonMain/kotlin`，所以是「一处源码、两侧编译」，没有复制任何 .kt。
+include(":shared-core")
+project(":shared-core").projectDir = file("../../shared-core")
 include(":knspike")

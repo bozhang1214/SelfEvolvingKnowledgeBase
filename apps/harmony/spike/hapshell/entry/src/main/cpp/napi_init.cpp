@@ -29,6 +29,22 @@ extern "C" int32_t sekb_spike_echo_len(const char* text);
 extern "C" int32_t sekb_spike_mindspore_selftest(const char* model_path);
 // 输出向量首元素的粗量化值（|v[0]|*1e6）——证明"数据真的流过来了"，而不是全零也过
 extern "C" int32_t sekb_spike_mindspore_first_float(const char* model_path);
+// 共享层 interop 冒烟（H1，见 knspike/.../Smoke.kt）：返回**多行**报告
+//   SMOKE PASS n/total
+//   PASS digests_hmac_vector — f7bc83f4…
+//   ...
+// 它跑的是 `apps/shared/src/commonMain`（经 `apps/shared-core` 编进本 .so），
+// 所以它同时是"共享层真的编进来、且在设备上跑出了正确结果"的证据——比"能链接"强一档。
+// ⚠️ Kotlin/Native 的 `String` 返回值在 C 侧就是 `const char*`（以生成的 libkn_api.h 为准），
+//    不要自己去构造 KString。
+extern "C" const char* sekb_spike_smoke();
+// H2：契约夹具 runner。三份夹具文本 + red-check 开关（"0"=正常，"1"=把 routing[0] 期望平面反转）。
+// 返回多行报告，首行 `CONTRACT PASS n/N` 或 `CONTRACT FAIL n/N`。
+extern "C" const char* sekb_spike_contract(const char* routing, const char* signals,
+                                           const char* privacy, const char* check);
+// H2 反向验证：同一次调用里跑"原样夹具"与"反转期望值"两遍（返回两段报告，`-----` 分隔）。
+extern "C" const char* sekb_spike_contract_pair(const char* routing, const char* signals,
+                                                const char* privacy);
 
 static napi_value Ping(napi_env env, napi_callback_info /*info*/) {
     napi_value out = nullptr;
@@ -85,6 +101,62 @@ static std::string ArgString(napi_env env, napi_callback_info info, bool* ok) {
 SEKB_STR_FN(MsSelfTest, sekb_spike_mindspore_selftest)
 SEKB_STR_FN(MsFirstFloat, sekb_spike_mindspore_first_float)
 
+// 共享层冒烟：无参 → 返回多行字符串。调用点见 pages/Index.ets（逐行打 hilog）。
+static napi_value Smoke(napi_env env, napi_callback_info /*info*/) {
+    const char* report = sekb_spike_smoke();
+    napi_value out = nullptr;
+    napi_create_string_utf8(env, report == nullptr ? "" : report, NAPI_AUTO_LENGTH, &out);
+    return out;
+}
+
+// 契约夹具 runner：4 个字符串参数（routing/signals/privacy/check）→ 多行报告。
+static napi_value ContractRun(napi_env env, napi_callback_info info) {
+    size_t argc = 4;
+    napi_value args[4] = {nullptr, nullptr, nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto strAt = [&](size_t i) -> std::string {
+        if (i >= argc || args[i] == nullptr) return {};
+        size_t len = 0;
+        napi_get_value_string_utf8(env, args[i], nullptr, 0, &len);
+        std::string buf(len + 1, '\0');
+        napi_get_value_string_utf8(env, args[i], buf.data(), buf.size(), &len);
+        buf.resize(len);
+        return buf;
+    };
+    const std::string routing = strAt(0);
+    const std::string signals = strAt(1);
+    const std::string privacy = strAt(2);
+    const std::string check = strAt(3);
+    const char* report = sekb_spike_contract(routing.c_str(), signals.c_str(),
+                                             privacy.c_str(), check.c_str());
+    napi_value out = nullptr;
+    napi_create_string_utf8(env, report == nullptr ? "" : report, NAPI_AUTO_LENGTH, &out);
+    return out;
+}
+
+// H2 反向验证：3 个字符串参数 → 两段报告（原样 / 反转期望值）。
+static napi_value ContractPair(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3] = {nullptr, nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto strAt = [&](size_t i) -> std::string {
+        if (i >= argc || args[i] == nullptr) return {};
+        size_t len = 0;
+        napi_get_value_string_utf8(env, args[i], nullptr, 0, &len);
+        std::string buf(len + 1, '\0');
+        napi_get_value_string_utf8(env, args[i], buf.data(), buf.size(), &len);
+        buf.resize(len);
+        return buf;
+    };
+    const std::string routing = strAt(0);
+    const std::string signals = strAt(1);
+    const std::string privacy = strAt(2);
+    const char* report = sekb_spike_contract_pair(routing.c_str(), signals.c_str(), privacy.c_str());
+    napi_value out = nullptr;
+    napi_create_string_utf8(env, report == nullptr ? "" : report, NAPI_AUTO_LENGTH, &out);
+    return out;
+}
+
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
@@ -93,6 +165,12 @@ static napi_value Init(napi_env env, napi_value exports) {
         // 真机日入口：传 .ms 的**真实文件路径**，返回元素数（>0）或步骤码（<0）
         {"msSelfTest", nullptr, MsSelfTest, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"msFirstFloat", nullptr, MsFirstFloat, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // H1：共享层 interop 冒烟（多行字符串），脚本 grep `SMOKE PASS`
+        {"smoke", nullptr, Smoke, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // H2：契约夹具 runner（37 case），脚本 grep `CONTRACT`
+        {"contractRun", nullptr, ContractRun, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // H2 反向验证：原样 + 反转期望值两遍（一绿一红才叫"夹具不是摆设"）
+        {"contractPair", nullptr, ContractPair, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

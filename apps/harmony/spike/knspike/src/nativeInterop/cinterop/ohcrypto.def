@@ -1,0 +1,29 @@
+// OHOS 平台加密能力的绑定（cinterop）——**探针用，不是共享层的实现**。
+//
+// ## 它为什么存在
+//
+// H1 要对"鸿蒙侧 `Hmac`/`Digests` 的 actual 用什么加密能力"给出**有证据**的答案。
+// 两条候选里，`CryptoArchitectureKit`（`libohcrypto.so` 的 NDK C 接口）在 sysroot 里有
+// 头文件与导入桩，但"设备上到底加不加载得到"我无法用 `hdc shell test -e` 证明
+// （SELinux 让探测对**已确认在跑的** `libmindspore_lite_ndk.so` 也报 MISSING）。
+//
+// 所以：**共享层走纯 Kotlin**（`apps/shared-core/src/ohosMain/.../Sha256Pure.kt` 里有完整理由），
+// 而这个 `.def` 用来把"平台绑定能不能编"这件事**钉成事实**——
+// 能编出来就说明将来想换系统实现时，cinterop 这一层是通的，只差一次设备验证。
+//
+// ## 用法
+//
+// 它**不参与默认构建**（`knspike/build.gradle.kts` 里注释掉了对应 cinterop 块），
+// 想复核时打开那个块再 `bash scripts/harmony.sh smoke` 即可。
+// 绑定的包名是 `ohcrypto`，Kotlin 侧 `import ohcrypto.*`。
+//
+// ⚠️ 两个已经在别处踩过、这里同样成立的坑：
+//   1. `linkerOpts` 必须写 `-lohcrypto`（否则只有声明、没有 DT_NEEDED，运行期解析不到）；
+//   2. 头文件里的 `__attribute__((__availability__(ohos, introduced=N)))` 会让 cinterop 生成
+//      availability 检查——API 低于 N 的调用会被拦。模拟器是 API 22，
+//      `OH_CryptoDigest_*`（12）与 `OH_CryptoMac_*`（20）都在范围内。
+package = ohcrypto
+headers = CryptoArchitectureKit/crypto_digest.h CryptoArchitectureKit/crypto_mac.h
+headerFilter = CryptoArchitectureKit/**
+linkerOpts = -lohcrypto
+language = C

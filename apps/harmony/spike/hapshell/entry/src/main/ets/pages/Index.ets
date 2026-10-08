@@ -11,9 +11,13 @@ import knspike from 'libknspike.so';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
+import { util } from '@kit.ArkTS';
 
 const TAG: string = 'SEKB_KN_SPIKE';
 const MODEL_RAWFILE: string = 'bge-small-fixed512.ms';
+// H2：契约夹具在 HAP 里的位置（由 scripts/harmony_spike.sh build_hap 拷进来，
+// 源头是仓库的 apps/contract/*.json —— 不新增夹具，只分发同一份）
+const CONTRACT_DIR: string = 'contract/';
 
 @Entry
 @Component
@@ -23,10 +27,67 @@ struct Index {
   @State modelPath: string = '（准备中）';
   @State msResult: string = '（未调用）';
   @State msFirstFloat: string = '（未调用）';
+  @State smoke: string = '（未调用）';
+  @State contract: string = '（未调用）';
 
   aboutToAppear(): void {
+    this.runSmoke();
+    this.runContract();
     this.runKn();
     this.runModel();
+  }
+
+  /**
+   * H2：契约夹具 runner（37 case：routing 10 / signals 14 / privacy 13）。
+   *
+   * 夹具从 **HAP rawfile** 读（`contract/*.json`），传入 native 侧由共享层的
+   * `PlaneRouter` 逐 case 断言 —— 判定逻辑与 Android 那份 runner 逐条对齐。
+   *
+   * 同时跑**反向验证**（`contractPair`）：把 routing 第一条 case 的期望平面反转，
+   * 结果必须**恰好 1 个 FAIL**。两条结论一起看才有意义：只跑正常那条的话，
+   * "runner 其实没断言任何东西"也会全绿。
+   */
+  async runContract(): Promise<void> {
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      const routing: string = await this.readRawText(ctx, `${CONTRACT_DIR}routing.json`);
+      const signals: string = await this.readRawText(ctx, `${CONTRACT_DIR}signals.json`);
+      const privacy: string = await this.readRawText(ctx, `${CONTRACT_DIR}privacy.json`);
+      const report: string = knspike.contractPair(routing, signals, privacy);
+      for (const line of report.split('\n')) {
+        hilog.info(0x0000, TAG, '%{public}s', line);
+      }
+      this.contract = report;
+    } catch (e) {
+      this.contract = `❌ ${e}`;
+      hilog.error(0x0000, TAG, 'CONTRACT FAIL — contract runner threw: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** 读 HAP rawfile 里的文本（夹具用；体积只有几 KB）。 */
+  async readRawText(ctx: common.UIAbilityContext, name: string): Promise<string> {
+    const bytes: Uint8Array = await ctx.resourceManager.getRawFileContent(name);
+    return util.TextDecoder.create('utf-8').decodeToString(bytes);
+  }
+
+  /**
+   * H1：共享层 interop 冒烟（`apps/shared/src/commonMain` 经 `:shared-core` 编进来）。
+   *
+   * 逐行打 hilog（`SMOKE PASS n/total` 在第一行），脚本 grep 这一行即可判定；
+   * 同时也显示在界面上，便于截图取证。
+   */
+  runSmoke(): void {
+    try {
+      const report: string = knspike.smoke();
+      const lines: string[] = report.split('\n');
+      for (const line of lines) {
+        hilog.info(0x0000, TAG, '%{public}s', line);
+      }
+      this.smoke = report;
+    } catch (e) {
+      this.smoke = `❌ ${e}`;
+      hilog.error(0x0000, TAG, 'SMOKE FAIL — shared layer smoke threw: %{public}s', JSON.stringify(e));
+    }
   }
 
   /** 第 1 组：NAPI ↔ KMP 链路。 */
@@ -81,6 +142,12 @@ struct Index {
       Text('M6 spike · KMP via NAPI').fontSize(20).fontWeight(FontWeight.Bold)
       Text(`sekb_spike_ping() = ${this.ping}`).fontSize(15)
       Text(`echo_len() = ${this.echoLen}`).fontSize(15)
+      Divider()
+      Text('共享层冒烟（apps/shared → ohosArm64）').fontSize(17).fontWeight(FontWeight.Bold)
+      Text(this.smoke).fontSize(12).maxLines(14).textOverflow({ overflow: TextOverflow.Ellipsis })
+      Divider()
+      Text('契约夹具（apps/contract 37 case + 反向验证）').fontSize(17).fontWeight(FontWeight.Bold)
+      Text(this.contract).fontSize(12).maxLines(16).textOverflow({ overflow: TextOverflow.Ellipsis })
       Divider()
       Text('MindSpore Lite 端侧嵌入').fontSize(17).fontWeight(FontWeight.Bold)
       Text(`模型: ${this.modelPath}`).fontSize(11).fontColor(Color.Gray).maxLines(2)

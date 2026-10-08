@@ -6,8 +6,11 @@
       "path": "./src/main/cpp/CMakeLists.txt",
       "arguments": "",
       "cppFlags": "",
-      // 两个 ABI 都编：arm64-v8a = 真机，x86_64 = 模拟器
-      "abiFilters": ["arm64-v8a", "x86_64"]
+      // **只编 arm64-v8a**（C4，owner 2026-10-25 拍板）：本机模拟器实例 nova 16 Pro 的
+      // abi 就是 arm（~/.Huawei/Emulator/deployed/lists.json），x86_64 那份用不上；
+      // 保留它还会让 HAP 多带一份 native 体积。真要 x86_64 开发机时再加回来，
+      // 同时要给 knspike 与 apps/shared-core 各加回 ohosX64 目标。
+      "abiFilters": ["arm64-v8a"]
     }
   },
   "buildOptionSet": [

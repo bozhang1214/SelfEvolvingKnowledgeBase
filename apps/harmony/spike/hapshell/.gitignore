@@ -16,3 +16,6 @@
 /entry/.preview/
 # 由 scripts/harmony_spike.sh hap 放进来的模型（94MB 构建产物）
 /entry/src/main/resources/rawfile/*.ms
+# H2：契约夹具（apps/contract/*.json）由 build_hap 拷进来——**只引用不复制**，
+# 所以不入库。入库就等于制造第二份夹具，正是 apps/contract/README.md 反对的事。
+/entry/src/main/resources/rawfile/contract/

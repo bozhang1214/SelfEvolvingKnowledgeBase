@@ -992,3 +992,130 @@ owner 已定口径：**鸿蒙的验收标准与 Android 端侧 App 同级（功�
 > **为什么本节只写判断不写代码**：H1 会动 `apps/shared`（**协作共享区**），
 > 而上述形态选择尚未用事实确认；在未确认前改构建脚本，风险是"把已全量验证的 Android 基线弄坏"。
 > 故本轮把事实与选项交清楚，下一轮拿到"是否插件阶段失败"这一个事实后再动手。
+
+---
+
+## ✅ H1 完成：共享层编到 ohosArm64（2026-10-25，模拟器实测）
+
+### 结论（一条命令 + 原始输出）
+
+```bash
+bash scripts/harmony.sh smoke 30
+```
+
+设备 `127.0.0.1:5555`（nova 16 Pro / HarmonyOS 6.0.2 / arm64）上的原始 hilog：
+
+```
+I A00000/SEKB_KN_SPIKE: SMOKE PASS 11/11
+I A00000/SEKB_KN_SPIKE: PASS digests_hmac_vector — f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
+I A00000/SEKB_KN_SPIKE: PASS digests_sha256_empty — e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+I A00000/SEKB_KN_SPIKE: PASS digests_sha256_abc — ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+I A00000/SEKB_KN_SPIKE: PASS digests_sha256_utf8 — 76ad06a8b09c73f397b178bbab45704e316abe39e4b0f8d95040f229d803fa1d
+I A00000/SEKB_KN_SPIKE: PASS canonical_json_matches_python — {"a":[1,2],"b":1}
+I A00000/SEKB_KN_SPIKE: PASS toolcall_parse_ok — Ok(call=ToolCall(tool=device_time, args={}))
+I A00000/SEKB_KN_SPIKE: PASS toolcall_parse_invalid — no_json_object
+I A00000/SEKB_KN_SPIKE: PASS fmt_fixed_0_6902 — 0.690
+I A00000/SEKB_KN_SPIKE: PASS fmt_fixed_neg_zero — 0.000
+I A00000/SEKB_KN_SPIKE: PASS fmt_pct_87 — 87
+I A00000/SEKB_KN_SPIKE: PASS fmt_pad — padStart/padEnd
+✅ 共享层 interop 冒烟通过（SMOKE PASS）
+   明细 FAIL=0
+```
+
+`smoke` 还先做三条**产物级**断言（这部分不依赖设备，CI 里也能跑）：
+
+```
+✅ libkn.so 有 :shared-core 的 Konan 初始化符号（模块被真正链接进产物）
+✅ 共享层已被 ohosArm64 编译：1.1M klib（40 个本模块包）
+✅ NAPI 冒烟入口 sekb_spike_smoke 已导出
+```
+
+### HR1 的判定点：**拿到了事实，复合构建不通**（4 秒失败，不是"可能撞版本"）
+
+```bash
+cd apps/harmony/spike && echo 'includeBuild("../../shared")' >> settings.gradle.kts
+./gradlew --no-daemon projects
+```
+
+```
+* Where: Build file '.../apps/shared/build.gradle.kts' line: 14
+* What went wrong:
+Plugin [id: 'org.jetbrains.kotlin.multiplatform'] was not found in any of the following sources:
+- Gradle Core Plugins (plugin is not in 'org.gradle' namespace)
+- Included Builds (No included builds contain this plugin)
+- Plugin Repositories (plugin dependency must include a version number for this source)
+BUILD FAILED in 4s
+```
+
+→ 按方案 §7.2 的**推荐形态**落地，见下。
+
+### 选定的形态：`apps/shared-core`（纯 KMP，一处源码两侧编译）
+
+```
+apps/shared/src/commonMain/kotlin/**          ← 唯一实现（41 个 .kt，零平台依赖，未改一行）
+   ├── apps/android → :shared（AGP 9 + Kotlin 2.2.10）        ← Android / iOS / Mac，**构建脚本零改动**
+   └── apps/harmony/spike → :shared-core（fork 2.2.21-0.3.0-07）← 本端
+            └── apps/shared-core/src/ohosMain/kotlin/**       ← 三个 actual（唯一新增代码）
+```
+
+- `apps/shared-core/build.gradle.kts`：**只有 `kotlin.multiplatform`**，`commonMain.kotlin.srcDir`
+  指向 `apps/shared/src/commonMain/kotlin`，**不复制任何 .kt**；只声明 `ohosArm64`（C4）。
+- `apps/harmony/spike/settings.gradle.kts`：`include(":shared-core")` + `projectDir = ../../shared-core`。
+- **`apps/shared/build.gradle.kts` 一行未改**，Android 基线零风险。
+
+### 三个 actual 的实现选型（H1 要的就是这个"有证据的判断"）
+
+| 能力 | 实现 | 依据 |
+|---|---|---|
+| `nowMillis()` | libc `time(null) * 1000` | 只作为 `now: () -> Long` 的默认值，不需要高精度 |
+| `sha256Hex` / `hmacSha256Hex` | **纯 Kotlin**（`apps/shared-core/src/ohosMain/.../Sha256Pure.kt`） | 见下 |
+
+**为什么不用平台加密 API**（两条都查过、都有实测）：
+
+| 候选 | 事实 |
+|---|---|
+| `CryptoArchitectureKit`（`OH_CryptoDigest_*`/`OH_CryptoMac_*`，`libohcrypto.so`） | 本机 sysroot **有头文件与导入桩**（`.../sysroot-ohos-aarch64-6.0.2.640-04/usr/{include/CryptoArchitectureKit,lib/aarch64-linux-ohos/libohcrypto.so}`，114 个符号；`Digest` 自 API 12、`Mac` 自 API 20，模拟器 API 22 覆盖）。cinterop 绑定已写好在 `knspike/src/nativeInterop/cinterop/ohcrypto.def`（默认关闭）。**但"设备上真的加载得到"我无法在本环境证明**：`hdc shell 'test -e /system/lib64/libohcrypto.so'` 报 MISSING，而同一条命令对**已确认在跑的** `libmindspore_lite_ndk.so` 也报 MISSING（SELinux 限制，结论不可信）。HAP 若 `DT_NEEDED` 一个不存在的 `.so`，整个应用加载失败——比"算法慢一点"严重得多 |
+| 纯 Kotlin | 零运行时依赖；`hmacSha256Hex` 是**策略验签**用的（安全边界），它的正确性可以靠 RFC 4231 / FIPS 180-4 公知向量**逐位**验证，比押在一个我验证不了的运行时库上风险低；且**只放在 `ohosMain`**，Android(`javax.crypto`)/Apple(`CommonCrypto`) 一行未动 |
+
+> 这是**风险判断，不是"平台不支持"**。设备侧一旦能证明 `libohcrypto.so` 可得，换成系统实现只需改
+> `Hmac.ohos.kt` 一个文件（接口与冒烟向量都不变）。
+
+### 顺手钉死的一处真缺陷（KMP 编译把它逼出来了）
+
+`EvalStats.formatRate` 用了 **JVM 专有**的 `"%.1f%%".format(...)` —— `commonMain` 编不过：
+
+```
+e: .../com/sekb/shared/eval/EvalStats.kt:43:43 Unresolved reference 'format'.
+```
+
+说明 **iOS/Mac 的 framework 从来没有编过这个文件**（native target 默认关闭，`ios.sh smoke` 只覆盖子集）。
+已改用共享层自己的 `Fmt.fixed(v * 100, 1)`（`FmtTest` 已钉住它与 `%.1f` 等价）。
+（同一批 JVM 专有 API 的机械守卫见 `scripts/check_edge_facts.py` 第 ⑥ 项。）
+
+### ⚠️ 一个坑：`@Throws` 不能只写在 override 上（Kotlin/Native 直接编不过）
+
+`c3fecb7`「共享层补 @Throws」只在 `HostOllamaEmbedding.embed` 的 **override** 上加了
+`@Throws(IllegalStateException::class)`，接口方法没标。JVM 宽容（Android 292 单测全绿），
+但 **native 侧是硬错误**：
+
+```
+e: .../embed/EmbeddingProvider.kt:124:5
+   Member overrides different '@Throws' filter from 'interface EmbeddingProvider : Any'.
+```
+
+修法：过滤器标到**接口契约**上（`EmbeddingProvider.embed`），override 上不写——
+异常过滤器成为契约的一部分，所有实现（含 Android `OnnxBgeEmbedding`）自动继承，意图不变。
+
+### C4 落地：ABI 只留 arm64
+
+- `knspike/build.gradle.kts`：删掉 `ohosX64` 目标（只留 `ohosArm64`）。
+- `hapshell/entry/build-profile.json5`：`abiFilters` 由 `["arm64-v8a","x86_64"]` → `["arm64-v8a"]`
+  （本机模拟器 `lists.json` 的 abi 就是 `arm`，x86_64 那份是白带的体积）。
+- `scripts/harmony_spike.sh`：`build_kn` / `verify_link` / `verify_mindspore` 三处同步只处理 arm64；
+  `verify_link` 的 KMP 入口断言由 4 → **7** 个（新增 `smoke`/`contract`/`contract_pair`）。
+
+> **`smoke` 的两条判据口径说明**（我踩过一次）：共享层没有 `@CName`，**不会**出现在 `nm -D`。
+> 而且 Kotlin/Native 只把**被用到的**类编进最终产物 —— 实测同一个 `.so` 上
+> `nm | grep com.sekb.shared` = 0 而共享层代码分明在跑。所以判据改成
+> ①`_Konan_init_sekb-ohos-spike:shared-core`（完整符号表）+ ②`apps/shared-core` 的 klib 产物。
+> **"类名在不在 .so 里"这个判据本身不成立**，别再拿它当验收。
