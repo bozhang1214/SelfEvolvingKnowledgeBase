@@ -674,3 +674,46 @@ HAP: …/outputs/default/entry-default-unsigned.hap（96M）
   用 `strings` 或 `grep -a` 按 UTF-8 查均为 **0**——说明 **ABC 串表并不以明文 UTF-8 存中文**。
   这是**检查手段的局限，不是"没编译进去"**；ASCII 串可查、中文串不可查，不能把两者混为一谈。
 - ❌ **仍无任何视觉验证**（未在 Previewer/模拟器/设备上看过）：布局与交互尚未被眼睛验过。
+
+---
+
+## ✅ 模拟器已就绪：`hdc` 已能连上（2026-09-25）
+
+owner 在 DevEco 里创建了模拟器实例；实测**它已启动且可被 `hdc` 发现**：
+
+```
+hdc list targets  →  127.0.0.1:5555
+```
+
+实例信息（`~/.Huawei/Emulator/deployed/lists.json`）：
+
+| 字段 | 值 |
+|---|---|
+| 名称 | **nova 16 Pro** |
+| API / 版本 | **22** / HarmonyOS **6.0.2(22)**，`guestVersion` 6.0.0.130(SP7) |
+| 分辨率 / 密度 / 内存 | 1320×2856 / 560 / 4096 MB |
+| ABI | **arm** |
+| 系统镜像 | `~/Library/Huawei/Sdk/system-image/HarmonyOS-6.0.2/phone_all_arm`（含 `system.img.qcow2`，实例目录共 1.2 GB） |
+
+**意义**：M6 第 4 条（HAP 能装能起 + 真的调通）与 M7 的**外部前置已解除**——
+不再需要真机，也不再需要另行下载镜像。
+
+> 补充：我曾试图用 CLI 自行启动（`Emulator -hvd "nova 16 Pro" -path <实例父目录> -imageRoot <镜像根>`），
+> 但 `-path` 应指向**父目录** `…/deployed`，我传了实例目录本身，于是报
+> `"nova 16 Pro" is not found … Please create the device(folder)`。
+> 不过 DevEco 已经把它起起来了，因此不需要再自行启动。**该参数用法记在这里以备后用。**
+
+### ⚠️ 仍差一步：HAP 需要**签名**才能安装
+
+当前产物是 `entry-default-unsigned.hap`（未签名），`hdc install` 需要签名包。
+
+本机现有材料（`sdk/default/openharmony/toolchains/lib/`）：
+`OpenHarmony.p12`、`OpenHarmonyProfileDebug.pem`、`OpenHarmonyProfileRelease.pem`、
+`UnsgnedDebugProfileTemplate.json`、`hap-sign-tool.jar`。
+**但缺 `OpenHarmonyApplication.pem`（应用证书链）**，且 p12 的别名未能读出
+（`keytool -list` 无输出）——所以 CLI 自签还需进一步排查，不能想当然。
+
+**最快的路（推荐）**：在 DevEco 里选中该模拟器直接点 **Run（▶）**——DevEco 会**自动用调试签名**
+打包并安装，不需要手工配签名。
+若想手工配置：**File → Project Structure → Signing Configs**（该页的"自动生成签名"需先**登录华为账号**才会出现；
+DevEco 6 里也可能在 **Project Structure → Project** 下）。
