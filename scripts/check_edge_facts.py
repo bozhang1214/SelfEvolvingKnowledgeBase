@@ -209,6 +209,31 @@ def main() -> int:
             errors.append(f"契约夹具 {name}.json 只有 {len(cases)} 个 case，低于下限 {floor}"
                           "（端侧会少测而不报错——这正是最危险的漂移）")
 
+    # ⑤ **每类升级信号都必须被夹具覆盖**（只看 case 总数是不够的）。
+    #
+    # 为什么（2026-10-25 补）：`signals.json` 的"≥13"只保证**数量**——把某类信号的 3 个 case
+    # 删到只剩 1 个、或用别的信号 case 顶上，总数照样够，而**那一类行为就没人测了**。
+    # 6 类信号是端云两侧"升级率可比"的语义基础（`PlaneRouter.evaluate` 与服务端 plane_router 同口径），
+    # 少覆盖一类 = 该类的漂移不会有任何机械检查能发现。
+    # `context_overflow` **不算在内**：它是**事前**不走端侧的预算判据，由 routing.json 覆盖
+    # （见 `docs/ops/16-端云协同协议.md` §6 的备注），不要把它当成缺失项。
+    required_signals = {
+        "json_invalid", "empty", "degenerate", "timeout", "low_confidence", "tool_hallucination",
+    }
+    signals_path = os.path.join(ROOT, "apps/contract", "signals.json")
+    covered: set[str] = set()
+    if os.path.exists(signals_path):
+        with open(signals_path, encoding="utf-8") as fh:
+            sig_cases = json.load(fh).get("cases") or []
+        for c in sig_cases:
+            covered.update(c.get("expectSignals") or [])
+        missing = sorted(required_signals - covered)
+        if missing:
+            errors.append(
+                "契约夹具 signals.json **没有覆盖**这些升级信号：" + "、".join(missing)
+                + "（删掉某类信号的用例不会让任何检查变红，但该类行为从此无人验证）"
+            )
+
     if not args.quiet:
         print("── 端侧事实：实测值 ──")
         for name, value in sorted(actual.items()):
@@ -216,6 +241,8 @@ def main() -> int:
         if actual_minimums:
             print("   契约夹具下限核对：" + "、".join(
                 f"{k}={v}" for k, v in sorted(actual_minimums.items())))
+        if covered:
+            print("   升级信号覆盖：" + "、".join(sorted(covered)))
         if report is not None:
             print(f"   （Gradle XML 报告交叉验证：{report} 用例）")
         print(f"\n── 文档标记：{checked} 处已核对 ──")
