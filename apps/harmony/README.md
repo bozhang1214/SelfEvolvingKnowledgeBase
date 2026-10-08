@@ -944,3 +944,51 @@ owner 已定口径：**鸿蒙的验收标准与 Android 端侧 App 同级（功�
 共享层完全没接（`apps/shared` 无 ohos 目标、无 `ohosMain` 的 `Clock`/`Hmac`）、`kotlin-pending/MindSporeBgeEmbedding.kt`
 零引用且**输入口径已过期**（模型现在吃 `sekb_additive_mask_zero`）、`vocab.txt` 未进包、`module.json5` 无 INTERNET 权限、
 无存储（`relationalStore`/HUKS）、`pages/Chat.ets` 注册了但**不可达**、无契约夹具 runner、自检还不是 PASS/FAIL/SKIP 表。
+
+---
+
+## H1 开工笔记（2026-10-25，只做了只读探路，**尚未改动任何构建**）
+
+### 现状（实测）
+
+| 项 | 事实 |
+|---|---|
+| `apps/shared` 目标 | `androidLibrary {}`（AGP 9 的 KMP DSL）+ `iosArm64`/`iosSimulatorArm64`/`macosArm64`（**opt-in**）；**无 `ohosArm64`** |
+| `apps/shared` source set | `commonMain` / `androidMain` / **`appleMain`**（用默认层级模板，非 `iosMain`） |
+| `knspike` | 有 `ohosArm64`/`ohosX64` 的 `sharedLib`；**未依赖 `:shared`** |
+| spike 构建 | `apps/harmony/spike/` 是**独立 Gradle 构建**，settings 注释写明**故意如此**：fork 配套 **AGP 8.11.2**，而 Android 构建是**已全量验证的 AGP 9**，合并会"为了验 A 顺手把 B 弄坏" |
+| spike gradle.properties | `kotlin.mpp.applyDefaultHierarchyTemplate=false`、`kotlin.mpp.enableCInteropCommonization=true` |
+
+### ⚠️ 对 HR1「选项①复合构建」的判断（**这条要先验证，别直接照做**）
+
+`apps/shared` 的构建脚本用 `com.android.kotlin.multiplatform.library` + `androidLibrary {}`
+——那是 **AGP 9 专属 DSL**。而 fork 侧的 AGP 是 **8.11.2**，**应用不了该插件**。
+因此 `includeBuild(apps/shared)` 让共享层"用 fork 重编"**极可能一开始就失败**，
+不是"可能撞版本"，而是插件层面就对不上。
+
+**更可能走通的形态**（供 H1 采用，按代价排序）：
+
+1. **把纯逻辑抽成不含 Android 插件的 KMP 模块**（如 `apps/shared-core`：只有 `kotlin("multiplatform")`
+   + `commonMain`/`ohosMain`/`appleMain`，**不 apply 任何 AGP 插件**），让 Android 侧与鸿蒙侧**各自**
+   依赖它——Android 侧继续用 AGP 9，鸿蒙侧用 fork。**这是我推荐的形态**：一处源码、两侧编译，
+   且不动已全量验证的 Android 构建基线。
+2. 给共享层加 `ohosArm64()`，但**用条件开关**（照现有 `-PsekbNativeTargets=true` 的做法），
+   并让 ohos 编译走**另一份 settings/build**，只把 `srcDirs` 指到同一批源码。
+3. 按 RFC §5.1 把 wrapper 上移统一（最彻底、但会动 Android 基线 → **必须单独提交 + 回滚 tag**）。
+
+### H1 的下一步（接手直接做）
+
+1. 先花 10 分钟**证伪/证实上面那条判断**：在 spike 的 `settings.gradle.kts` 里试
+   `includeBuild("../../../shared")`，跑 `bash scripts/harmony.sh build`，看是否在**插件应用阶段**就报错
+   （预期：`com.android.kotlin.multiplatform.library` 找不到/不兼容）。**先拿到这个事实再选形态**。
+2. 按选定的形态加 `ohosMain` 的 `Clock`/`Hmac`/`Digests` actual——**注意**：Android 用 `javax.crypto`、
+   Apple 用 CommonCrypto，**鸿蒙侧的具体 API 尚未确定**（OpenSSL/libcrypto 还是 fork 自带），
+   这一处需要**先查 fork 的可用 API**再写，不要照抄 Apple 版。
+3. `knspike` 依赖共享模块 → 跑 interop smoke（HMAC/SHA256 公知向量、canonical JSON、`ToolCallJson`、
+   `Fmt` 与 Android **逐字符一致**），并确认 `libkn.so` 里能看到 `com.sekb.shared.*` 导出。
+4. `scripts/harmony.sh` 目前有 `build|install|start|selftest|log|crash|all`，**还没有 `smoke`**——
+   H1 收尾时按 `ios.sh smoke` 的样子补上。
+
+> **为什么本节只写判断不写代码**：H1 会动 `apps/shared`（**协作共享区**），
+> 而上述形态选择尚未用事实确认；在未确认前改构建脚本，风险是"把已全量验证的 Android 基线弄坏"。
+> 故本轮把事实与选项交清楚，下一轮拿到"是否插件阶段失败"这一个事实后再动手。
