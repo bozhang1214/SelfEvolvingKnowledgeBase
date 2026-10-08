@@ -797,3 +797,30 @@ DevEco 6 里也可能在 **Project Structure → Project** 下）。
 中途我用 `grep -E 'libkn.so|✅|❌|error'` 过滤构建输出，**把 `Compilation finished with errors` 滤掉了**，
 于是"修完仍是 -5"的结论其实是**旧包**的结果，白绕了一轮。
 **教训：构建/测试的输出不要用窄模式 grep——必须先确认"构建成功"这一事实本身。**
+
+---
+
+## `-5` → `-7` → `-3100` → **崩溃**：逐步定位记录（2026-09-25，最新）
+
+每一步都是**用证据换来的**，没有猜测式改代码：
+
+| 观察 | 事实（诊断码解码） | 结论与修法 |
+|---|---|---|
+| `-5` | `-1033` = 3 个输入 / **0 个 int64** / 3 个"非 int64" | `OH_AI_TensorGetDataType(t) == OH_AI_DATATYPE_NUMBERTYPE_INT64` **在本绑定下恒为 false**（三个输入全被误判）→ 删掉该断言；**改按元素数识别角色**（掩码 262144 vs token 512） |
+| `-7` | `-3100` = **1 个输出张量、元素数恰为 0** | 输出 shape 在 `predict` **之前**还没被填上 → 把"读输出形状"**移到 predict 之后** |
+| **崩溃** | 应用进程消失，回到桌面（`NetMgrAppQoe UnRegisterAppQoe for com.sekb.ohos.spike` @16:32:05） | **第一次真正跑到推理路径**，并在其中崩溃 |
+
+### 下一步（最后一关）
+
+崩溃发生在**此前从未到达过**的推理路径上（`predictTyped` → `readOutputFloats`）。
+最可能的两个位置（按可能性排序）：
+1. **`OH_AI_TensorSetData` 的缓冲大小/类型与模型期望不符** —— 例如模型其实要 **int32** 的 token
+   而我们喂了 int64（`OH_AI_TensorSetData` 返回 void、不报错，错配就是内存越界 → 崩溃）；
+   或掩码的 262144 元素缓冲与模型期望不一致；
+2. **`OH_AI_TensorGetMutableData` 读取输出**时的越界（输出 shape 若仍不可信）。
+
+取证据的办法（按性价比）：
+- **`hdc file recv /data/log/faultlog/faultlogger/` 下的 cppcrash 文件**看栈（最直接）；
+- 或在 predict 前后各打一条 `hilog` 面包屑，定位是"predict 崩"还是"读输出崩"；
+- 或查 `OH_AI_TensorGetDataType` 的**返回值数值**（把原始 dtype 码编码进返回值），
+  据此确定 token 到底该喂 int32 还是 int64。

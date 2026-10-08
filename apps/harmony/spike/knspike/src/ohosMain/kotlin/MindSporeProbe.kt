@@ -70,12 +70,6 @@ fun sekbSpikeMindSporeSelfTest(modelPath: String): Int {
         val typesName = tokens[1]
         val maskName = masks[0]
         val seqLen = s.inputs.firstOrNull { it.first == idsName }?.second ?: return MsStep.NO_INPUT
-        val elemNum = s.outputElementNum
-        if (elemNum <= 0) return MsStep.NO_OUTPUT
-        val hidden = elemNum / seqLen
-        if (hidden <= 0) return MsStep.OUTPUT_TOO_SMALL
-
-        // 合成输入：开头 [CLS]=101，结尾 [SEP]=102，中间用可复现的伪 id，其余补 0
         val ids = LongArray(seqLen)
         val mask = LongArray(seqLen)
         val types = LongArray(seqLen)
@@ -99,6 +93,14 @@ fun sekbSpikeMindSporeSelfTest(modelPath: String): Int {
                 maskName to MsSession.Feed.F32(additiveMask(mask)),
             ),
         )
+
+        // ⚠️ **输出形状必须在 predict 之后才取**：实测 build 完成后、
+        // predict 之前 `outputElementNum == 0`（诊断码 -3100 = 1 个输出张量、元素数为 0），
+        // 即输出 shape 要等图真正跑过才被填上。原先在 predict 前就要求它 > 0，必然失败。
+        val elemNum = s.outputElementNum
+        if (elemNum <= 0) return MsStep.NO_OUTPUT
+        val hidden = elemNum / seqLen
+        if (hidden <= 0) return MsStep.OUTPUT_TOO_SMALL
 
         val v = s.readOutputFloats(hidden)
         if (v.any { it.isNaN() || it.isInfinite() }) return MsStep.PREDICT_FAILED

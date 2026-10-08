@@ -193,6 +193,23 @@ class MsSession private constructor(
         }
     }
 
+    /**
+     * **诊断**：`(输出张量个数, 第 0 个输出的元素数)`；拿不到第 0 个时元素数记 -1。
+     *
+     * 为什么要它：`outputElementNum` 返回 0 时，无法区分"一个输出都没有"与"输出存在但元素数为 0"——
+     * 前者像图/转换问题，后者像 shape 推断问题，**排查方向完全不同**。
+     * 作为**成员函数**（不是 companion）以免插错位置截断类体（上次就是这么把编译搞挂的）。
+     */
+    fun outputProbe(): Pair<Int, Int> = OH_AI_ModelGetOutputs(model).useContents {
+        val n = handle_num.toInt()
+        val e = if (n > 0) {
+            handle_list?.get(0)?.let { OH_AI_TensorGetElementNum(it).toInt() } ?: -1
+        } else {
+            -1
+        }
+        n to e
+    }
+
     /** 读出第 0 个输出张量的前 [n] 个 float（**CLS 向量就是前 hidden 个**）。 */
     fun readOutputFloats(n: Int): FloatArray {
         val t = OH_AI_ModelGetOutputs(model).useContents { handle_list?.get(0) }
