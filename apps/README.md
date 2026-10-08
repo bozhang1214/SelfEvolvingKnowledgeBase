@@ -12,14 +12,14 @@ apps/
 └── desktop/     Windows/Ubuntu —— **本轮搁置**（跟踪项 docs/BACKLOG.md D16）
 ```
 
-> **四端状态（2026-09-22 实测）**
+> **四端状态（2026-10-25 更新；各端验收证据见各自 `README.md`）**
 >
 > | 端 | 状态 | 自检 | 备注 |
 > |---|---|---|---|
-> | Android | ✅ 已完成 | 30 PASS / 0 FAIL / 2 SKIP | 291 单测（含契约夹具逐 37 个 case 断言） |
-> | iOS | ✅ 已完成 | 26 PASS / 0 FAIL / 1 SKIP | 唯一 SKIP = Keychain 往返（需真实签名身份） |
-> | Mac | ✅ 已完成 | 26 PASS / 0 FAIL / 1 SKIP | 与 iOS **同一份 Swift 源码** |
-> | 鸿蒙 | 🟡 spike 未收口 | — | NAPI↔KMP 链路 + `.ms` 模型转换已通；**运行期/装机等真机** |
+> | Android | ✅ **功能完整可用**（四页 UI） | 32 PASS / 0 FAIL / 1 SKIP（release 与 debug 一致） | 291 单测（含契约夹具逐 37 个 case 断言） |
+> | iOS | 🟡 **核心已完成，UI 四页进行中** | 26 PASS / 0 FAIL / 1 SKIP | 唯一 SKIP = Keychain 往返（需真实签名身份）；**自检页之外的用户界面正在补齐** |
+> | Mac | 🟡 **核心已完成，UI 随 iOS 同源补齐** | 26 PASS / 0 FAIL / 1 SKIP | 与 iOS **同一份 Swift 源码** |
+> | 鸿蒙 | 🟡 **M6 四条全达成，H1→H8 进行中** | — | 模拟器实测：未签名 HAP 可装 ✅、NAPI↔KMP 通 ✅、MindSpore 端侧推理跑通 ✅；端口/UI/自检表**未做**（见 `docs/多端跨端-鸿蒙端方案.md`） |
 >
 > 三端检索评测**同一张表**：阈值 0.20–0.60 的 Hit@1/Hit@3/MRR/误召回逐项相同
 > （0.40 → 26/30、30/30、0.928、0/3）。
@@ -45,13 +45,14 @@ apps/
 
 | 层 | 内容 | 放哪 |
 |---|---|---|
-| **纯逻辑**（无平台依赖） | 路由决策、6 类升级信号、前缀守卫、SSE 解析、工具调用 JSON、编排器 | ✅ **已落地**：`apps/shared/src/commonMain`（Kotlin Multiplatform）→ **四端共用一份**（Android/iOS/鸿蒙/Mac），**35 文件 / 4,066 行** |
+| **纯逻辑**（无平台依赖） | 路由决策、6 类升级信号、前缀守卫、SSE 解析、工具调用 JSON、编排器 | ✅ **已落地**：`apps/shared/src/commonMain`（Kotlin Multiplatform）→ **四端共用一份**（Android/iOS/鸿蒙/Mac），**37 文件 / 4,394 行** |
 | **平台适配** | HTTP 传输、凭证存储（Keystore/Keychain/HUKS）、权限、设备工具、文件与 PDF、SQLite、嵌入运行时 | 各端自己的目录（薄）。⚠️ **嵌入运行时是唯一没能"写一次"的**：Android 走 ORT Java API、iOS/Mac 走 ORT C API、鸿蒙走系统 MindSpore Lite —— 语义对齐靠共享层的 `EmbeddingProvider` 接口 + 同一套分词器 + 同一空间戳 |
 | **UI** | 聊天 / 来源 / 文档 / 设置 | ✅ **各端原生，不用跨端统一 UI**（owner 已定 D1）：Compose（Android）/ SwiftUI（iOS + Mac **共用一份源码**）/ ArkUI（鸿蒙）。~~目标 `shared/ui`（Compose Multiplatform）~~ **已否决**，CMP 评估归档为备选 |
 
 现状：纯逻辑已经**真的搬进 KMP 模块**（不是"目标"）——`apps/shared/src/commonMain`
-**35 文件 / 4,066 行零平台依赖**，各端只留薄的平台实现：
-Android `app/src/main` 2,695 行 / 15 文件、iOS `App/` 1,118 行 / 5 文件（Mac 复用同一份）。
+**37 文件 / 4,394 行零平台依赖**，各端只留薄的平台实现：
+Android `app/src/main` 4,785 行 / 25 文件（含 Compose 四页 UI）、iOS `App/` 1,118 行 / 5 文件（Mac 复用同一份）。
+⚠️ 上表三处数字是**实测**（`find … | wc -l`）；历史文档里出现过的 35/4,066、15/2,695 是搬层当时的快照，已过时。
 
 ⚠️ **鸿蒙的旧结论已过期**：2026-06 HDC 华为发布了 KMP/CMP 鸿蒙社区版 Beta（Kotlin/Native 新增
 `OHOS_ARM64` target），"ArkTS 不能复用 Kotlin" 不再是唯一选项。新的路线判断、spike 验收标准与

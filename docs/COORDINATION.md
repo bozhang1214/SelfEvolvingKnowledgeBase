@@ -7,7 +7,14 @@
 
 | 工作流 | 负责人 | 涉及文件（重点） | 开始时间 |
 |---|---|---|---|
-| 鸿蒙端开发（H1→H8：KMP 目标 + 端口 + UI） | DSH Agent | `apps/shared/**`、`apps/harmony/**`、`apps/contract/README.md`、`scripts/harmony.sh`、`docs/多端跨端-*.md`、`docs/RFC-多端跨端方案.md` | 2026-10-25（接手会话） |
+| **C · 鸿蒙端**（H1→H8：KMP ohos 目标 + 五端口 + libcurl + ArkUI 四页 UI + 自检） | DSH Agent（子代理 C） | `apps/shared/**`（**只加 `ohosArm64`/`ohosMain`，不改 android/apple 配置**）、`apps/harmony/**`、`scripts/harmony.sh`、`apps/contract/**` | 2026-10-25 |
+| **B · iOS + Mac UI**（四页 SwiftUI 对齐 Android：聊天/历史/文档/设置） | DSH Agent（子代理 B） | `apps/ios/**`、`apps/mac/**`、`scripts/ios_app.sh`、`scripts/mac_app.sh`（**一份源码两端跑**） | 2026-10-25 |
+| **A · 共享层公共设施**（契约路径 N 方守卫、facts/状态文档同步、四端同表汇总） | DSH Agent（主线） | `scripts/check_protocol_paths.py`、`docs/多端跨端-*.md`、`docs/RFC-多端跨端方案.md`、`apps/README.md`、`docs/changelog.d/**` | 2026-10-25 |
+
+> **并行边界（防静默覆盖，开工前必读）**：B 与 C **都不改对方目录**；
+> 双方**都必须先申请、由主线统一改** `apps/shared/build.gradle.kts` 与 `apps/contract/**`
+>（C 的 H1 需要给共享层加 `ohosArm64` 目标，属于**新增**，已在本表登记）。
+> `docs/CHANGELOG.md` 一律走 `docs/changelog.d/` 碎片（每个工作流用**各自的**碎片文件，不共用）。
 
 > 端云协同 M0–M3（`docs/RFC-端云协同与端侧Agent.md` / 实施记录）已于 2026-09-20 暂停存档，
 > 真机到货后从实施记录 §0 的恢复指引继续。

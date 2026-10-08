@@ -2,9 +2,13 @@
 
 > 规则：**只写跑过的命令与真实输出**。"应该能跑"不算验证；没能验的写在最后一节。
 
-> 端侧单测总量：**231**（功能 187 + 契约夹具 4 + JSON 门面 11 + 格式化 5 + 端侧策略 24）<!-- fact:android_unit_cases=231 -->
+> 端侧单测总量：**291**（36 个测试类，`scripts/android.sh test` 实测 291 用例 / 0 失败 / 0 跳过）<!-- fact:android_unit_cases=291 -->
 >
-> 模拟器自检：**PASS=30 FAIL=0 SKIP=2**（两个 SKIP = `cloud_login` 与 `policy_refresh`，都缺前置条件）
+> ⚠️ 本文里的"单测总量"随功能增加而增长（历史值 191 → 231 → **291**）；**只有这一行是权威值**，
+> 其它章节引用时请回链到这里，不要各写一个数（`check-facts.py` 会抓同一个 `fact` 名取值矛盾）。
+>
+> 模拟器/真机自检：**最新为 PASS=32 FAIL=0 SKIP=1**（release 与 debug 一致，见 §1.14）；
+> 早期轮次留下过 `PASS=30 SKIP=2` / `PASS=31 SKIP=1` 的记录，均为**当时**结果，保留在各自章节。
 
 环境：macOS（Apple Silicon）+ Android Studio JBR 21 + Android SDK platform 36.1 +
 AVD `Medium_Phone_API_36.1`（arm64-v8a，google_apis_playstore）。
