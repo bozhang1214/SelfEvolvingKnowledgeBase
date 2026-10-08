@@ -19,11 +19,9 @@ package com.sekb.ohos.spike
 
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.COpaquePointerVar
-import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.FloatVar
 import kotlinx.cinterop.LongVar
 import kotlinx.cinterop.alloc
-import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.get
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
@@ -51,7 +49,6 @@ import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorGetElementNum
 import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorGetMutableData
 import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorGetName
 import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorHandleArray
-import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorSetData
 
 /** 一步失败时的可区分返回码（真机上只看得到返回码，所以要能分辨卡在哪一步）。 */
 object MsStep {
@@ -103,25 +100,47 @@ class MsSession private constructor(
         }
 
     /**
+     * 把 int64 数据写进**模型自己的**输入缓冲。
+     *
+     * ⚠️ 为什么不用 `OH_AI_TensorSetData(t, buf)`（曾经就是这么写的，**会崩**）：
+     * 该接口把**我们的**指针交给张量，张量认为内存归它所有，在析构时 free 它——
+     * 而我们的缓冲是 `memScoped` 里 `allocArray` 出来的，离开作用域时**已经被 free 过一次**
+     * → **double free**。实测崩溃栈（2026-10-08 cppcrash，SIGTRAP + "may double free"）：
+     *
+     *     OH_AI_ModelDestroy → Graph::~Graph → LiteSession::~LiteSession
+     *       → Tensor::~Tensor → Tensor::FreeData → musl 检测到 double free
+     *
+     * 改为写 `OH_AI_TensorGetMutableData` 返回的**模型自有**缓冲：既不转移所有权，
+     * 也没有悬垂指针，调用方不必关心生命周期（元素数已由调用方与本类双重校验）。
+     */
+    private fun fillI64(t: COpaquePointer, values: LongArray) {
+        val dst = OH_AI_TensorGetMutableData(t) ?: throw MsError("取输入数据指针失败")
+        val p = dst.reinterpret<LongVar>()
+        for (j in values.indices) p[j] = values[j]
+    }
+
+    /** 同 [fillI64]，float32 版本（additive mask 走这条）。 */
+    private fun fillF32(t: COpaquePointer, values: FloatArray) {
+        val dst = OH_AI_TensorGetMutableData(t) ?: throw MsError("取输入数据指针失败")
+        val p = dst.reinterpret<FloatVar>()
+        for (j in values.indices) p[j] = values[j]
+    }
+
+    /**
      * 跑一次推理。`feeds` 按**输入名**给数据（长度必须等于该输入的元素数）。
      *
-     * ⚠️ 数据必须在 `Predict` 期间有效——所以分配与调用都在**同一个** `memScoped` 内，
-     * 不要试图把指针带出去（那会变成悬垂指针，症状是"向量不对"而不是崩溃）。
+     * 数据写进模型自有缓冲（见 [fillI64]），所以**不需要**在 `Predict` 期间持有任何指针。
      */
     fun predict(feeds: Map<String, LongArray>) {
         memScoped {
-            val buffers = HashMap<String, CPointer<LongVar>>()
             OH_AI_ModelGetInputs(model).useContents {
                 for (i in 0 until handle_num.toInt()) {
                     val t = handle_list?.get(i) ?: continue
                     val name = OH_AI_TensorGetName(t)?.toKString() ?: continue
                     val values = feeds[name] ?: continue
-                    val buf = allocArray<LongVar>(values.size)
-                    for (j in values.indices) buf[j] = values[j]
-                    buffers[name] = buf
                     // `OH_AI_TensorSetData` 返回 void，**没有状态可查** → 长度/类型对不上只会
                     // 表现为"向量不对"。所以调用方与本类都主动校验元素数与类型。
-                    OH_AI_TensorSetData(t, buf)
+                    fillI64(t, values)
                 }
             }
             val outArr = alloc<OH_AI_TensorHandleArray>()
@@ -173,17 +192,8 @@ class MsSession private constructor(
                     // 于是它只会制造"类型不符"的假警报。类型由调用方的 `Feed` 子类**显式表达**，
                     // 这里只按 Feed 分配对应缓冲；（元素数仍严格校验，那个是可靠的。）
                     when (feed) {
-                        is Feed.I64 -> {
-                            val buf = allocArray<LongVar>(feed.values.size)
-                            for (j in feed.values.indices) buf[j] = feed.values[j]
-                            OH_AI_TensorSetData(t, buf)
-                        }
-
-                        is Feed.F32 -> {
-                            val buf = allocArray<FloatVar>(feed.values.size)
-                            for (j in feed.values.indices) buf[j] = feed.values[j]
-                            OH_AI_TensorSetData(t, buf)
-                        }
+                        is Feed.I64 -> fillI64(t, feed.values)
+                        is Feed.F32 -> fillF32(t, feed.values)
                     }
                 }
             }

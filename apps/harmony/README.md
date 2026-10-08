@@ -824,3 +824,79 @@ DevEco 6 里也可能在 **Project Structure → Project** 下）。
 - 或在 predict 前后各打一条 `hilog` 面包屑，定位是"predict 崩"还是"读输出崩"；
 - 或查 `OH_AI_TensorGetDataType` 的**返回值数值**（把原始 dtype 码编码进返回值），
   据此确定 token 到底该喂 int32 还是 int64。
+
+---
+
+## ✅ 崩溃已定位并修复：`OH_AI_TensorSetData` 的 double free（2026-10-08）
+
+**结论先说**：崩溃**不是**类型/尺寸错配，也不是读输出越界，而是 **`memScoped` 缓冲被释放两次**。
+修掉后模拟器上**推理跑通**（`elemNum=262144`、`firstFloat=173347`），进程不再崩溃。
+
+### 证据：cppcrash 栈（`hdc file recv /data/log/faultlog/faultlogger/…`）
+
+```
+Reason: Signal:SIGTRAP(TRAP_BRKPT)
+LastFatalMessage: This is an unexpected memory usage behavior. may double free
+#02 libmindspore-lite.so  mindspore::lite::Tensor::FreeData()+252
+#03 libmindspore-lite.so  mindspore::lite::Tensor::~Tensor()+60
+#05 libmindspore-lite.so  mindspore::lite::LiteSession::~LiteSession()+360
+#08 libmindspore-lite.so  mindspore::lite::Graph::~Graph()+124
+#10 libmindspore_lite_ndk.so  OH_AI_ModelDestroy+176      ← 我们调用的那一层
+#11..#16 /data/storage/el1/bundle/libs/arm64/libkn.so     ← Kotlin/Native 产物
+#17 libkn.so  sekb_spike_mindspore_selftest+128           ← 自检入口
+#18 libknspike.so → #19 libace_napi.z.so → Index.ets:52 runModel
+```
+
+栈是**析构路径**（`OH_AI_ModelDestroy → Graph → LiteSession → Tensor → FreeData`），
+而 musl 报 **double free** —— 即"我们释放过一次、张量析构时又释放一次"。
+
+### 根因（`MsLite.kt`，三处同一写法）
+
+```kotlin
+memScoped {                                    // ← 离开作用域 free 掉 arena
+    val buf = allocArray<LongVar>(values.size)  // ← 缓冲来自 memScoped
+    OH_AI_TensorSetData(t, buf)                 // ← 把**我们的**指针交给张量
+}                                              // ← 这里 free 第 1 次
+// 之后 OH_AI_ModelDestroy 析构张量时 free 第 2 次 → SIGTRAP
+```
+
+`OH_AI_TensorSetData` 会把调用方的指针交给张量（内存归张量所有），
+而 `memScoped` 的缓冲在作用域结束时已被释放 —— 两种所有权模型撞在一起。
+
+### 修法：写**模型自有**缓冲，不做所有权转移
+
+改为写 `OH_AI_TensorGetMutableData` 返回的指针（新增 `fillI64` / `fillF32` 两个私有辅助）：
+
+```kotlin
+val dst = OH_AI_TensorGetMutableData(t) ?: throw MsError("取输入数据指针失败")
+val p = dst.reinterpret<LongVar>()          // float32 版本用 FloatVar
+for (j in values.indices) p[j] = values[j]
+```
+
+好处：既不转移所有权也没有悬垂指针；数据生命周期完全由模型管理，
+调用方不必再依赖"必须在同一个 `memScoped` 里"这种隐式约定（旧注释已删）。
+
+### 验证（模拟器，`hdc`）
+
+| 检查 | 结果 |
+|---|---|
+| 构建 | `bash scripts/harmony_spike.sh all` → **exit 0**（HAP 100MB） |
+| 安装 | `hdc install entry-default-unsigned.hap` → install bundle successfully |
+| 运行 | `aboutToAppear` → `runModel()` 自动执行 |
+| **推理结果** | `hilog：mindspore selftest elemNum=262144 firstFloat=173347` ✅ |
+| 进程 | 存活（`ps -ef` 有 `com.sekb.ohos.spike`），**未崩溃** |
+| 崩溃日志 | `/data/log/faultlog/faultlogger/` **无新增**（仍只有修复前那个 16:31 的） |
+
+`elemNum=262144` 为正 = 走到了"成功"分支（`Index.ets` 判 `n > 0`），
+`firstFloat` 是真实非零输出 → **MindSpore Lite 端侧嵌入第一次在 OHOS 上完整算完并取到向量**。
+
+### ⚠️ 遗留（下次接手先看这条）
+
+`knspike/src/ohosMain/kotlin-pending/MindSporeBgeEmbedding.kt:165` **还有同样的
+`OH_AI_TensorSetData(t, src)` 写法**。它在 `kotlin-pending/`（未编入构建），
+所以没被这次验证覆盖——**一旦启用就会重演同一个 double free**，启用前必须一并改成
+`OH_AI_TensorGetMutableData` 写法。
+
+**过程教训**（与上一轮那条呼应）：崩溃栈里的 `#10 OH_AI_ModelDestroy` 一开始很容易被读成
+"销毁时参数用错"，但真正要看的是 `LastFatalMessage` 的 **double free** 与 `FreeData` 这一帧——
+它直接把"谁释放了两次"这个问题摆出来了，比继续猜 dtype/缓冲大小省了一整轮。
