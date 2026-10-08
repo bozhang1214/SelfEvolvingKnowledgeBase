@@ -57,13 +57,18 @@ fun sekbSpikeMindSporeSelfTest(modelPath: String): Int {
         //
         // 改为**按类型识别角色**：恰好 1 个 float32 输入 = additive mask；另 2 个 int64
         // 按声明顺序 = input_ids / token_type_ids（与 ONNX 声明顺序一致）。
-        val int64Names = s.inputIsInt64.filterValues { it }.keys.toList()
-        val f32Names = s.inputIsInt64.filterValues { !it }.keys.toList()
-        if (int64Names.size != 2 || f32Names.size != 1) return MsStep.BAD_DTYPE
-        val idsName = int64Names[0]
-        val typesName = int64Names[1]
-        val maskName = f32Names[0]
-
+        // **按元素数识别角色**（不依赖名字、也不依赖可疑的 dtype API）：
+        // additive mask 是 `1×512×512 = 262144`，token 输入是 `1×512 = 512`——
+        // 两者相差 512 倍，没有任何歧义。
+        val tokens = s.inputs.filter { it.second != 262144 }.map { it.first }
+        val masks = s.inputs.filter { it.second == 262144 }.map { it.first }
+        if (tokens.size != 2 || masks.size != 1) {
+            // 诊断码：-(1000 + 非掩码输入数*100 + 掩码输入数*10 + 输入总数)
+            return -(1000 + tokens.size * 100 + masks.size * 10 + s.inputs.size)
+        }
+        val idsName = tokens[0]
+        val typesName = tokens[1]
+        val maskName = masks[0]
         val seqLen = s.inputs.firstOrNull { it.first == idsName }?.second ?: return MsStep.NO_INPUT
         val elemNum = s.outputElementNum
         if (elemNum <= 0) return MsStep.NO_OUTPUT
@@ -116,7 +121,16 @@ fun sekbSpikeMindSporeFirstFloat(modelPath: String): Int {
     return try {
         session = MsSession.open(modelPath)
         val s = session
-        val seqLen = s.inputs.firstOrNull { it.first == "input_ids" }?.second ?: return MsStep.NO_INPUT
+        // 与 selftest 同一套"按类型识别角色"的推导（**不依赖运行时张量名**）
+        val tokens = s.inputs.filter { it.second != 262144 }.map { it.first }
+        val masks = s.inputs.filter { it.second == 262144 }.map { it.first }
+        if (tokens.size != 2 || masks.size != 1) {
+            return -(2000 + tokens.size * 100 + masks.size * 10 + s.inputs.size)
+        }
+        val idsName = tokens[0]
+        val typesName = tokens[1]
+        val maskName = masks[0]
+        val seqLen = s.inputs.firstOrNull { it.first == idsName }?.second ?: return MsStep.NO_INPUT
         val ids = LongArray(seqLen)
         val mask = LongArray(seqLen)
         val types = LongArray(seqLen)

@@ -168,17 +168,18 @@ class MsSession private constructor(
                     if (feed.size != want) {
                         throw MsError("输入 $name 元素数不符：给了 ${feed.size}，模型要 $want")
                     }
-                    val isInt64 = OH_AI_TensorGetDataType(t) == OH_AI_DATATYPE_NUMBERTYPE_INT64
+                    // ⚠️ 不再用 `OH_AI_TensorGetDataType(t) == OH_AI_DATATYPE_NUMBERTYPE_INT64` 做断言：
+                    // 实测该比较在本绑定下**恒为 false**（诊断码 -1033 显示三个输入全被判成"非 int64"），
+                    // 于是它只会制造"类型不符"的假警报。类型由调用方的 `Feed` 子类**显式表达**，
+                    // 这里只按 Feed 分配对应缓冲；（元素数仍严格校验，那个是可靠的。）
                     when (feed) {
                         is Feed.I64 -> {
-                            if (!isInt64) throw MsError("输入 $name 模型要 float32，却给了 int64")
                             val buf = allocArray<LongVar>(feed.values.size)
                             for (j in feed.values.indices) buf[j] = feed.values[j]
                             OH_AI_TensorSetData(t, buf)
                         }
 
                         is Feed.F32 -> {
-                            if (isInt64) throw MsError("输入 $name 模型要 int64，却给了 float32")
                             val buf = allocArray<FloatVar>(feed.values.size)
                             for (j in feed.values.indices) buf[j] = feed.values[j]
                             OH_AI_TensorSetData(t, buf)

@@ -3,7 +3,21 @@
     // ⚠️ 故意留空：spike 阶段只要求**能构建出 HAP**，不要求签名安装
     // （安装需要 owner 华为开发者账号在 DevEco 里点一次"自动签名"，材料才会落到本机）。
     // 本轮验证的是"KMP 产物被 HAP 通过 NAPI 调用"这一条，它不需要签名。
-    "signingConfigs": [],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "/Users/zhangbo/.ohos/config/default_hapshell_vs-5EYFrOkSk8VxFAMEZNdJF1JVEj2WmMX2K4-mMfUg=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001BE7F8CACE2992A92368BA22E3CF7089CA7E832ECC59271712004F7F7EF0C40B7C826E44A03853DD",
+          "profile": "/Users/zhangbo/.ohos/config/default_hapshell_vs-5EYFrOkSk8VxFAMEZNdJF1JVEj2WmMX2K4-mMfUg=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/Users/zhangbo/.ohos/config/default_hapshell_vs-5EYFrOkSk8VxFAMEZNdJF1JVEj2WmMX2K4-mMfUg=.p12",
+          "storePassword": "0000001BAD41219F4F20DFA6E6B5892812BCEE88F6456BE77C54D2C7AEF93A7240E038BE30350EA9B9B56E"
+        }
+      }
+    ],
     "products": [
       {
         "name": "default",
