@@ -234,6 +234,59 @@ def main() -> int:
                 + "（删掉某类信号的用例不会让任何检查变红，但该类行为从此无人验证）"
             )
 
+    # ⑥ 共享层（`commonMain`）**不得出现 JVM 专有 API**。
+    #
+    # 为什么把它做成静态检查而不是"等编译报错"（2026-10-25 补）：
+    # `EvalStats.formatRate` 用了 `"%.1f".format(...)`，在 `commonMain` 里编不过——
+    # 但它是**鸿蒙第一次真的把共享层编到 ohosArm64** 时才暴露的。原因是这里的编译矩阵有缺口：
+    # iOS/Mac 只在 `-PsekbNativeTargets=true` 时才声明 native target，而日常（含 CI）跑的是
+    # Android 变体；于是"共享层零平台依赖"这句结论对**没被编到的部分**是空的。
+    # 这条检查 5 毫秒可跑、不需要任何工具链，比"再等下一次多端编译"早得多。
+    # ⚠️ 检测器刻意**收窄**（2026-10-25 实测调过）：第一版把 `%C`/`%` 这类
+    # 普通字符串里的百分号也当成 printf（"95%CI …%" 报了两处假阳性）。
+    # 现在只报两类**明确**的信号：① `.format(` 调用（EvalStats 那次真实事故就是这个）；
+    # ② `java.*`/`javax.*`/`System.*` 引用。想用 printf 风格的人会写成 `"…".format(…)`，
+    # 照样命中；而"能绕过的守卫"正是仓库要求写明的（见 EdgePolicy.kt:118 的注释里那条）。
+    jvm_only = re.compile(
+        r"\.format\(|printf\(|"
+        r"\bjava\.|\bjavax\.|System\.currentTimeMillis|System\.getProperty|"
+        r"\bLocale\b"
+    )
+    #: 逃生阀（**显式、可见、可审计**）：文件里写了这一行就整文件豁免。
+    #  存在的理由：`commonMain` 里偶尔必须**自己实现**一个格式化器/编解码器
+    #  （例如 `EdgePolicy.kt` 的 `formatChar`：JSON 转义需要 `\uXXXX`，而它按名字会被
+    #   `String.format` 之类的检查误伤）。豁免必须写进代码、并被打印出来——
+    #   "静默豁免"就等于没有守卫。想要的不是零豁免，而是**每一处豁免都看得见**。
+    allow_marker = "sekb:allow-jvm-api"
+    leaks: list[str] = []
+    allowed: list[str] = []
+    for path in sorted(glob.glob(os.path.join(ROOT, "apps/shared/src/commonMain/**/*.kt"), recursive=True)):
+        rel = os.path.relpath(path, ROOT)
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        # 豁免**按文件**记录并**照样打印**：豁免是为了"命名/自实现格式化器"这类正当情形，
+        # 不是为了静默绕过。有人在共享层加豁免时，`verify_all_ends.sh` 的输出里会看得到。
+        if allow_marker in text:
+            allowed.append(f"{rel}（文件内声明了 `{allow_marker}` 豁免）")
+        for lineno, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            # 注释里正因为"这是 JVM 专有，所以不用"而提到这些名字 → 不该报
+            if stripped.startswith(("//", "*", "/*")):
+                continue
+            m = jvm_only.search(line)
+            if not m:
+                continue
+            entry = f"{rel}:{lineno} 出现 `{m.group(0)}` → {stripped[:80]}"
+            if allow_marker not in text:
+                leaks.append(entry)
+    if leaks:
+        errors.append(
+            "共享层 `commonMain` 出现 JVM 专有 API（Android 编得过、iOS/鸿蒙编不过，"
+            "而日常构建只编 Android → 会一直藏着）：\n     " + "\n     ".join(leaks)
+            + "\n     改用共享层自己的工具（`Fmt.fixed` / `Fmt.pct`）或 expect/actual 端口；"
+            + f"\n     若确有必要（例如自己实现格式化器），在文件里写明 `// {allow_marker}: <理由>` 显式豁免。"
+        )
+
     if not args.quiet:
         print("── 端侧事实：实测值 ──")
         for name, value in sorted(actual.items()):
@@ -243,6 +296,10 @@ def main() -> int:
                 f"{k}={v}" for k, v in sorted(actual_minimums.items())))
         if covered:
             print("   升级信号覆盖：" + "、".join(sorted(covered)))
+        print(f"   commonMain 的 JVM 专有 API：{len(leaks)} 处（另有 {len(allowed)} 处显式豁免）")
+        if allowed:
+            for a in allowed:
+                print(f"     · 已豁免：{a}")
         if report is not None:
             print(f"   （Gradle XML 报告交叉验证：{report} 用例）")
         print(f"\n── 文档标记：{checked} 处已核对 ──")

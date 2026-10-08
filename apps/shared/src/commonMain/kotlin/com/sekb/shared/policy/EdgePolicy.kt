@@ -116,6 +116,11 @@ object EdgePolicy {
     }
 
     private fun String.formatChar(c: Char): String {
+        // sekb:allow-jvm-api: 这里只是**命名**里带 format —— 函数体是纯 Kotlin 的
+        // `\uXXXX` 十六进制拼装，**没有**调用 JVM 的 `String.format`。
+        // 保留显式豁免标记，是为了让 `scripts/check_edge_facts.py` 的
+        // "commonMain 不得出现 JVM 专有 API"检查不必为了命名而放宽规则
+        // （放宽规则 = 真正的 JVM 调用也会漏过去）。
         val hex = "0123456789abcdef"
         val v = c.code
         return buildString(4) {
