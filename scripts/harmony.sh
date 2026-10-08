@@ -13,6 +13,7 @@
 #   bash scripts/harmony.sh smoke [秒数]       # H1：编 ohos 产物 → 装 → 跑共享层 interop 冒烟（grep SMOKE）
 #   bash scripts/harmony.sh contract [秒数]    # H2：契约夹具 37 case + 内存反向验证（grep CONTRACT）
 #   bash scripts/harmony.sh contract-red [秒]  # H2：端到端反证——改**包内**夹具期望值必须变红
+#   bash scripts/harmony.sh probe [秒数]       # H3/HR9：平台库 dlopen 探针（libcurl 三探针的判定依据）
 #   bash scripts/harmony.sh log                # 只抓最近的 hilog（按 TAG 过滤）
 #   bash scripts/harmony.sh crash [--save]     # 列 faultlogger；--save 把最新一条拉回 docs/tmp/
 #   bash scripts/harmony.sh all                # build + install + selftest
@@ -380,6 +381,56 @@ PY
     fi
 }
 
+# ── H3/HR9：平台库探针（dlopen，运行期权威判据）─────────────────────────────
+# 为什么必须先做这个、而不是直接写 `HttpTransport`：
+#   ① C2 定了"网络统一 libcurl"，但 **OHOS sysroot 里既没有 curl 头也没有 curl 库**
+#      （实测 `usr/include/curl` 不存在、`usr/lib/aarch64-linux-ohos/` 里也没有）；
+#   ② 设备侧 `hdc shell test -e` 判"有没有某个系统库"**不可信**：它对已确认在跑的
+#      `libmindspore_lite_ndk.so` 也报 MISSING（SELinux 限制）；
+#   ③ host 侧 grep 系统镜像更不可信：`libcurl.so` 字符串在镜像里有 64 处命中，
+#      但那是包元数据里的串，**并不代表 /system/lib64/libcurl.so 存在**（实测 dlopen 失败）。
+#   → 唯一可信的判据是**在设备上 dlopen**。本动作就是它。
+probe() {
+    local wait_s="${1:-25}"
+    echo "── 1/3 构建（只重打 HAP；NAPI 侧探针不依赖 KMP 产物）──"
+    bash "$ROOT/scripts/harmony_spike.sh" haponly || die "HAP 构建失败"
+
+    echo
+    echo "── 2/3 安装并启动（等待 ${wait_s}s）──"
+    "$HDC" shell "aa force-stop $BUNDLE" >/dev/null 2>&1 || true
+    "$HDC" shell "hilog -r" >/dev/null 2>&1 || true
+    install
+    start
+    sleep "${wait_s}"
+
+    echo
+    echo "── 3/3 dlopen 结果（原始 hilog）──"
+    local out
+    out="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a -E 'LOAD (OK|FAIL)|PROBE' | tail -30 || true)"
+    echo "${out}"
+    [ -n "${out}" ] || die "没抓到探针行——检查 ${wait_s}s 够不够"
+
+    # 两条断言分开写（一条"不该有"、一条"必须有"），避免把两类事实混成一句"看起来还行"：
+    #   a) libcurl：C2 依赖它 → 必须**明确记录**它到底可用不可用（FAIL 也算结论，但要显式出现）
+    #   b) H4/H5 要用的平台 C 能力：HUKS / RDB NDK / crypto 必须 OK，否则 H4/H5 要换方案
+    echo
+    if echo "${out}" | grep -aq 'PROBE1 FAIL'; then
+        echo "⚠️ libcurl 在设备上**不可用**（已用 5 个名字/路径变体逐一 dlopen 验证）"
+        echo "   → C2「鸿蒙与 Android 共用一份 libcurl」在本机模拟器上不成立，需要 owner 决策（见 HR9）"
+    fi
+    local miss=0
+    for lib in libhuks_ndk.z.so libnative_rdb_ndk.z.so libohcrypto.so libmindspore_lite_ndk.so; do
+        if echo "${out}" | grep -aq "LOAD OK   ${lib}"; then
+            echo "   ✅ ${lib}"
+        else
+            echo "   ❌ ${lib} 不可用（H4/H5 需要它）" >&2; miss=1
+        fi
+    done
+    [ "$miss" = "0" ] || die "H4/H5 依赖的平台库缺失（见上）"
+    echo
+    echo "✅ 平台能力探针完成（结论已如实打印；libcurl 不可用是**事实**，不是脚本失败）"
+}
+
 require_hdc
 case "${1:-}" in
     build)    build ;;
@@ -389,11 +440,12 @@ case "${1:-}" in
     smoke)    require_target; smoke "${2:-}" ;;
     contract) require_target; contract "${2:-}" ;;
     contract-red) require_target; contract_red_fixture "${2:-}" ;;
+    probe)    require_target; probe "${2:-}" ;;
     log)      require_target; log ;;
     crash)    require_target; crash "${2:-}" ;;
     all)      require_target; build && install && selftest "${2:-}" ;;
     # 校验 target 的动作都要联网检查，所以放在 case 内做
-    *) echo "用法：bash scripts/harmony.sh [build|install|start|selftest|smoke|contract|contract-red|log|crash|all]" >&2; exit 2 ;;
+    *) echo "用法：bash scripts/harmony.sh [build|install|start|selftest|smoke|contract|contract-red|probe|log|crash|all]" >&2; exit 2 ;;
 esac
 
 # 说明：这里**不做** `require_target` 的统一前置检查，因为 `build` 是纯本机构建、

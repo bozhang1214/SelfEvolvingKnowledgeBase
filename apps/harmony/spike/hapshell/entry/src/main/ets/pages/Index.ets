@@ -29,12 +29,36 @@ struct Index {
   @State msFirstFloat: string = '（未调用）';
   @State smoke: string = '（未调用）';
   @State contract: string = '（未调用）';
+  @State libProbe: string = '（未调用）';
 
   aboutToAppear(): void {
     this.runSmoke();
     this.runContract();
+    this.runLibProbe();
     this.runKn();
     this.runModel();
+  }
+
+  /**
+   * H3 / HR9：libcurl 三探针（①能加载并解析符号 ②HTTPS GET 通 ③写回调流式逐行）。
+   *
+   * 为什么先做探针而不是直接写 `HttpTransport`：HR9 明确要求"任一不通就回头找 owner"，
+   * 而这条路径的风险全在"设备上到底有没有可用的 libcurl（含 TLS）"——
+   * 那是**运行期事实**，只能实测（host 侧 grep 系统镜像只能说明文件在）。
+   */
+  runLibProbe(): void {
+    try {
+      const report: string = knspike.libProbe('1');
+      for (const line of report.split('\n')) {
+        if (line.length > 0) {
+          hilog.info(0x0000, TAG, '%{public}s', line);
+        }
+      }
+      this.libProbe = report;
+    } catch (e) {
+      this.libProbe = `❌ ${e}`;
+      hilog.error(0x0000, TAG, 'LIBCURL PROBE FAIL — threw: %{public}s', JSON.stringify(e));
+    }
   }
 
   /**
@@ -148,6 +172,9 @@ struct Index {
       Divider()
       Text('契约夹具（apps/contract 37 case + 反向验证）').fontSize(17).fontWeight(FontWeight.Bold)
       Text(this.contract).fontSize(12).maxLines(16).textOverflow({ overflow: TextOverflow.Ellipsis })
+      Divider()
+      Text('H3/HR9 · libcurl 三探针（dlopen）').fontSize(17).fontWeight(FontWeight.Bold)
+      Text(this.libProbe).fontSize(12).maxLines(12).textOverflow({ overflow: TextOverflow.Ellipsis })
       Divider()
       Text('MindSpore Lite 端侧嵌入').fontSize(17).fontWeight(FontWeight.Bold)
       Text(`模型: ${this.modelPath}`).fontSize(11).fontColor(Color.Gray).maxLines(2)

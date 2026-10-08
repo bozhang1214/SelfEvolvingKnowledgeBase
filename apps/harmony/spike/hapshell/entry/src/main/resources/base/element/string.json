@@ -11,6 +11,14 @@
     {
       "name": "EntryAbility_label",
       "value": "label"
+    },
+    {
+      "name": "permission_internet_reason",
+      "value": "端侧需要访问宿主/云端的 OpenAI 兼容端点（Ollama 与 SEKB 云）"
+    },
+    {
+      "name": "permission_network_info_reason",
+      "value": "端侧需要判断当前是否有网络，以便离线时明确降级而不是静默失败"
     }
   ]
 }

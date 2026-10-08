@@ -1119,3 +1119,69 @@ e: .../embed/EmbeddingProvider.kt:124:5
 > `nm | grep com.sekb.shared` = 0 而共享层代码分明在跑。所以判据改成
 > ①`_Konan_init_sekb-ohos-spike:shared-core`（完整符号表）+ ②`apps/shared-core` 的 klib 产物。
 > **"类名在不在 .so 里"这个判据本身不成立**，别再拿它当验收。
+
+---
+
+## ⛔ H3 卡在 HR9 的第一探针：**libcurl 在鸿蒙设备上不可用**（2026-10-25，已按 HR9 回头报告）
+
+### 一条命令 + 原始结论
+
+```bash
+bash scripts/harmony.sh probe 22
+```
+
+设备上**运行期 dlopen** 的原始 hilog（截选）：
+
+```
+LOAD FAIL libcurl.so       — Error loading shared library libcurl.so: No such file or directory
+LOAD FAIL libcurl.z.so     — ... No such file or directory
+LOAD FAIL libcurl_shared.z.so — ...
+LOAD FAIL libcurl_ndk.z.so — ...
+LOAD FAIL /system/lib64/libcurl.so — ...
+LOAD OK   libohcrypto.so
+LOAD OK   libhuks_ndk.z.so
+LOAD OK   libnet_ssl.so
+LOAD OK   libmindspore_lite_ndk.so
+LOAD OK   libnative_rdb_ndk.z.so
+LOAD FAIL libcrypto.so / libssl.so      ← 也没有 OpenSSL
+PROBE1 FAIL libcurl.so 加载不了
+```
+
+**结论**：C2 定的"鸿蒙与 Android 共用一份 libcurl"在本机模拟器上**不成立**。
+HR9 要求"任一不通就回头报告，不要硬啃"——所以 H3 的完整 `HttpTransport` 没有开工，
+等 owner 决策（见下方选项）。
+
+### 三个"看起来有、其实没有"的误判（都踩过，别再信）
+
+| 判据 | 为什么会骗人 |
+|---|---|
+| `hdc shell 'test -e /system/lib64/libcurl.so'` | 报 MISSING，但同一条命令对**已确认在跑**的 `libmindspore_lite_ndk.so` 也报 MISSING —— SELinux 限制，判据无效 |
+| host 侧 `grep` 系统镜像（ext2）找 `libcurl.so` | **64 处命中**，看起来"有"；但那是包元数据里的字符串。实测 dlopen 失败 → **字符串命中 ≠ 库存在** |
+| OHOS sysroot（`.tooling/konan/dependencies/sysroot-ohos-*/`） | `usr/include/curl` 不存在、`usr/lib/aarch64-linux-ohos/` 里没有 curl → 连**链接期**都没有可用的 libcurl |
+
+**唯一可信的判据是设备上 `dlopen`**（`napi_init.cpp` 的 `LibProbe`），名字/路径要**穷举变体**
+（`.z.so` / `_shared` 等命名习惯），否则会像我第一轮那样只试 `libcurl.so` 就下结论。
+
+### 同一个探针带来的**好消息**（决定了 H4/H5 的形态）
+
+| 平台库 | 结果 | 对后续阶段的意义 |
+|---|---|---|
+| `libhuks_ndk.z.so` | ✅ | **H4 凭证可以纯 Kotlin**（cinterop 直调 HUKS C API），不需要 ArkTS 桥 |
+| `libnative_rdb_ndk.z.so` | ✅ | **H5 向量库/文档登记可以纯 Kotlin**：这是 OHOS **RDB 的 NDK C API**（ArkTS `relationalStore` 的底层引擎）。C3 的意图（relationalStore 引擎）得以保留，而且比"ArkTS 实现 + 反向桥"更贴合 KMP 路线 |
+| `libohcrypto.so` | ✅ | H1 的 `Hmac` 若改系统实现是可行的（当前纯 Kotlin 实现已通过公知向量，保留） |
+| `libnet_ssl.so` | ✅ | 若最终要自写 HTTPS（不用 curl），TLS 原语可得；但**没有 OpenSSL**，自建 curl+TLS 的来源与工作量都需 owner 定 |
+| `libcrypto.so` / `libssl.so` | ❌ | 没有 OpenSSL → "交叉编译 curl（含 TLS）静态链进 HAP"这条路的成本比早前估计更高 |
+
+### 需要 owner 定的一件事（HR9 的出口，三选一）
+
+| 选项 | 代价 | 影响 |
+|---|---|---|
+| **(a) 鸿蒙先用 `@ohos.net.http`（ArkTS）**，Android 侧再统一到 libcurl | 小；但共享层的 `HttpTransport` 变成"Kotlin 接口 + ArkTS 传输"的桥（或把网络相关调用留在 ArkTS） | 与 C2 的"一份 C 实现"目标暂时分叉；README/方案需记明"鸿蒙侧暂用平台 API" |
+| **(b) 自写 HTTPS（`libnet_ssl.so` + POSIX socket + HTTP/1.1 + chunked/SSE）** | 中；约 300–500 行 Kotlin/Native，零新增第三方依赖 | 逻辑全在共享层一侧，SSE 逐行仍走共享层 `SseParser`；TLS 用平台原语，证书校验需自己接（`libnet_ssl` 的 API 要读 OHOS 头） |
+| **(c) 交叉编译 libcurl(+TLS) 静态进 HAP** | 大；没有 OpenSSL、GitHub 不可达，需另找 curl/OpenSSL 源码与移植补丁 | 与 C2 完全一致，但这是**新增一个第三方 C 依赖链**，工期风险最高（HR9 原文估计"本方案最大新增项"） |
+
+> **我的建议**：先 (a) 让端侧功能尽快完整可用（H3→H8 不再被阻塞），把 (b) 作为"去第三方依赖"的独立议题排后续；
+> (c) 只在确有"必须与 Android 共享同一份 C 实现"的硬需求时才做。**不论选哪个，共享层的 `HttpTransport` 接口不变。**
+>
+> ⚠️ 注意：H4 的**自检**（enroll/refresh）依赖网络，因此也一并被这个决策阻塞；
+> 但 HUKS 本身的**加解密往返 + 重启后仍有效**不依赖网络，可以先做（且已确认 `libhuks_ndk.z.so` 可用）。
