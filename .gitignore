@@ -80,6 +80,16 @@ logs/
 # TypeScript 增量构建缓存
 *.tsbuildinfo
 
+# ============ 端侧构建状态（apps/*/ 各构建目录自己的 .gitignore 覆盖不全）============
+# 2026-10-25 补：`apps/shared/.gradle/`、`apps/android/.gradle|.kotlin/` 当时**没有被任何规则忽略**
+# （只有 `apps/harmony/spike/.gitignore` 写了 `.gradle/`），于是它们会以噪音形式出现在
+# 每个人的 `git status` 里。这些是**本机构建状态**，与 AGENTS.md §1 的 `.tooling/` 同理：
+# 不进版本库，也别清理别人的缓存。
+.gradle/
+.kotlin/
+oh_modules/
+local.properties
+
 # ============ 个人资料 / 求职材料（不进版本库）============
 resume/
 docs/JobHunting/
