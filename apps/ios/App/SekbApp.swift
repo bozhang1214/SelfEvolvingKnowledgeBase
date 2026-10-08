@@ -12,29 +12,116 @@ import SharedCore
 // 与 Android 的关系：同一份 `apps/shared`（Kotlin），同一套契约夹具；
 // 端侧端口（NSURLSession / Keychain / ONNX / PDFKit）是后续步骤，本骨架先用共享层的纯逻辑。
 
-/// 跑一遍自检并把结果打出来（供启动时与按钮共用）。
+/// 自检横幅前缀：**按平台**（iOS `SEKB_IOS_SELFTEST` / macOS `SEKB_MAC_SELFTEST`）。
+///
+/// 为什么要区分：两端跑的是同一份源码，但 `scripts/ios_app.sh` 是从模拟器统一日志里
+/// **按前缀抓**输出的，`scripts/mac_app.sh` 抓的是 stdout。两端都打同一个前缀时，
+/// "这条日志是哪一端跑出来的"就无从判断（跨端排查时这一点很值钱）。
+/// ⚠️ iOS 侧的前缀**一个字都不能改**——`scripts/ios_app.sh` 与历史验收记录都按它抓。
+var sekbSelfTestPrefix: String { SekbPlatform.selfTestPrefix }
+
+/// 跑一遍自检并把结果打出来（供启动时与设置页的"重新运行"共用）。
 @discardableResult
 func runAndReportSelfTest() -> [CheckResult] {
     // 起始标记：抓日志时以**最后一个标记**为界，避免把上一次运行的条目混进来
     // （实测踩到过：同一窗口里两次运行，日志里同时有上一次的 FAIL 和这一次的 PASS，
     //  看上去像"同一轮自相矛盾"）。`scripts/ios_app.sh` 会按这个标记裁剪。
-    report("SEKB_IOS_SELFTEST === RUN START ===")
+    let prefix = sekbSelfTestPrefix
+    report("\(prefix) === RUN START ===")
     let results = runSharedSelfTest()
     let pass = results.filter { $0.ok == true }.count
     let fail = results.filter { $0.ok == false }.count
     let skip = results.filter { $0.ok == nil }.count
-    report("SEKB_IOS_SELFTEST PASS=\(pass) FAIL=\(fail) SKIP=\(skip)")
+    report("\(prefix) PASS=\(pass) FAIL=\(fail) SKIP=\(skip)")
     for r in results {
         let tag = r.ok == nil ? "SKIP" : (r.ok! ? "PASS" : "FAIL")
-        report("SEKB_IOS_SELFTEST [\(tag)] \(r.name) — \(r.detail)")
+        report("\(prefix) [\(tag)] \(r.name) — \(r.detail)")
+    }
+    DispatchQueue.main.async {
+        SekbSelfTestStore.shared.results = results
+        SekbSelfTestStore.shared.running = false
+        SekbSelfTestStore.shared.lastRunAt = Date()
     }
     return results
+}
+
+/// **自检专用的假传输**：把云端请求换成写死的响应，用来在没有网络/后端的情况下
+/// 端到端验证 `SekbApiBridge`（登录 → enroll → SSE 聊天 → 路由事件上报 → 错误路径）。
+///
+/// 为什么值得单独造它：Apple 侧因为共享层缺 `@Throws` 而**不能用 `SekbApi`**
+/// （见 `SekbApiBridge` 的说明），桥是替代方案，就必须有证据表明它真的能跑通、
+/// 且**错误路径不会终止进程**。假传输是这份证据里唯一不依赖外部环境的部分。
+final class SelfTestTransport: NSObject, HttpTransport {
+
+    /// 全部返回 401（验证"HTTP 错误 → Swift 错误"而不是崩溃）
+    let alwaysUnauthorized: Bool
+
+    init(alwaysUnauthorized: Bool = false) {
+        self.alwaysUnauthorized = alwaysUnauthorized
+        super.init()
+    }
+
+    /// 协议文档 §2 的 enroll 响应样例（字段名以文档为准）
+    static let enrollFixture = "{\"device_id\":\"9f3c1a2b7d4e5f60\",\"device_token\":\"eyJ.selftest\","
+        + "\"token_type\":\"Bearer\",\"expires_in_hours\":720,\"scope\":\"edge\"}"
+
+    /// 协议文档 §3 的 SSE 帧（一行一个 `data:`，空行分隔）
+    static let sseFixture: [String] = [
+        ": keep-alive",
+        SseParser.companion.asDataLine(json: "{\"type\":\"thinking\",\"content\":\"先看本机资料\"}"),
+        "",
+        SseParser.companion.asDataLine(json: "{\"type\":\"token\",\"content\":\"端侧\"}"),
+        "",
+        SseParser.companion.asDataLine(json: "{\"type\":\"token\",\"content\":\"检索\"}"),
+        "",
+        SseParser.companion.asDataLine(json: "{\"type\":\"done\",\"meta\":{\"conversation_id\":\"c-1\","
+            + "\"intent\":\"chitchat\",\"execution\":{\"primary_plane\":\"edge\",\"primary_role\":\"chat\","
+            + "\"model\":\"qwen3.5-2b\",\"reason\":\"edge_preferred\",\"tier\":\"default\","
+            + "\"escalated\":0,\"by_plane\":{\"edge\":1},\"edge_decided\":1,\"edge_completed\":1,"
+            + "\"latency_ms\":42.5}}}"),
+        "",
+    ]
+
+    func get(url: String, headers: [String: String], timeoutSeconds: Int64) -> HttpResponse {
+        if alwaysUnauthorized { return HttpResponse(code: 401, body: "{\"detail\":\"unauthorized\"}") }
+        return HttpResponse(code: 200, body: "{}")
+    }
+
+    func postJson(url: String, headers: [String: String], body: String, timeoutSeconds: Int64) -> HttpResponse {
+        if alwaysUnauthorized {
+            return HttpResponse(code: 401, body: "{\"detail\":\"unauthorized\"}")
+        }
+        if url.hasSuffix("/auth/login") {
+            return HttpResponse(code: 200, body: "{\"user\":{\"id\":1},\"token\":\"tok-selftest\"}")
+        }
+        if url.hasSuffix("/device/enroll") || url.hasSuffix("/device/refresh") {
+            return HttpResponse(code: 200, body: SelfTestTransport.enrollFixture)
+        }
+        if url.hasSuffix("/edge/route-events") {
+            return HttpResponse(code: 200, body: "{}")
+        }
+        return HttpResponse(code: 404, body: "{\"detail\":\"not found\"}")
+    }
+
+    func postJsonStream(url: String, headers: [String: String], body: String,
+                        timeoutSeconds: Int64, onLine: @escaping (String) -> Void) -> Int32 {
+        if alwaysUnauthorized { return 401 }
+        for line in SelfTestTransport.sseFixture { onLine(line) }
+        return 200
+    }
 }
 
 @main
 struct SekbApp: App {
 
     init() {
+        // **macOS 视觉验证**：`SEKB_UI_PROBE=1` 时离屏渲染一页并写 PNG，然后自行退出。
+        // 放在自检之前：探针只是"看图"，不需要（也不该等）整轮自检。
+        // （macOS 上 `screencapture` 被系统权限拒绝，实测 "could not create image from display"，
+        //   所以这一端用 ImageRenderer 离屏渲染取图，见 `MacUiProbe.swift`。）
+        #if os(macOS)
+        if MacUiProbe.runIfRequested() { return }
+        #endif
         // **在 init 里触发**（不依赖 `onAppear`：无人值守时场景未前台化，`onAppear` 不触发），
         // 但**必须放到后台队列**执行：自检里有同步网络调用（信号量等待），
         // 在 `init()` 的主线程上阻塞会让 URLSession 的回调拿不到执行机会 → 整个自检卡住、日志全空
@@ -56,7 +143,7 @@ struct SekbApp: App {
     }
 
     var body: some Scene {
-        WindowGroup { ContentView() }
+        WindowGroup { RootView() }
     }
 }
 
@@ -168,8 +255,15 @@ func runSharedSelfTest() -> [CheckResult] {
     let toolName = (parsed as? ToolCallJsonParsedOk)?.call.tool ?? "-"
     out.append(.init(name: "toolcall_parse", ok: toolName == "device_time", detail: toolName))
 
-    // 7) 知识检索的阈值必须来自策略（没有策略时用默认 0.5）
-    out.append(.init(name: "retriever_default_threshold", ok: true, detail: "0.5（策略未接入）"))
+    // 7) 检索阈值默认值。
+    //    这一条**必须是真的断言**：上一版写的是 `ok: true, detail: "0.5（策略未接入）"`——
+    //    那是"永远 PASS 的空检查"，常量改了它也不会红（等于不存在）。
+    //    现在断言的是**实际参与检索的那个默认值**，并说明它为什么与 Android 的 0.5 不同
+    //    （不是各端一个口味，而是两套嵌入空间各自的标定点，见 `SekbDefaults`）。
+    out.append(.init(name: "retriever_default_threshold",
+                     ok: abs(SekbDefaults.retrievalMinScore - 0.40) < 1e-9,
+                     detail: String(format: "%.2f（本机加载 fp32 空间 → 0.40 是标定值；"
+                                    + "int8 空间分布上移，对应 0.5）", SekbDefaults.retrievalMinScore)))
 
     // 7.2) **凭证端口（Keychain）**：与 Android 的 CredentialStore 同接口、同编解码格式。
     //      用独立的 service 名，**不碰真实凭证**（无人值守自检不能有副作用）。
@@ -416,47 +510,281 @@ func runSharedSelfTest() -> [CheckResult] {
                      ok: streamCode == 200 && lines > 1,
                      detail: "code=\(streamCode) 行数=\(lines)（num_predict=8，验的是传输不是模型）"))
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // 10) UI 层自检（本期新增）
+    //
+    //     原则：**宁可少加，也不加"永远 PASS 的空检查"**。下面每一条都断言一个
+    //     具体的、可证伪的值——改坏了必须变红。
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    // 10.1 四页与 Android `SekbScreen` **同名同顺序**（导航壳的装配契约）
+    let screenNames = SekbScreen.allCases.map { $0.rawValue }
+    out.append(.init(name: "ui_screens_align_android",
+                     ok: screenNames == ["chat", "history", "documents", "settings"],
+                     detail: "页面顺序=\(screenNames.joined(separator: " → "))"))
+
+    // 10.2 Markdown 块级解析：与 Android `Markdown.parse` 同一套规则
+    //      （标题/段落/无序/有序/引用/代码块/表格/分隔线各一条，且表格必须被识别）
+    let mdLines = [
+        "# 标题一",
+        "这是**粗体**与`行内码`。",
+        "",
+        "- 项目 A",
+        "- 项目 B",
+        "",
+        "1. 第一",
+        "2. 第二",
+        "",
+        "> 引用一行",
+        "",
+        "```swift",
+        "let x = 1",
+        "```",
+        "",
+        "| 列一 | 列二 |",
+        "| --- | --- |",
+        "| a | b |",
+        "",
+        "---",
+    ]
+    let mdKinds: [String] = SekbMarkdown.parse(mdLines.joined(separator: "\n")).map { block in
+        switch block {
+        case let .heading(level, _): return "h\(level)"
+        case .paragraph: return "p"
+        case let .bullet(items): return "bullet\(items.count)"
+        case let .numbered(items): return "num\(items.count)"
+        case let .quote(lines): return "quote\(lines.count)"
+        case let .code(lang, code): return "code:\(lang):\(code)"
+        case let .table(header, rows): return "table\(header.count)x\(rows.count)"
+        case .divider: return "divider"
+        }
+    }
+    let mdExpected = ["h1", "p", "bullet2", "num2", "quote1",
+                      "code:swift:let x = 1", "table2x1", "divider"]
+    out.append(.init(name: "ui_markdown_blocks",
+                     ok: mdKinds == mdExpected,
+                     detail: mdKinds.joined(separator: ",")))
+
+    // 10.3 行内片段：粗体/行内码/链接各归各位，**未闭合标记降级为普通文本**
+    //      （流式输出必然出现半截标记，丢字比不渲染更糟）
+    func spanKind(_ s: MarkdownSpan) -> String {
+        switch s {
+        case let .text(t): return "t(\(t))"
+        case let .bold(t): return "b(\(t))"
+        case let .italic(t): return "i(\(t))"
+        case let .code(t): return "c(\(t))"
+        case let .link(t, u): return "l(\(t)|\(u))"
+        }
+    }
+    let spans = SekbMarkdown.inline("看**粗体**和`code`以及[链接](https://x)").map(spanKind)
+    let spansExpected = ["t(看)", "b(粗体)", "t(和)", "c(code)", "t(以及)", "l(链接|https://x)"]
+    let unclosed = SekbMarkdown.inline("**没闭合").map(spanKind)
+    out.append(.init(name: "ui_markdown_inline",
+                     ok: spans == spansExpected && unclosed == ["t(**没闭合)"],
+                     detail: "闭合=\(spans.joined(separator: " ")) | 未闭合=\(unclosed.joined(separator: " "))"))
+
+    // 10.4 原因码翻译：认识的要翻成人话，**不认识的原样透出**（绝不返回"未知原因"）
+    let explainKnown = PlaneExplain.describe(raw: "output_over_edge_budget(600>512)")
+    let explainUnknown = PlaneExplain.describe(raw: "some_future_code_v9")
+    // 升级场景的解释**不能**与徽章互相打脸（徽章依据实际完成的平面）：
+    // 这条断言 "端侧没能达标…"，并同时证明 ` · ` 分隔的原因码没有被前缀规则吞掉
+    let explainEscalated = PlaneExplain.outcome(completedOnDevice: false, escalated: true,
+                                                decisionReason: "edge_preferred",
+                                                escalateReason: "edge_preferred · degenerate")
+    out.append(.init(name: "ui_plane_explain_known",
+                     ok: explainKnown.contains("600>512") && !explainKnown.contains("原因："),
+                     detail: explainKnown))
+    out.append(.init(name: "ui_plane_explain_unknown_passthrough",
+                     ok: explainUnknown == "原因：some_future_code_v9",
+                     detail: explainUnknown))
+    out.append(.init(name: "ui_plane_explain_escalated_not_contradictory",
+                     ok: explainEscalated.hasPrefix("端侧没能达标")
+                        && explainEscalated.contains("重复、退化"),
+                     detail: explainEscalated))
+
+    // 10.5 检索来源解析（端侧 RAG 的可追溯性）+ 失败结果必须被跳过
+    let okToolResult = ToolResult(
+        ok: true,
+        output: "[0.696] doc-rag: 端侧 RAG 把知识索引放在设备上，检索不出网。\n"
+            + "[0.612] doc-privacy：设备专属数据永不出端。",
+        denied: false, reason: "")
+    let deniedToolResult = ToolResult(ok: false, output: "[0.900] ghost-doc: 不该被解析",
+                                      denied: true, reason: "未授权")
+    let parsedSources = RetrievalSources.parse([okToolResult, deniedToolResult])
+    out.append(.init(name: "ui_sources_parse",
+                     ok: parsedSources.count == 2
+                        && parsedSources.first?.sourceId == "doc-rag"
+                        && abs((parsedSources.first?.score ?? 0) - 0.696) < 1e-9
+                        && !parsedSources.contains { $0.sourceId == "ghost-doc" },
+                     detail: RetrievalSources.summary(parsedSources)))
+
+    // 10.6 相对时间文案（会话列表用；分段降级必须与 Android 同口径）
+    let t0: Int64 = 1_700_000_000_000
+    let relJust = TimeFmt.relative(t0 - 30_000, nowMillis: t0)
+    let relMin = TimeFmt.relative(t0 - 5 * 60_000, nowMillis: t0)
+    let relDays = TimeFmt.relative(t0 - 3 * 86_400_000, nowMillis: t0)
+    out.append(.init(name: "ui_time_relative",
+                     ok: relJust == "刚刚" && relMin == "5 分钟前" && relDays == "3 天前",
+                     detail: "\(relJust) / \(relMin) / \(relDays)"))
+
+    // 10.7 数据目录**真的可写**（不是"存在就算"）
+    //      受限沙箱里 Application Support 是被拒的，所以目录是解析出来的，
+    //      这里必须验证"解析到的那个目录能写进文件"，否则会话/索引会静默不落盘。
+    let dataDir = SekbPaths.dataDir()
+    let dataProbe = dataDir.appendingPathComponent("selftest-write-probe.txt")
+    let dataWritable = (try? "ok".write(to: dataProbe, atomically: true, encoding: .utf8)) != nil
+    try? FileManager.default.removeItem(at: dataProbe)
+    out.append(.init(name: "ui_data_dir_writable",
+                     ok: dataWritable,
+                     detail: "来源=\(SekbPaths.resolvedFrom) 路径=\(dataDir.path)"))
+
+    // 10.8 会话持久化往返 + **坏文件必须被跳过而不是让列表打不开**
+    //      （用独立临时目录：自检不能碰用户真实历史）
+    let tmpConvDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("sekb-selftest-conv-\(UUID().uuidString)")
+    let selftestConvStore = FileConversationStore(dir: tmpConvDir)
+    selftestConvStore.save(c: Conversation(
+        id: "c-selftest",
+        title: "自检会话",
+        updatedAtMillis: t0,
+        messages: [
+            StoredMessage(fromUser: true, text: "端侧检索为什么隐私更好？", plane: "", model: "",
+                          escalated: 0, reason: "", escalateReason: "", sources: []),
+            StoredMessage(fromUser: false, text: "因为索引在设备上。", plane: "edge",
+                          model: "qwen3.5-2b", escalated: 0, reason: "edge_preferred",
+                          escalateReason: "",
+                          sources: [StoredSource(sourceId: "doc-rag", score: 0.63, snippet: "索引在设备上")]),
+        ]))
+    selftestConvStore.saveCurrentId(id: "c-selftest")
+    let convReloaded = selftestConvStore.load(id: "c-selftest")
+    let convListBefore = selftestConvStore.list()
+    let convPointer = selftestConvStore.currentId()
+    // 故意写一个坏文件：`list()` 必须跳过它并计数，而不是整页打不开
+    try? "{ 这不是 JSON".write(to: tmpConvDir.appendingPathComponent("broken.json"),
+                             atomically: true, encoding: .utf8)
+    let convListAfter = selftestConvStore.list()
+    let convOK = convReloaded?.messages.count == 2
+        && convReloaded?.messages[1].plane == "edge"
+        && convReloaded?.messages[1].sources.count == 1
+        && abs((convReloaded?.messages[1].sources.first?.score ?? 0) - 0.63) < 1e-9
+        && convListBefore.count == 1 && convPointer == "c-selftest"
+        && convListAfter.count == 1 && selftestConvStore.lastSkippedCorrupt == 1
+    out.append(.init(name: "ui_conversation_roundtrip",
+                     ok: convOK,
+                     detail: "读回=\(convReloaded?.messages.count ?? -1) 条 · 列表=\(convListBefore.count) 段"
+                        + " · 指针=\(convPointer ?? "-") · 坏文件跳过=\(selftestConvStore.lastSkippedCorrupt)"))
+    try? FileManager.default.removeItem(at: tmpConvDir)
+
+    // 10.9 文档删除**不误清全库** + 重启后索引仍在（单篇删除是曾经踩过的真缺陷：
+    //      接口缺 deleteBySource 时调用方用"清空整库"绕过去，删一篇 = 全丢）
+    let tmpKBDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("sekb-selftest-kb-\(UUID().uuidString)")
+    let tmpKBFile = tmpKBDir.appendingPathComponent("index.json")
+    let kbStore = FileKnowledgeStore(file: tmpKBFile, provider: provider)
+    let kbIndex = KnowledgeIndex(provider: provider, store: kbStore, maxChars: 512, overlapChars: 64,
+                                 registry: kbStore, nowMillis: { 0 })
+    _ = kbIndex.ingest(sourceId: "doc-a", text: "端侧 RAG 把知识索引放在设备上，检索不出网，隐私更好。",
+                       name: "doc-a", sizeBytes: 30, deviceOnly: true)
+    _ = kbIndex.ingest(sourceId: "doc-b", text: "设备专属数据永不出端，这是产品的硬边界。",
+                       name: "doc-b", sizeBytes: 24, deviceOnly: true)
+    let kbBefore = kbStore.size()
+    let kbDocsBefore = kbStore.list().count
+    // ⚠️ 必须走 UI 用的那个入口（`KnowledgeIndex.remove` = 切片 + 元信息一起删）。
+    // 第一次写这条自检时直接调了 `store.deleteBySource`（那是**存储层**接口，只管切片），
+    // 于是元信息还在、断言失败——失败是真的，但错在自检用错了层级（这次修正的正是它）。
+    let kbRemoved = kbIndex.remove(sourceId: "doc-a")
+    let kbAfter = kbStore.size()
+    let kbDocsLeft = kbStore.list()
+    // 重新打开（模拟重启）：剩下的文档与它的切片都还在
+    let kbReopened = FileKnowledgeStore(file: tmpKBFile, provider: provider)
+    let kbOK = kbBefore >= 2 && kbRemoved >= 1 && kbAfter == kbBefore - kbRemoved && kbAfter >= 1
+        && kbDocsBefore == 2
+        && kbDocsLeft.count == 1 && kbDocsLeft.first?.id == "doc-b"
+        && kbReopened.size() == kbAfter && kbReopened.list().first?.id == "doc-b"
+        && kbReopened.space.id == provider.space.id
+    out.append(.init(name: "ui_doc_delete_isolated",
+                     ok: kbOK,
+                     detail: "删除前=\(kbBefore) 删除=\(kbRemoved) 剩余=\(kbAfter)"
+                        + " 重开=\(kbReopened.size()) 剩余文档=\(kbReopened.list().map { $0.id }.joined(separator: ","))"))
+    try? FileManager.default.removeItem(at: tmpKBDir)
+
+    // 10.10 云端桥（`SekbApiBridge`）：字段名 + SSE 装配 + **错误路径不终止进程**
+    //       为什么必须测：共享层 `SekbApi` 未标 `@Throws`，Apple 侧直接调它会在非 2xx 时
+    //       abort（本机实测 Abort trap: 6）；桥是替代方案，这些断言就是它的证据。
+    let fixtureTransport = SelfTestTransport()
+    let fixtureBridge = SekbApiBridge(transport: fixtureTransport, baseUrl: "http://selftest.local")
+    let fixtureCreds = SekbApiBridge.parseCredentials(SelfTestTransport.enrollFixture,
+                                                      nowMillis: t0)
+    out.append(.init(name: "bridge_parse_enroll_response",
+                     ok: fixtureCreds?.deviceId == "9f3c1a2b7d4e5f60"
+                        && fixtureCreds?.issuedAtMillis == t0
+                        && fixtureCreds?.expiresAtMillis == t0 + 720 * 3600 * 1000,
+                     detail: "id=\(fixtureCreds?.deviceId ?? "-") ttl小时=720"))
+    let loginToken = SekbApiBridge.parseLoginToken("{\"user\":{\"id\":1},\"token\":\"tok-1\"}")
+    let legacyToken = SekbApiBridge.parseLoginToken("{\"access_token\":\"tok-2\"}")
+    out.append(.init(name: "bridge_login_token",
+                     ok: loginToken == "tok-1" && legacyToken == "tok-2",
+                     detail: "token=\(loginToken ?? "-") access_token=\(legacyToken ?? "-")"))
+
+    var streamedText = ""
+    var streamedThinking = ""
+    let streamed = fixtureBridge.chatStream(deviceToken: "tok", message: "本机资料里有什么？",
+                                           conversationId: nil,
+                                           onToken: { streamedText += $0 },
+                                           onThinking: { streamedThinking += $0 })
+    var streamedPlane = "-"
+    var streamedConv = "-"
+    if case let .success(r) = streamed {
+        streamedPlane = r.execution?.primaryPlane ?? "-"
+        streamedConv = r.conversationId ?? "-"
+    }
+    out.append(.init(name: "bridge_sse_events",
+                     ok: streamedText == "端侧检索" && !streamedThinking.isEmpty
+                        && streamedPlane == "edge" && streamedConv == "c-1",
+                     detail: "正文=\(streamedText) 思考=\(streamedThinking) 平面=\(streamedPlane) 会话=\(streamedConv)"))
+
+    let routeEvent = RouteEventPayload(eventId: "e-selftest", role: "chat", plane: "edge",
+                                       reason: "edge_preferred", model: "qwen3.5-2b", tier: "default",
+                                       inputTokens: 3, outputTokens: 5, latencyMs: 1.5,
+                                       escalated: true, escalateReason: "degenerate",
+                                       signals: ["degenerate"], versions: ["tier": "default"])
+    let routeBody = SekbApiBridge.routeEventBody(routeEvent)
+    out.append(.init(name: "bridge_route_event_body",
+                     ok: routeBody.contains("\"escalated\":true")
+                        && routeBody.contains("\"signals\":[\"degenerate\"]")
+                        && routeBody.contains("\"input_tokens\":3")
+                        && routeBody.contains("\"versions\":{\"tier\":\"default\"}"),
+                     detail: String(routeBody.prefix(150))))
+
+    let unauthorizedBridge = SekbApiBridge(transport: SelfTestTransport(alwaysUnauthorized: true),
+                                           baseUrl: "http://selftest.local")
+    var failedCode: Int32 = 0
+    switch unauthorizedBridge.login(email: "a@b.c", password: "x") {
+    case let .success(token): failedCode = -1; _ = token
+    case let .failure(err): failedCode = err.code
+    }
+    // 这一条是整组里最重要的：**401 必须变成 Swift 错误而不是 abort**
+    out.append(.init(name: "bridge_http_error_is_swift_error",
+                     ok: failedCode == 401,
+                     detail: "401 → Swift 错误码=\(failedCode)（进程存活，说明桥的替代方案有效）"))
+
     return out
 }
 
-struct ContentView: View {
-    @State private var results: [CheckResult] = []
-    @State private var running = false
-
+/// 根视图。
+///
+/// 从"M5 自检骨架页"改成四页应用：自检结果移到「设置」页（可重跑），
+/// 首页就是聊天——与 Android 的 `AppShell` 同一结构。
+///
+/// `.sekbTheme()` 装在**根**上：配色随系统明暗整套切换，页面里不出现硬编码色值
+/// （Android 侧那次"深色模式只在主题文件里成立"的缺陷就是这么来的）。
+/// macOS 另给一个最小窗口尺寸：四页布局（顶栏 + 列表 + 输入栏）在过小的窗口里会挤。
+struct RootView: View {
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("SEKB 端侧宿主 · iOS（M5 骨架）")
-                    .font(.headline)
-                Text("共享层：apps/shared（Kotlin）→ SharedCore.framework")
-                    .font(.caption).foregroundStyle(.secondary)
-
-                Button(running ? "自检中…" : "重新运行自检") {
-                    running = true
-                    results = runAndReportSelfTest()
-                    running = false
-                }
-                .buttonStyle(.borderedProminent)
-
-                List(results) { r in
-                    HStack {
-                        Image(systemName: r.ok == nil ? "questionmark.circle"
-                                      : (r.ok! ? "checkmark.circle.fill" : "xmark.circle.fill"))
-                            .foregroundStyle(r.ok == nil ? .orange : (r.ok! ? .green : .red))
-                        VStack(alignment: .leading) {
-                            Text(r.name).font(.subheadline).monospaced()
-                            Text(r.detail).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .listStyle(.plain)
-            }
-            .padding()
-            .navigationTitle("SEKB")
-        }
-        .onAppear {
-            // 界面出现时确保列表有内容（真正的结果在 App.init 里已经跑过并打过日志）
-            if results.isEmpty { results = runSharedSelfTest() }
-        }
+        #if os(macOS)
+        AppShell().sekbTheme().frame(minWidth: 460, minHeight: 720)
+        #else
+        AppShell().sekbTheme()
+        #endif
     }
 }

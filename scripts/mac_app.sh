@@ -5,7 +5,18 @@
 # 用法：
 #   bash scripts/mac_app.sh build     # 产出 .tooling/tmp/mac-app/Sekb.app
 #   bash scripts/mac_app.sh run       # build + 直接跑二进制并抓自检输出
+#   bash scripts/mac_app.sh ui        # build + 逐页**离屏渲染** PNG 到 apps/mac/docs/screenshots/
 #
+# ## 关于 `ui`（macOS 的视觉验证）
+#
+# 本机 `screencapture -x` 实测失败（`could not create image from display`：屏幕录制权限被拒），
+# 所以这一端不用屏幕截图，改用 `ImageRenderer` **离屏渲染**（`SEKB_UI_PROBE=1`，见
+# `apps/ios/App/MacUiProbe.swift`）：不需要任何系统权限，渲染的是同一份 `AppShell` 视图树。
+# 它的局限（写进文档，不冒充截图）：不含窗口标题栏/圆角，也不是真实窗口的像素。
+#
+# 逐页状态由两个只读环境变量摆位：`SEKB_INITIAL_SCREEN` / `SEKB_DEMO_SEED`
+# （与 `scripts/ios_app.sh ui` 同一套开关，两端同一份源码、同一套验证方法）。
+# ============================================================
 # ## 设计要点（都是与 iOS 侧的**有意差异**，不是遗漏）
 #
 # 1. **源码直接复用 `apps/ios/App/*.swift`，不复制一份。**
@@ -51,8 +62,13 @@ export KONAN_DATA_DIR="${KONAN_DATA_DIR:-$ROOT/.tooling/konan}"
 
 build_app() {
     echo "── 1/3 产出 macosArm64 的 SharedCore.framework ──"
-    ( cd "$ROOT/apps/android" && ./gradlew --no-daemon -PsekbNativeTargets=true \
-        :shared:linkDebugFrameworkMacosArm64 --console=plain -q ) || return 1
+    # `SEKB_SKIP_FRAMEWORK_BUILD=1`：复用已有 framework（理由与注意项同 ios_app.sh）
+    if [ "${SEKB_SKIP_FRAMEWORK_BUILD:-0}" = "1" ]; then
+        echo "   ⚠️ 跳过共享层构建，复用：$FW_MAC/SharedCore.framework（$(stat -f '%Sm' "$FW_MAC/SharedCore.framework" 2>/dev/null)）"
+    else
+        ( cd "$ROOT/apps/android" && ./gradlew --no-daemon -PsekbNativeTargets=true \
+            :shared:linkDebugFrameworkMacosArm64 --console=plain -q ) || return 1
+    fi
     [ -d "$FW_MAC/SharedCore.framework" ] || { echo "❌ 缺少 framework：$FW_MAC" >&2; return 1; }
     [ -d "$ORT_MAC/onnxruntime.framework" ] || {
         echo "❌ 缺少 ONNX Runtime macOS 切片：$ORT_MAC" >&2
@@ -116,7 +132,11 @@ run_app() {
     # 若应用异常不退出，这里用纯 bash 的看门狗兜底，避免无人值守时挂死。
     local out_file="$TMPDIR/mac-selftest.log"
     : > "$out_file"
-    SEKB_SELFTEST_ONLY=1 "$APP_BUNDLE/Contents/MacOS/$APP_NAME" >"$out_file" 2>&1 &
+    # 数据目录显式落在仓库内：macOS 的 `~/Library/Application Support` 在本机文件策略下
+    # 是 `Operation not permitted`（实测），不指路就会退到临时目录 → 会话不持久。
+    SEKB_SELFTEST_ONLY=1 \
+    SEKB_DATA_DIR="${SEKB_MAC_DATA_DIR:-$TMPDIR/mac-app-data}" \
+        "$APP_BUNDLE/Contents/MacOS/$APP_NAME" >"$out_file" 2>&1 &
     local pid=$! waited=0 limit="${SEKB_MAC_WAIT:-240}"
     while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$limit" ]; do
         sleep 1; waited=$((waited + 1))
@@ -128,15 +148,59 @@ run_app() {
     wait "$pid" 2>/dev/null || true
     local out; out="$(cat "$out_file")"
     printf '%s\n' "$out" | grep -E 'SEKB_IOS_SELFTEST|SEKB_MAC' || true
-    printf '%s\n' "$out" | grep -qE 'SEKB_IOS_SELFTEST PASS=' || {
+    # 前缀按平台区分（iOS `SEKB_IOS_SELFTEST` / macOS `SEKB_MAC_SELFTEST`）；
+    # 两个都认，这样旧日志与新日志都能判"自检跑完了没有"。
+    printf '%s\n' "$out" | grep -qE 'SEKB_(MAC|IOS)_SELFTEST PASS=' || {
         echo "❌ 没抓到自检总结行（应用可能没起来或中途失败）" >&2
         printf '%s\n' "$out" | tail -20 >&2
         return 1
     }
 }
 
+ui_app() {
+    build_app || return 1
+    local out_dir="$ROOT/apps/mac/docs/screenshots"
+    mkdir -p "$out_dir"
+    local empty_data="$TMPDIR/mac-ui-empty" demo_data="$TMPDIR/mac-ui-demo"
+    # 空状态截图必须**真的是空的**：每次都从零开始
+    rm -rf "$empty_data" "$demo_data"
+
+    shoot() {  # $1=文件名 $2=页面 $3=数据目录 $4=种子(0/1)
+        local name="$1" page="$2" data="$3" seed="$4"
+        local log="$TMPDIR/mac-ui-$name.log"
+        : > "$log"
+        SEKB_UI_PROBE=1 \
+        SEKB_INITIAL_SCREEN="$page" \
+        SEKB_DEMO_SEED="$seed" \
+        SEKB_DATA_DIR="$data" \
+        SEKB_UI_PROBE_OUT="$out_dir/$name.png" \
+        SEKB_UI_PROBE_WIDTH="${SEKB_UI_PROBE_WIDTH:-460}" \
+        SEKB_UI_PROBE_HEIGHT="${SEKB_UI_PROBE_HEIGHT:-860}" \
+            "$APP_BUNDLE/Contents/MacOS/$APP_NAME" >"$log" 2>&1 || true
+        local line; line="$(grep -m1 'SEKB_MAC_SELFTEST_UI_PROBE\|SEKB_IOS_SELFTEST_UI_PROBE' "$log" || true)"
+        if [ -z "$line" ]; then
+            echo "❌ ${name}：探针没有输出（日志见 ${log}）" >&2
+            tail -5 "$log" >&2
+            return 1
+        fi
+        printf '%s\n' "$line"
+        printf '%s\n' "$line" | grep -q 'ok=true' || return 1
+    }
+
+    # 1) 空状态：**关键回归点**——空状态不能把底部输入栏挤出屏幕
+    #    （Android 真机上正是这个 bug：整屏只有空状态、用户没法输入）
+    shoot "01-chat-empty" chat      "$empty_data" 0 || return 1
+    # 2) 有数据的四页
+    shoot "02-chat"       chat      "$demo_data"  1 || return 1
+    shoot "03-history"    history   "$demo_data"  1 || return 1
+    shoot "04-documents"  documents "$demo_data"  1 || return 1
+    shoot "05-settings"   settings  "$demo_data"  1 || return 1
+    echo "✅ 截图目录：$out_dir"
+}
+
 case "${1:-run}" in
     build) build_app ;;
     run)   run_app ;;
-    *) echo "用法：bash scripts/mac_app.sh [build|run]" >&2; exit 2 ;;
+    ui)    ui_app ;;
+    *) echo "用法：bash scripts/mac_app.sh [build|run|ui]" >&2; exit 2 ;;
 esac
