@@ -70,7 +70,7 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: Unit tests（纯逻辑，96 用例）
+      - name: Unit tests（纯逻辑；用例数的权威值见 apps/android/docs/VERIFICATION.md）
         env:
           SEKB_COMPILE_SDK_MINOR: ${{ steps.sdk.outputs.minor }}
         run: bash scripts/android.sh test
