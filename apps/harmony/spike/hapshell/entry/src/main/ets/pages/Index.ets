@@ -19,6 +19,19 @@ const MODEL_RAWFILE: string = 'bge-small-fixed512.ms';
 // 源头是仓库的 apps/contract/*.json —— 不新增夹具，只分发同一份）
 const CONTRACT_DIR: string = 'contract/';
 
+/**
+ * 只取报告首行（`EMBED PASS 7/8` / `CONTRACT PASS 128/128` / `SMOKE PASS 11/11`）。
+ *
+ * ⚠️ 别把完整报告直接塞进 `Text`：实测多段十几行的诊断文本会让 ArkUI 在
+ * `CustomNode::Render` 里 SIGSEGV（崩溃栈全在 libace_compatible，与本端 Kotlin 无关）。
+ * 完整证据走 hilog（`scripts/harmony.sh` 也是从那里取的），界面只做"一眼看到结论"。
+ */
+function firstLine(report: string): string {
+  const idx: number = report.indexOf('\n');
+  const head: string = idx >= 0 ? report.substring(0, idx) : report;
+  return head.length > 120 ? `${head.substring(0, 120)}…` : head;
+}
+
 @Entry
 @Component
 struct Index {
@@ -30,13 +43,32 @@ struct Index {
   @State smoke: string = '（未调用）';
   @State contract: string = '（未调用）';
   @State libProbe: string = '（未调用）';
+  @State embed: string = '（未调用）';
 
+  /**
+   * ⚠️ **串行**跑所有探针（不是各自 fire-and-forget）。
+   *
+   * 为什么（2026-10-25 实测崩溃）：早前这里同时调 `runEmbedSanity()` 与 `runModel()`，
+   * 两者都是 async 且都会 open 一个 MindSpore Lite 会话 → 设备上抓到 cppcrash：
+   *   `SIGSEGV(SEGV_MAPERR)@0x30  probably caused by NULL pointer dereference`
+   *   `#00 libmindspore-lite.so mindspore::lite::MallocTensorData(Tensor*)+260`
+   *   `#01 ... SubGraphKernel::MallocSubgraphInputs()+64`
+   *   `#02 ... LiteOpActor::InitInputData()+152`   （Tid: OS_Actor_1）
+   * 即**并发跑模型会崩在推理内部**。串行化之后同一套代码不再崩（本轮实测：EMBED PASS）。
+   * 顺带 `ensureModelFile` 也改成共享同一个 in-flight Promise，避免两次并发复制 94MB 文件。
+   */
   aboutToAppear(): void {
+    this.runAll();
+  }
+
+  async runAll(): Promise<void> {
+    // 先跑不碰模型的（几毫秒），再按"一次只有一个模型会话"的顺序跑需要模型的
     this.runSmoke();
     this.runContract();
     this.runLibProbe();
     this.runKn();
-    this.runModel();
+    await this.runModel();        // 第 1 个模型会话：MindSpore 探针
+    await this.runEmbedSanity();  // 第 2 个（串行）：真实嵌入验收
   }
 
   /**
@@ -145,12 +177,50 @@ struct Index {
     }
   }
 
-  /** rawfile → 应用私有目录（只做一次）。返回真实文件路径。 */
+  /**
+   * H6：端侧嵌入验收（余弦 / L2 / 确定性 / 失败即同数量零向量）。
+   *
+   * 需要两样东西：`.ms` 的**真实文件路径**（先复制到私有目录）与 `vocab.txt` 的**内容**。
+   */
+  async runEmbedSanity(): Promise<void> {
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      const path: string = await this.ensureModelFile(ctx);
+      const vocab: string = await this.readRawText(ctx, 'vocab.txt');
+      const report: string = knspike.embedSanity(path, vocab);
+      for (const line of report.split('\n')) {
+        if (line.length > 0) {
+          hilog.info(0x0000, TAG, '%{public}s', line);
+        }
+      }
+      this.embed = report;
+    } catch (e) {
+      this.embed = `❌ ${e}`;
+      hilog.error(0x0000, TAG, 'EMBED FAIL — embed sanity threw: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /**
+   * rawfile → 应用私有目录（只做一次）。返回真实文件路径。
+   *
+   * ⚠️ 并发调用必须共享**同一个** in-flight Promise：两个调用者各自复制 94MB 时，
+   * 后一个会在前一个还没写完时去打开那个半成品文件——模型构建拿到半截数据，
+   * 表现就是"推理内部崩"（见 aboutToAppear 的崩溃栈）。
+   */
+  private modelCopy: Promise<string> | null = null;
+
   async ensureModelFile(ctx: common.UIAbilityContext): Promise<string> {
     const dest: string = `${ctx.filesDir}/${MODEL_RAWFILE}`;
     if (fileIo.accessSync(dest)) {
       return dest;
     }
+    if (this.modelCopy === null) {
+      this.modelCopy = this.copyModelFile(ctx, dest);
+    }
+    return this.modelCopy;
+  }
+
+  private async copyModelFile(ctx: common.UIAbilityContext, dest: string): Promise<string> {
     const data: Uint8Array = await ctx.resourceManager.getRawFileContent(MODEL_RAWFILE);
     const f = fileIo.openSync(dest, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE);
     try {
@@ -168,13 +238,19 @@ struct Index {
       Text(`echo_len() = ${this.echoLen}`).fontSize(15)
       Divider()
       Text('共享层冒烟（apps/shared → ohosArm64）').fontSize(17).fontWeight(FontWeight.Bold)
-      Text(this.smoke).fontSize(12).maxLines(14).textOverflow({ overflow: TextOverflow.Ellipsis })
+      // ⚠️ 只显示**首行**：完整报告在 hilog 里（脚本从 hilog 取证据）。
+      //    实测教训（2026-10-25）：把多段完整报告（各十几行）都塞进 Text 渲染，
+      //    ArkUI 在 `CustomNode::Render` 里 SIGSEGV 崩掉——**界面不是放日志的地方**。
+      Text(firstLine(this.smoke)).fontSize(12).maxLines(3)
       Divider()
       Text('契约夹具（apps/contract 37 case + 反向验证）').fontSize(17).fontWeight(FontWeight.Bold)
-      Text(this.contract).fontSize(12).maxLines(16).textOverflow({ overflow: TextOverflow.Ellipsis })
+      Text(firstLine(this.contract)).fontSize(12).maxLines(3)
       Divider()
       Text('H3/HR9 · libcurl 三探针（dlopen）').fontSize(17).fontWeight(FontWeight.Bold)
-      Text(this.libProbe).fontSize(12).maxLines(12).textOverflow({ overflow: TextOverflow.Ellipsis })
+      Text(firstLine(this.libProbe)).fontSize(12).maxLines(3)
+      Divider()
+      Text('H6 · 端侧嵌入验收（余弦/L2/确定性/降级）').fontSize(17).fontWeight(FontWeight.Bold)
+      Text(firstLine(this.embed)).fontSize(12).maxLines(3)
       Divider()
       Text('MindSpore Lite 端侧嵌入').fontSize(17).fontWeight(FontWeight.Bold)
       Text(`模型: ${this.modelPath}`).fontSize(11).fontColor(Color.Gray).maxLines(2)

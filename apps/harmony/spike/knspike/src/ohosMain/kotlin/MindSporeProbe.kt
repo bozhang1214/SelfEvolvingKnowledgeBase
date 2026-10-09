@@ -41,8 +41,11 @@ private fun additiveMask(mask: LongArray): FloatArray {
 fun sekbSpikeMindSporeSelfTest(modelPath: String): Int {
     var session: MsSession? = null
     return try {
+        // ⚠️ 走**进程内单例**（[MsSessionCache]）：MindSpore Lite 在同一进程里反复
+        // build/destroy 模型会崩（实测两条不同栈：predict 里 `MallocSubgraphInputs`、
+        // destroy 里 `LiteModel::Free`），所以只建一次、不再销毁。
         session = try {
-            MsSession.open(modelPath)
+            MsSessionCache.get(modelPath)
         } catch (e: MsError) {
             return MsStep.BUILD_FAILED
         }
@@ -106,7 +109,8 @@ fun sekbSpikeMindSporeSelfTest(modelPath: String): Int {
         if (v.any { it.isNaN() || it.isInfinite() }) return MsStep.PREDICT_FAILED
         elemNum
     } finally {
-        session?.close()
+        // **故意不 close**：会话是进程内共享的（见上）。见 `MsSessionCache` 的说明。
+        @Suppress("UNUSED_EXPRESSION") session
     }
 }
 
@@ -121,7 +125,7 @@ fun sekbSpikeMindSporeSelfTest(modelPath: String): Int {
 fun sekbSpikeMindSporeFirstFloat(modelPath: String): Int {
     var session: MsSession? = null
     return try {
-        session = MsSession.open(modelPath)
+        session = MsSessionCache.get(modelPath)   // 与 selftest 共用同一个会话
         val s = session
         // 与 selftest 同一套"按类型识别角色"的推导（**不依赖运行时张量名**）
         val tokens = s.inputs.filter { it.second != 262144 }.map { it.first }
@@ -156,6 +160,6 @@ fun sekbSpikeMindSporeFirstFloat(modelPath: String): Int {
         if (v0.isNaN() || v0.isInfinite()) return MsStep.PREDICT_FAILED
         (kotlin.math.abs(v0) * 1e6).toInt()
     } finally {
-        session?.close()
+        @Suppress("UNUSED_EXPRESSION") session   // 同上：共享会话不销毁
     }
 }

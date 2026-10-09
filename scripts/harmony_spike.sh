@@ -87,6 +87,21 @@ build_hap() {
     else
         echo "   ⚠️ 没找到 ${ms} —— 先跑 bash scripts/model_to_ms.sh all；HAP 会**不带模型**（界面会显示失败步骤码）"
     fi
+    # H5/H6：`vocab.txt` 进包（"文本→token"的输入源，之前**没在包里**）。
+    # 来源是宿主侧模型目录（Android 用的是同一份：`.tooling/models/bge-small-zh-v1.5/vocab.txt`），
+    # 不是"另找一份"——分词表不一致会让端侧 token 与云端/Android 不同，嵌入空间就不可比了。
+    local vocab
+    for cand in "$ROOT/.tooling/models/bge-small-zh-v1.5/vocab.txt" \
+                "$ROOT/apps/android/app/src/test/resources/bge-small-zh-vocab.txt"; do
+        if [ -f "$cand" ]; then vocab="$cand"; break; fi
+    done
+    if [ -n "${vocab:-}" ]; then
+        mkdir -p "$raw"
+        cp "$vocab" "$raw/vocab.txt"
+        echo "   ✅ vocab.txt 进包（$(wc -l < "$vocab" | tr -d ' ') 行，源=${vocab#$ROOT/}）"
+    else
+        echo "   ⚠️ 找不到 vocab.txt（先跑 scripts/model_to_ms.sh 或 Android 测试资源）——嵌入会失败"
+    fi
     # H2：契约夹具进包（`apps/contract/*.json`）。App 启动时由 ArkTS 读 rawfile 传给 native runner。
     # **不新增夹具**：拷的就是仓库里那一份，所以四端跑的是同一批 case。
     # 同时把源文件哈希记到 `.tooling/harmony/contract-manifest.txt`，
@@ -153,13 +168,16 @@ verify_link() {
         [ -f "$spike_so" ] || { echo "❌ $abi: 缺 libknspike.so" >&2; ok=1; continue; }
         [ -f "$kn_so" ]    || { echo "❌ $abi: HAP 里没有 libkn.so（KMP 产物没进包）" >&2; ok=1; continue; }
         local undef
-        # 现在 HAP 侧用到 5 个 KMP 入口（2 个链路探针 + 2 个 MindSpore 真机日入口 + 1 个 H1 共享层冒烟）——
-        # 断言数量要与真实依赖一致，否则校验比依赖弱，将来漏接一个符号也发现不了。
-        undef="$("$nm" -D --undefined-only "$spike_so" 2>/dev/null | grep -cE 'sekb_spike_(ping|echo_len|mindspore_selftest|mindspore_first_float|smoke|contract|contract_pair)')"
-        if [ "$undef" = "7" ]; then
-            echo "   ✅ $abi: libknspike.so 引用 7 个 KMP 入口（undefined，由同包 libkn.so 解析）"
+        # 现在 HAP 侧用到 **8 个** KMP 入口：ping / echo_len（链路探针）、
+        # mindspore_selftest / mindspore_first_float（真机日入口）、smoke（H1 共享层冒烟）、
+        # contract / contract_pair（H2 契约夹具）、embed_sanity（H6 嵌入验收）。
+        # ⚠️ 每新增一个 @CName 入口都要同步改这里：**校验比真实依赖弱**时，将来漏接一个符号也发现不了
+        # （这个数字就漏过一次：加了 contract/contract_pair 仍写着 4）。
+        undef="$("$nm" -D --undefined-only "$spike_so" 2>/dev/null | grep -cE 'sekb_spike_(ping|echo_len|mindspore_selftest|mindspore_first_float|smoke|contract|contract_pair|embed_sanity)')"
+        if [ "$undef" = "8" ]; then
+            echo "   ✅ $abi: libknspike.so 引用 8 个 KMP 入口（undefined，由同包 libkn.so 解析）"
         else
-            echo "   ❌ $abi: 只找到 $undef/7 个 KMP 符号引用" >&2; ok=1
+            echo "   ❌ $abi: 只找到 $undef/8 个 KMP 符号引用" >&2; ok=1
         fi
     done
     if unzip -l "$hap" 2>/dev/null | grep -q 'rawfile/bge-small-fixed512.ms'; then

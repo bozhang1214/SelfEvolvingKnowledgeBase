@@ -1185,3 +1185,80 @@ HR9 要求"任一不通就回头报告，不要硬啃"——所以 H3 的完整 
 >
 > ⚠️ 注意：H4 的**自检**（enroll/refresh）依赖网络，因此也一并被这个决策阻塞；
 > 但 HUKS 本身的**加解密往返 + 重启后仍有效**不依赖网络，可以先做（且已确认 `libhuks_ndk.z.so` 可用）。
+
+---
+
+## ⚠️ H5/H6 半程：嵌入链路在设备上跑通，但**同空间未达成**，根因已锁定到模型转换链（2026-10-25）
+
+### 一条命令 + 原始输出
+
+```bash
+bash scripts/harmony.sh embed 90
+```
+
+设备（127.0.0.1:5555）原始 hilog：
+
+```
+EMBED FAIL 7/9
+PASS embed_failure_returns_zeros — 条数=3（期望 3）全零=true 维度=512 lastError=会话未打开（先 open()）
+PASS embed_open_model — 模型=bge-small-fixed512.ms 输入=[(input_ids, 512), (token_type_ids, 512), (sekb_additive_mask_zero, 262144)]
+PASS embed_dim — 维度=512/512
+PASS embed_token_debug — A=[101, 4999, 904, 2972, 4415, 711, 784, 720](11) B=[101, 1266, 776, 791, 1921, 1914, 756, 6760](15)
+PASS embed_mask_write_readback — 写入 -inf 个数=256512 读回=256512，逐位一致
+PASS embed_l2_norm — ‖vA‖=1.0000（期望 1.0000）
+PASS embed_deterministic — 两次嵌入逐位相同
+FAIL embed_sanity_cosine — cos=0.8154（Android 基线 0.244）
+FAIL embed_mask_value_scan — 扫描：-1e9=0.8154 -65504=0.8154 -1e4=0.8154 -inf=0.8154
+```
+
+### 已成立的部分（这些是真的）
+
+| 项 | 证据 |
+|---|---|
+| 模型在设备上加载并推理 | `embed_open_model` 打印出**真实输入名与元素数**：`input_ids=512 / token_type_ids=512 / sekb_additive_mask_zero=262144`（与 `.ms` 声明一致，且**不是** `Parameter_N`） |
+| 输入角色按**名字**选（不再依赖不稳定的声明顺序） | 同上 + `角色识别=按名字（可靠）`；此前按顺序取曾把 ids/types 互换 |
+| 掩码**确实写进模型缓冲** | 写入读回：`-inf` 个数 256512 == 读回 256512，逐位一致（`OH_AI_TensorSetData` 无返回值，所以专门加了读回判据） |
+| 分词与 host `tokenizers` **逐 id 相同** | 设备 `A=[101,4999,904,2972,4415,711,784,720](11)` == host 同串 |
+| 512 维 + L2 归一化 + 确定性 | `‖vA‖=1.0000`、两次嵌入逐位相同 |
+| **失败即降级**（HR8 第 4 条） | 模型不可用时 `embed` 返回**同数量**零向量（条数=3、全零、维度=512），**不是空数组**（空数组会让 `ingest` 越界崩溃） |
+
+### 未达成的部分，以及根因（**两条实验定死了它**）
+
+**① host 侧对照实验**（`scripts/check_maskfree_padding_gap.py`，用 `.tooling/` 里现成的两张 ONNX，无需设备）：
+
+```
+原型图 ms-static-1x512.onnx（图内掩码链）      cos(A,B) = 0.2439   ← Android 基线 0.244
+变体图 ms-static-maskinput.onnx（掩码作输入）   cos(A,B) = 0.2439   ← 同一张图、同一套 id、同一个 -inf 约定
+两图同一输入的 CLS 向量最大逐元素差 = 1.0e-07
+```
+
+即：**模型变体本身没问题，正确的 additive mask 在 host 上能算出 0.2439**；也说明
+`model_to_ms_maskfree.py` 头部那句"带 padding 时预期不一致"对本变体**不成立**（该文档需更正）。
+
+**② 设备侧掩码取值扫描**：把被掩位分别填 `-1e9 / -65504 / -1e4 / -inf` 四次重算 →
+**四个值给出完全相同的 0.8154**。掩码内容已被读回证明写对了，取值又完全不影响结果。
+
+**结论（可证伪，且已被两条实验支持）**：转换出的 `bge-maskinput.ms` **在运行时完全忽略了
+`sekb_additive_mask_zero` 这个图输入**（转换器把改接后的图输入**常量折叠**了）。
+于是所有 padding 位都参与注意力 → 两段无关文本的向量被 padding 主导 → 余弦从 0.244 抬到 0.8154。
+**这不是 Kotlin/端口的缺陷**，而是 `.ms` 转换链的缺陷（同一份 ONNX 在 onnxruntime 上是 0.2439）。
+
+**下一步（不在本轮范围，方向明确）**：让转换后的图**真的保留掩码输入**——可选
+① 不把掩码重接到"图输入"，而是保留原图的 `attention_mask` 路径，另行解决当初的"0 CPU 挂起"；
+② 在重写脚本里**验证转换产物**（对同一输入，`.ms` 与 ONNX 的 CLS 向量必须逐位近似），
+把"转换是否保留了掩码"变成**构建期断言**而不是事后发现；
+③ 若 ② 证明 MindSpore 无法保真，则回到 ONNX Runtime 路线或退 ArkTS 路线（RFC §4 D2 的出口）。
+**在此之前，端侧嵌入不能用于检索阈值标定**（空间与云端不一致，违反 RFC M3 不变量）。
+
+### 顺带修掉的三处真缺陷（都在这一轮被逼出来）
+
+| # | 缺陷 | 后果 |
+|---|---|---|
+| 1 | `MsSession.predictTyped` 里 `feeds[name] ?: continue` **静默跳过**未匹配的输入 | 某个输入没喂也照样出向量，"看起来正常但是错的"；现已改为**两边都必须齐全**，缺谁就报谁 |
+| 2 | 输入角色**按声明顺序**取（`input_ids` 与 `token_type_ids` 元素数相同，无法用元素数区分） | 顺序一变 ids/types 互换；现改为**按名字**取（实测运行时暴露的是真实 ONNX 名字），名字不可辨认才退回顺序 |
+| 3 | 反复 `OH_AI_ModelBuildFromFile` + `OH_AI_ModelDestroy` 会崩（抓到两条不同的栈：predict 里 `MallocSubgraphInputs`、destroy 里 `LiteModel::Free`） | 改为**进程内单例会话**（`MsSessionCache`），这也正是端侧应有的形态：一个模型、一个会话 |
+| 4 | 界面把多段完整诊断报告都塞进 `Text` 渲染 | ArkUI 在 `CustomNode::Render` 里 SIGSEGV（栈全在 `libace_compatible`，与本端 Kotlin 无关）→ 界面只显示**首行**，完整证据走 hilog（H8 做 UI 时的硬约束） |
+| 5 | `@Synchronized` 用在 `MsSessionCache` 上 | **JVM 专有**注解，Kotlin/Native 上 `Unresolved reference 'Synchronized'`（编译期就红）→ 去掉并写明"为什么这里不需要锁"（NAPI 全部由 UI 线程串行调用） |
+
+> **另一处必须记的口径修正**：本轮我第一版把余弦判据写成 `cos < 0.95`，于是 `0.8154` 也 PASS——
+> 那是**假绿**。判据已改成 `|cos - 0.244| <= 0.02`（对齐 Android 基线）。**"小于 1 就行"不是判据**。

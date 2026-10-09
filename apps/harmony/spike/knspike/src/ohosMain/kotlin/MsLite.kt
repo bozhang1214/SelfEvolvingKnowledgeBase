@@ -177,12 +177,26 @@ class MsSession private constructor(
      * 静默错配的症状是"向量不对"，那是最难查的一类问题。
      */
     fun predictTyped(feeds: Map<String, Feed>) {
+        // ⚠️ 这里**不能**用 `feeds[name] ?: continue` 静默跳过（本函数早前就是那么写的）。
+        // 后果是实测出来的：名字一旦对不上，那个输入**根本不会被写**，而模型照样能跑出一个
+        // "看起来正常"的向量——症状是"余弦与 Android 差三倍"（设备 0.8154 vs Android 0.244、
+        // 而 host 上用同一张图 + 同一套 id + 同一个掩码约定算出来是 0.2439），
+        // 极难从现象反推回"某个输入没喂进去"。
+        // 所以：**给的必须都被吃掉、模型要的必须都被喂到**，任何一边不齐都当场报错并列出名字。
+        val seen = mutableSetOf<String>()
         memScoped {
             OH_AI_ModelGetInputs(model).useContents {
                 for (i in 0 until handle_num.toInt()) {
                     val t = handle_list?.get(i) ?: continue
                     val name = OH_AI_TensorGetName(t)?.toKString() ?: continue
-                    val feed = feeds[name] ?: continue
+                    val feed = feeds[name]
+                    if (feed == null) {
+                        throw MsError(
+                            "输入 $name 没有喂数据（本次喂的是 ${feeds.keys}）。" +
+                                "静默跳过会让推理算出'看起来正常、其实是错的'向量，所以这里直接失败。",
+                        )
+                    }
+                    seen += name
                     val want = OH_AI_TensorGetElementNum(t).toInt()
                     if (feed.size != want) {
                         throw MsError("输入 $name 元素数不符：给了 ${feed.size}，模型要 $want")
@@ -197,10 +211,56 @@ class MsSession private constructor(
                     }
                 }
             }
+            val unknown = feeds.keys - seen
+            if (unknown.isNotEmpty()) {
+                throw MsError("喂了模型不认识的输入：$unknown（模型输入=$seen）")
+            }
             val outArr = alloc<OH_AI_TensorHandleArray>()
             val st = OH_AI_ModelPredict(model, OH_AI_ModelGetInputs(model), outArr.ptr, null, null)
             if (st != 0u) throw MsError("OH_AI_ModelPredict 失败 status=$st")
         }
+    }
+
+    /** **诊断**：把 float32 写进指定输入（不跑推理），配合 [readInputF32] 做写入读回。 */
+    fun writeInputF32(name: String, values: FloatArray) {
+        var target: COpaquePointer? = null
+        OH_AI_ModelGetInputs(model).useContents {
+            for (i in 0 until handle_num.toInt()) {
+                val t = handle_list?.get(i) ?: continue
+                if (OH_AI_TensorGetName(t)?.toKString() == name) {
+                    target = t
+                    break
+                }
+            }
+        }
+        val t = target ?: throw MsError("没有名为 $name 的输入")
+        val want = OH_AI_TensorGetElementNum(t).toInt()
+        if (values.size != want) throw MsError("$name 元素数不符：给了 ${values.size}，模型要 $want")
+        fillF32(t, values)
+    }
+
+    /**
+     * **诊断**：读回模型自有输入缓冲里的前 [n] 个 float32（在 `predict` **之前**调用）。
+     *
+     * 为什么需要它：写输入缓冲**没有任何状态可查**（`OH_AI_TensorSetData` 返回 void），
+     * 所以"我到底有没有把 additive mask 写进去"在设备上原本没有判据。
+     * 而 host 侧实验已证明"同一张图 + 同一套 token id + 正确的 additive mask → 余弦 0.2439"，
+     * 设备上却是 0.8154 —— 那就必须把"写了什么"变成**可观测事实**，而不是继续猜。
+     */
+    fun readInputF32(name: String, n: Int): FloatArray {
+        var target: COpaquePointer? = null
+        OH_AI_ModelGetInputs(model).useContents {
+            for (i in 0 until handle_num.toInt()) {
+                val t = handle_list?.get(i) ?: continue
+                if (OH_AI_TensorGetName(t)?.toKString() == name) {
+                    target = t
+                    break
+                }
+            }
+        }
+        val t = target ?: throw MsError("没有名为 $name 的输入")
+        val raw = OH_AI_TensorGetMutableData(t) ?: throw MsError("取 $name 数据指针失败")
+        return FloatArray(n) { raw.reinterpret<FloatVar>()[it] }
     }
 
     /**
@@ -248,6 +308,46 @@ class MsSession private constructor(
             if (st != 0u) throw MsError("OH_AI_ModelBuildFromFile 失败 status=$st（模型=$modelPath）")
             return MsSession(ctx, model)
         }
+    }
+}
+
+/**
+ * **进程内单例**的 MindSpore 会话。
+ *
+ * ## 为什么必须有它（不是"顺手做的优化"）
+ *
+ * 同一进程里反复 `OH_AI_ModelBuildFromFile` + `OH_AI_ModelDestroy`（94MB 模型）时，
+ * 实测在模拟器上崩过**两条不同的栈**：
+ * 1. predict 路径：`MallocTensorData → SubGraphKernel::MallocSubgraphInputs → LiteOpActor::InitInputData`
+ *    （`SIGSEGV@0x30`，Tid `OS_Actor_1`）；
+ * 2. destroy 路径：`OH_AI_ModelDestroy → LiteModel::Destroy → LiteModel::Free`（`SIGSEGV@0x8`）。
+ * 两者都只发生在"第二次及以后"的 build/destroy 周期里——第一次总是好的。
+ *
+ * 而端侧真实形态本来就该**只建一个会话**（换文本不换模型），所以这不是绕开问题，
+ * 而是把用法收敛到应该有的样子。副作用：进程退出前不释放模型内存（对端侧 App 是正常代价）。
+ */
+object MsSessionCache {
+    private var cached: MsSession? = null
+    private var cachedPath: String? = null
+
+    // ⚠️ **不要**在这里写 `@Synchronized`：那是 **JVM 专有**注解，Kotlin/Native 上
+    // `Unresolved reference 'Synchronized'`（本轮实测的编译错误）。
+    // 不加锁是**有依据的取舍**：所有 NAPI 入口都由 ArkTS 的 UI 线程调用，
+    // 而探针在 `Index.ets` 里已改成**串行**执行（并发跑模型会崩，见 aboutToAppear 的说明），
+    // 所以这里不存在真正的并发。若将来有后台线程调用，要换成 Kotlin/Native 的
+    // `kotlin.native.concurrent` 原语（或 platform.posix 的 pthread mutex），**不能**用 @Synchronized。
+    fun get(modelPath: String): MsSession {
+        val c = cached
+        if (c != null && cachedPath == modelPath) return c
+        val s = MsSession.open(modelPath)
+        cached = s
+        cachedPath = modelPath
+        return s
+    }
+
+    fun clear() {
+        cached = null
+        cachedPath = null
     }
 }
 

@@ -53,6 +53,9 @@ extern "C" const char* sekb_spike_contract(const char* routing, const char* sign
 // H2 反向验证：同一次调用里跑"原样夹具"与"反转期望值"两遍（返回两段报告，`-----` 分隔）。
 extern "C" const char* sekb_spike_contract_pair(const char* routing, const char* signals,
                                                 const char* privacy);
+// H6：端侧嵌入验收（余弦 / L2 范数 / 确定性 / 失败即同数量零向量）。
+// 参数：模型路径 + vocab.txt 内容（读文件是 ArkTS 侧的事）。
+extern "C" const char* sekb_spike_embed_sanity(const char* model_path, const char* vocab_text);
 
 static napi_value Ping(napi_env env, napi_callback_info /*info*/) {
     napi_value out = nullptr;
@@ -112,6 +115,28 @@ SEKB_STR_FN(MsFirstFloat, sekb_spike_mindspore_first_float)
 // 共享层冒烟：无参 → 返回多行字符串。调用点见 pages/Index.ets（逐行打 hilog）。
 static napi_value Smoke(napi_env env, napi_callback_info /*info*/) {
     const char* report = sekb_spike_smoke();
+    napi_value out = nullptr;
+    napi_create_string_utf8(env, report == nullptr ? "" : report, NAPI_AUTO_LENGTH, &out);
+    return out;
+}
+
+// H6：嵌入验收（模型路径 + vocab 文本 → 多行报告）。
+static napi_value EmbedSanity(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto strAt = [&](size_t i) -> std::string {
+        if (i >= argc || args[i] == nullptr) return {};
+        size_t len = 0;
+        napi_get_value_string_utf8(env, args[i], nullptr, 0, &len);
+        std::string buf(len + 1, '\0');
+        napi_get_value_string_utf8(env, args[i], buf.data(), buf.size(), &len);
+        buf.resize(len);
+        return buf;
+    };
+    const std::string model = strAt(0);
+    const std::string vocab = strAt(1);
+    const char* report = sekb_spike_embed_sanity(model.c_str(), vocab.c_str());
     napi_value out = nullptr;
     napi_create_string_utf8(env, report == nullptr ? "" : report, NAPI_AUTO_LENGTH, &out);
     return out;
@@ -368,6 +393,8 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"contractPair", nullptr, ContractPair, nullptr, nullptr, nullptr, napi_default, nullptr},
         // H3：libcurl 三探针（dlopen，运行期真实解析）
         {"libProbe", nullptr, LibProbe, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // H6：端侧嵌入验收
+        {"embedSanity", nullptr, EmbedSanity, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

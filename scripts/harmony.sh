@@ -14,6 +14,7 @@
 #   bash scripts/harmony.sh contract [秒数]    # H2：契约夹具 37 case + 内存反向验证（grep CONTRACT）
 #   bash scripts/harmony.sh contract-red [秒]  # H2：端到端反证——改**包内**夹具期望值必须变红
 #   bash scripts/harmony.sh probe [秒数]       # H3/HR9：平台库 dlopen 探针（libcurl 三探针的判定依据）
+#   bash scripts/harmony.sh embed [秒数]       # H6：端侧嵌入验收（余弦 0.244 / L2 1.0000 / 确定性 / 降级）
 #   bash scripts/harmony.sh log                # 只抓最近的 hilog（按 TAG 过滤）
 #   bash scripts/harmony.sh crash [--save]     # 列 faultlogger；--save 把最新一条拉回 docs/tmp/
 #   bash scripts/harmony.sh all                # build + install + selftest
@@ -431,6 +432,46 @@ probe() {
     echo "✅ 平台能力探针完成（结论已如实打印；libcurl 不可用是**事实**，不是脚本失败）"
 }
 
+# ── H6：端侧嵌入验收（同空间三项 + 降级契约）────────────────────────────────
+# 与 Android `SelfTest.kt` 的 `rag_embed_sanity` 同一口径（同一批文本、同一期望）：
+#   ① 两段无关文本余弦（Android 基线 **0.244**）；② L2 范数 **1.0000**；③ 两次嵌入逐位相同；
+#   ④ 模型不可用时 **embed 返回同数量零向量**（HR8：返回空数组会让 ingest 越界崩溃）。
+# 期望行：`EMBED PASS 5/5`（明细里含 cos 与 ‖v‖ 的实测值，便于与 Android 逐项对照）。
+embed() {
+    local wait_s="${1:-40}"
+    echo "── 1/3 构建（KMP 产物 + HAP，含 vocab.txt）──"
+    bash "$ROOT/scripts/harmony_spike.sh" all || die "构建失败（先看输出里的第一处 error）"
+
+    echo
+    echo "── 2/3 安装并启动（等待 ${wait_s}s；首启要把 94MB 模型复制到私有目录）──"
+    "$HDC" shell "aa force-stop $BUNDLE" >/dev/null 2>&1 || true
+    "$HDC" shell "hilog -r" >/dev/null 2>&1 || true
+    install
+    start
+    sleep "${wait_s}"
+
+    echo
+    echo "── 3/3 嵌入结果（原始 hilog；分两次查，避免明细把首行挤出窗口）──"
+    local heads detail
+    heads="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'EMBED' | tail -5 || true)"
+    detail="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a -E 'embed_' | tail -16 || true)"
+    echo "${heads}"
+    echo "── 明细 ──"
+    echo "${detail}"
+    [ -n "${heads}" ] || die "没抓到 EMBED 行——检查 ${wait_s}s 够不够（冷启动要复制 94MB 模型）"
+
+    if echo "${heads}" | grep -aq 'EMBED PASS'; then
+        echo
+        echo "✅ 端侧嵌入验收通过：$(echo "${heads}" | sed 's/.*SEKB_KN_SPIKE: //' | tail -1)"
+    else
+        die "❌ 嵌入验收未通过（明细见上）"
+    fi
+    local nfail
+    nfail="$(echo "${detail}" | grep -ac 'FAIL ' || true)"
+    [ "${nfail}" = "0" ] || die "❌ 明细里有 ${nfail} 个 FAIL 项"
+    echo "   明细 FAIL=0"
+}
+
 require_hdc
 case "${1:-}" in
     build)    build ;;
@@ -441,11 +482,12 @@ case "${1:-}" in
     contract) require_target; contract "${2:-}" ;;
     contract-red) require_target; contract_red_fixture "${2:-}" ;;
     probe)    require_target; probe "${2:-}" ;;
+    embed)    require_target; embed "${2:-}" ;;
     log)      require_target; log ;;
     crash)    require_target; crash "${2:-}" ;;
     all)      require_target; build && install && selftest "${2:-}" ;;
     # 校验 target 的动作都要联网检查，所以放在 case 内做
-    *) echo "用法：bash scripts/harmony.sh [build|install|start|selftest|smoke|contract|contract-red|probe|log|crash|all]" >&2; exit 2 ;;
+    *) echo "用法：bash scripts/harmony.sh [build|install|start|selftest|smoke|contract|contract-red|probe|embed|log|crash|all]" >&2; exit 2 ;;
 esac
 
 # 说明：这里**不做** `require_target` 的统一前置检查，因为 `build` 是纯本机构建、
