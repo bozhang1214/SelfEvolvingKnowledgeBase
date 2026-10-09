@@ -19,3 +19,6 @@
 # H2：契约夹具（apps/contract/*.json）由 build_hap 拷进来——**只引用不复制**，
 # 所以不入库。入库就等于制造第二份夹具，正是 apps/contract/README.md 反对的事。
 /entry/src/main/resources/rawfile/contract/
+# H5/H6：vocab.txt 也是 build_hap 从 .tooling/models 拷进来的（源在宿主侧模型目录），
+# 属构建产物 → 不入库（否则就是"第二份分词表"，与 apps/contract 的道理一样）。
+/entry/src/main/resources/rawfile/vocab.txt
