@@ -1,0 +1,37 @@
+# H4 · HUKS（Universal Keystore Kit）的 cinterop 绑定 —— 凭证端口的编译依赖
+#
+# 为什么存在（而不是 dlopen 手写）：三个事实决定了必须用 cinterop
+#   1. `OH_Huks_Result` 是按值返回的结构体（24 字节：int32 + 两个指针），`OH_Huks_Param` 里
+#      还有 union —— 手工布局编过了也只是"我猜对了"。实测：手写 `CStructVar` + 裸
+#      `ptr.reinterpret()` 在本 fork 的 Kotlin/Native 2.2.21 上直接编不过
+#      （`No value passed for parameter 'rawPtr'`；`COpaquePointer`/`MemScope` 已不可见）。
+#   2. 本仓库已有先例：同目录 `ohcrypto.def` 用同一套 sysroot 头 + linkerOpts 编过 `libohcrypto.so`。
+#   3. 设备侧可得性不靠猜：`bash scripts/harmony.sh probe` 已在模拟器上 dlopen 到
+#      `libhuks_ndk.z.so`（LOAD OK）。本 .def 让产物对它产生 DT_NEEDED，
+#      `scripts/harmony_spike.sh` 的产物断言会核对 DT_NEEDED 里真的有它。
+#
+# ==================== 三个实测坑（照抄旧文件一定会卡住）====================
+#
+# 坑 1 · 注释符：`.def` 只认 `#`，**不认 `//`**。第一版用 `//` 写注释，cinterop 把注释行
+#   与下一行粘成了 `package=//=huks`，Kotlin 侧永远解析不到包名。
+#   （同目录 `ohcrypto.def` 用的是 `//`，启用它之前要先改注释符。）
+#
+# 坑 2 · `headers=` 是相对**当前工作目录**解析的，而 HUKS 的头在 OHOS sysroot 里。更隐蔽的是：
+#   把 sysroot 目录直接写进 `compilerOpts = -I<sysroot>/usr/include` 时，**本 fork 的 cinterop
+#   会静默产出空包**（exit 0、klib 里 `package huks {}` 是空的），Kotlin 侧报的是
+#   `Unresolved reference: huks` —— 离根因十万八千里。实测对照组：同一份头文件从
+#   **仓库内的普通目录** include（`-I<repo>/.tooling/huks-headers` 或 `-isystem` 同一目录）
+#   都能正常生成 45 条声明；只有指向 sysroot 时才为空。
+#   → 因此这里用 `scripts/harmony.sh sync-huks-headers` 把 6 个头文件**逐字节复制**到
+#     `src/nativeInterop/include/`（随仓库入库，来源与校验记录写在 `include/README.md`）。
+#
+# 坑 3 · Gradle DSL：cinterop 只能建在 **compilation** 上
+#   `kotlin.targets.getByName("ohosArm64").compilations.getByName("main").cinterops.create(...)`。
+#   写成 `kotlin.sourceSets.getByName("ohosArm64Main").cinterops` 会报 `Unresolved reference:
+#   cinterops`（workflow F 那边也撞了同一处，见 apps/harmony/README.md 的实现记录）。
+# ========================================================================
+package = huks
+compilerOpts = -I/Users/zhangbo/VSCodeSpace/SelfEvolvingKnowledgeBase/apps/harmony/spike/knspike/src/nativeInterop/include
+headers = huks/native_huks_api.h huks/native_huks_param.h huks/native_huks_type.h
+linkerOpts = -lhuks_ndk.z
+language = C

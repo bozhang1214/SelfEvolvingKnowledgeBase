@@ -1462,3 +1462,138 @@ af1a8691d172f26a700671e302626f0b69369bdd0ce6cfefcc59f12c3c0e720c  bge-maskinput-
 > **仍未做**：`.ms` 的数值判据跑的是 **Linux aarch64 runtime**（与鸿蒙 runtime 是同一套 C API 的两个
 > 名字、同一份转换产物），**不是**鸿蒙 runtime 本身；`bge-maskinput-i32.ms`（与产物同声明的对照产物）
 > 已能转换但没有单独上设备跑，其数值等价由 host 侧两条断言覆盖。
+
+---
+
+## ✅ H3 网络端口 + H4 HUKS 凭证端口（2026-10-12，工作流 E′，模拟器实测）
+
+### 一条命令 + 原始输出
+
+```bash
+bash scripts/harmony.sh net 30
+```
+
+`net` 会跑**两轮**（第 2 轮 `aa force-stop` 后**不重装**再起，专门验"重启后仍有效"），
+每轮都要求首行 `H3 PASS` / `CRED PASS`，且明细 **FAIL=0**。设备（`127.0.0.1:5555`）原始 hilog：
+
+```
+── 1/4 第 1 轮：首跑（HUKS 生成/复用密钥 + 凭证写盘） ──
+   H3:   H3 PASS 3/3
+   ── 明细 ──
+PASS transport_get_host_ollama — GET http://127.0.0.1:11434/api/tags → code=200（期望 200）
+PASS transport_get_host_ollama__body — 响应体：ArkTS 声明 3474B、Kotlin 侧 3474 字符
+PASS transport_get_host_ollama__fields — 共享层口径的字段解析出来=true（device_id/device_token/expires_in_hours）
+PASS transport_refuses_bad_endpoint — GET http://127.0.0.1:9/api/tags → code=-1（期望**非 2xx**）
+PASS transport_refuses_404 — GET http://127.0.0.1:11434/api/does-not-exist → code=404（期望 404）
+PASS transport_stream_lines — http://127.0.0.1:11434/api/chat → code=200；ArkTS 切出 **3 行**、Kotlin 经 NAPI 收到 **3 行**
+PASS transport_sse_shared_parser — 共享层 SseParser 解析 9 行夹具 → 4 个事件：thinking/token/token/done
+PASS transport_sse_event_fields — done 事件字段：conversation_id=conv-h3、execution.primary_plane=cloud
+PASS huks_binding — cinterop 直链 libhuks_ndk.z.so（DT_NEEDED）
+PASS huks_key_ready — 本次在设备密钥库新建 AES-256-GCM 密钥（alias=sekb_ohos_credential_aes_gcm_v1）
+PASS huks_encrypt_decrypt_roundtrip — 明文=47B → 密文容器=81B（nonce 12 + tag 16 + 密文 47） → 解回=47B，逐字节相同=true
+PASS huks_ciphertext_hides_plaintext — 密文容器前 8 字节=534b42310c10ae09；明文串不可见=true
+PASS credential_codec_roundtrip — 共享层 CredentialCodec：encode=70 字符（3 个分隔符）→ decode 逐字段相同=true
+PASS credential_store_save_load — save → load：ohos-dev-1791778729456/tok=ohos-tok…(24)
+PASS credential_restart — 本轮 load() 读到了上一次进程写盘的凭证（首轮已写入，见下）
+PASS credential_store_persists — 本轮**未** clear（清掉就验不了「重启后仍有效」）
+
+── 2/4 第 2 轮：force-stop 后重启、**不重装**（验「重启后仍有效」） ──
+   H3:   H3 PASS 3/3
+   CRED: CRED PASS 8/8
+PASS transport_stream_lines — http://127.0.0.1:11434/api/chat → code=200；ArkTS 切出 **4 行**、Kotlin 经 NAPI 收到 **4 行**
+PASS credential_restart — **本轮 load() 读到了上一次进程写盘的凭证**：
+     ohos-dev-1791778729456/tok=ohos-tok…(24)（HUKS 解密成功 ⇒ 密钥在设备密钥库、密文在私有目录，两者都跨进程存活）
+
+── 判定 ──
+   ✅ H3 首轮：H3 PASS 3/3
+   ✅ H3 次轮：H3 PASS 3/3
+   ✅ H4：CRED PASS 8/8
+
+✅ H3（网络端口）+ H4（HUKS 凭证端口）自检通过（明细 FAIL=0）
+```
+
+> 两轮的 `device_id` **逐字符相同**（`ohos-dev-1791778729456`）= 次轮读到的是首轮写下的凭证。
+> 前置条件：宿主 Ollama 在线且 `hdc rport tcp:11434 tcp:11434` 成功（`net` 动作会先探测并打印）。
+
+### H3 的关键决策：端口注入选「网络调用留在 ArkTS」
+
+三条硬事实（都有实测出处）决定了"网只能在 ArkTS 侧发"：HR9 探针穷举 5 个 libcurl 变体
+**全部 LOAD FAIL**、没有 OpenSSL、sysroot 里连 `usr/include/curl` 都没有。
+
+但**"ArkTS 发请求"不等于"协议搬到 ArkTS"**。本端采用的形状是
+**ArkTS 只做字节搬运，Kotlin 做协议与解析**：
+
+| 职责 | 落在哪 |
+|---|---|
+| HTTP 客户端（`request` / `requestInStream` / `on('dataReceive')`） | ArkTS（`model/NativeHttpBridge.ets`） |
+| **按 `\n` 切行**（只切行，不解释语义） | ArkTS |
+| **SSE 语义**（`data:` / 空行分隔 / 事件类型 / `done.meta`） | **共享层 `SseParser`**（Kotlin） |
+| **协议路径与 JSON 字段**（`device_id`/`device_token`/`expires_in_hours`、URL、鉴权头） | **共享层 `SekbApi`/`JsonX`**（Kotlin） |
+| 判据的判定与 `PASS/FAIL` 渲染 | Kotlin（`H3NetSelfTest.kt`） |
+
+**为什么不是方案 (i)（NAPI 把 ArkTS 函数注册给 Kotlin、Kotlin 实现 `HttpTransport`）**：
+那是一条**结构性死锁**，与实现水平无关——共享层 `HttpTransport` 是**同步**接口，
+而 Kotlin 是被 ArkTS **同步**调进来的（NAPI 在 ArkTS 线程上执行）；Kotlin 若在其中等
+ArkTS 的 `await`，回调只能排进**同一条**线程的任务队列，而那条线程正卡在 NAPI 里。
+iOS 能用 `DispatchSemaphore` 是因为 URLSession 的回调在**另一条线程**上，鸿蒙的 ArkTS
+任务队列没有那个自由度。
+
+代价：`HttpTransport` 接口在鸿蒙侧**暂时没有实现类**（接口本身一行未改）。将来若平台给出同步
+HTTP（或 `rcp` 的同步形态），补一个 `HarmonyHttpTransport` 即可回到 (i)。
+
+### H4：HUKS 走 **cinterop 直调**，不经 ArkTS 桥
+
+HR9 探针已证明 `libhuks_ndk.z.so` 在设备上 `LOAD OK`，所以凭证端口是**纯 Kotlin/Native**：
+`HuksCredentialStore` 实现共享层 `CredentialStore`；明文编解码**复用** `CredentialCodec`；
+密钥由 HUKS 生成（AES-256-GCM，**取不出密钥本体**）；密文容器 `SKB1|nonceLen|tagLen|nonce|tag|body`。
+
+**必须先写的最小探针**（HR2 的要求）就是 `huks_encrypt_decrypt_roundtrip`
+（明文 47B → 密文 81B → 解回逐字节相同），不需要网络、不需要 ArkTS。
+
+### 三个实测坑（照抄旧文件会卡住，都写进了 `huks.def` 与 `build.gradle.kts` 的注释）
+
+| # | 坑 | 表现 |
+|---|---|---|
+| 1 | **`.def` 只认 `#` 注释，不认 `//`** | cinterop 把注释行与下一行粘成 `package=//=huks` → Kotlin 侧 `Unresolved reference: huks`（同目录 `ohcrypto.def` 也用的是 `//`，启用它之前要先改） |
+| 2 | **`.def` 里不能用 `-I<sysroot>/usr/include`** | 本 fork 的 cinterop **静默退出 0 并产出空包**（`package huks {}` 空），报出来仍是 `Unresolved reference: huks`。对照实验：同一份头从**仓库内普通目录** include 时正常生成 **45 条声明**。→ 头文件逐字节复制进 `knspike/src/nativeInterop/include/`（`bash scripts/harmony.sh sync-huks-headers` 可重新同步，来源与哈希见该目录） |
+| 3 | **cinterop 只能建在 compilation 上** | `kotlin.sourceSets.getByName("ohosArm64Main").cinterops` → `Unresolved reference: cinterops`；要写 `ohosArm64Target.compilations.getByName("main").cinterops.create("huks")` |
+
+### 顺带修掉的一处**自伤**（探针把证据删了）
+
+`credSelfTest` 第一版在结尾**无条件 `clear()`**。后果：次轮 `load()` 只能拿到 null，
+`credential_restart` **永远不可能 PASS**，而报告里它显示成 FAIL —— 看起来像 HUKS 有问题，
+**其实是探针自己把证据删了**。现在 `clear()` 只在显式 `reset=1` 时验。
+
+### 反向验证（"判据不是摆设"的直接证据）
+
+两条都在**同一次运行**里、用**真实坏端点**取证（上一节原始输出里就是 PASS）：
+
+| 判据 | 端点 | 实观测 | 说明 |
+|---|---|---|---|
+| `transport_refuses_bad_endpoint` | `http://127.0.0.1:9/api/tags` | `code=-1` | 没人监听的端口（连不上） |
+| `transport_refuses_404` | `http://127.0.0.1:11434/api/does-not-exist` | `code=404` | **能连上**但路径不存在 → 证明"非 200 不会被当成成功" |
+
+> ⚠️ 试过但**不可行**的一条路（写下来免得下一位重试）：让脚本注入坏 URL（`param set` 或写控制文件）。
+> 应用沙箱 `/data/app/el2/100/base/com.sekb.ohos.spike/haps/entry/files` 对 `hdc shell`
+> 的 `shell` 用户（uid=2000）**不可写**（实测 `Permission denied`），
+> `param set sekb.test.badurl ...` 也被拒（`errNum is:1001`）。所以反向验证留在应用内。
+
+### 未验 / 未成（如实，别当已完成）
+
+1. **`SekbApi` 的 enroll / refresh / heartbeat / chatStream 尚未接线**：本次打通的是
+   "传输 + 判据"，没有账号与云端端点，所以 **enroll/refresh 的端到端未验**——
+   这是**还没做**，不是 SKIP（按仓库纪律：SKIP 只给环境限制类）。
+2. `transport_get_host_ollama__body` 只核对了"字节数 >0"；响应体**逐字节**完整性只由
+   `transport_stream_lines` 的"两侧行数相同"**间接**证明，没有做 CRC/哈希。
+3. `@ohos.net.http` 的流式只验证了 `dataReceive`（逐块）与总行数；`rcp` 未做对比
+   （选 `@ohos.net.http` 的理由见 `NativeHttpBridge.ets` 文件头）。
+4. 未做 release 构建下的复跑（本次都是 debug HAP）。
+
+### ⚠️ 一次协作事故（记下来避免重演）
+
+为了把 H3/H4 从 `napi_init.cpp` 拆出去，我先 `git checkout` 了那个文件，
+**把工作流 F 当时未提交的 H5 改动清掉了**（我本该先备份再动）。随后双方又同时保存该文件，
+发生**交错写坏**（一个函数体被截断、括号 100/99）。最终形态（由主线定）：
+`napi_init.cpp` **由主线独占**，各工作流用**自己的头文件**（`napi_h3h4.h`）注册 ——
+冲突面从"整个文件"压到"一行 `#include` + 一行调用"。
+**教训：改完就 `git add <具体文件>` 提交**，工作区里的未提交改动没有第二份副本。
