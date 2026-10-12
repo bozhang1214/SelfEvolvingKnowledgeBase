@@ -460,7 +460,9 @@ class JobScheduleConfig(BaseModel):
     """
 
     enabled: bool = False
-    cron: str = "0 6 * * 1"                # 每周一 06:00（再由隔周校验决定是否真跑）
+    # ⚠️ 星期用名称 `mon`：APScheduler 的 day_of_week 为 0=周一（与标准 crontab 的 1=周一
+    # 不同），而 from_crontab 不做换算 —— 写数字 `1` 会落到**周二**。
+    cron: str = "0 6 * * mon"              # 每周一 06:00（再由隔周校验决定是否真跑）
     biweekly: bool = True                  # True=隔周；False=每周都跑
     timezone: str = "Asia/Shanghai"
     anchor_date: str = "2026-10-12"        # 隔周锚点：该周起，每隔一周的周一执行

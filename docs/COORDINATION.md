@@ -51,4 +51,5 @@
 | 2026-09-15 | 双方并发改 `market.py`（我 P4 重写、协作者加缓存改造） | **无损失**（协作者基于我的最新提交） | 侥幸；已加入认领表 |
 | 2026-09-15 | Gitea 推送镜像 `PushRejected: cannot lock ref` | 镜像同步失败 | `gitea_mirror.py` 已加重试 |
 | 2026-09-18 | 我用 `pkill -f "bash deploy/deploy.sh"` 清理一次误启动的部署，**该模式把执行命令的 ssh shell 自己也匹配杀了**；部署进程在「停服务取快照」阶段被杀 | **生产 backend 被留在 Exited 状态**（约 6 分钟不可用），并残留 `/tmp/sekb-deploy.lock` 使后续部署直接「已中止」 | 已用 `docker start sekb-backend` 恢复（health 200）；确认无持有者后 `rm -f /tmp/sekb-deploy.lock` 重新部署成功。教训：**不要用 pkill/pgrep 的 `-f` 模式去杀与自己命令行同名的进程**（改用显式 PID）；部署被中断后务必检查 ① 容器是否停在半成品 ② `/tmp/sekb-deploy.lock` 是否残留 |
+| 2026-10-12 | 协作者提交 `acd8b79`（"COORDINATION：D 收工…"）时，把我**尚未提交**的 `docs/COORDINATION.md` 改动（工作流 E 的登记行）一并卷进了他的提交 | **无内容损失**（行已入库，只是挂在别人的提交说明下）。同类情况若两边改的是**同一行**，就会静默覆盖 | 未改历史（main 禁强推）。教训：**自己没改完的文件不要留在工作区**——认领表这种"随时要改"的文件改完**立刻单独提交**；提交前继续按 §3 复核 `git diff`，看到不属于自己的改动就停下问清 |
 

@@ -1,10 +1,12 @@
 """四层职位定时调度器单测（隔周跳过 / 状态落盘 / 缺配置兜底）。"""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
+from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import JobLayerConfig, JobScheduleConfig
 from app.scheduler import job_scheduler as mod
@@ -14,7 +16,7 @@ from app.scheduler.job_scheduler import JobSearchScheduler
 def _cfg(**kw: Any) -> JobScheduleConfig:
     base: dict[str, Any] = {
         "enabled": True,
-        "cron": "0 6 * * 1",
+        "cron": "0 6 * * mon",
         "biweekly": True,
         "anchor_date": "2026-10-12",
         "user_id": "u1",
@@ -153,3 +155,43 @@ class TestStartGuards:
         s = JobSearchScheduler(_cfg(user_id=""), ctx=object())
         s.start()
         assert s.next_run_time() == ""
+
+class TestCronDayOfWeek:
+    """回归：**星期必须解析到周一**。
+
+    APScheduler 的 ``day_of_week`` 数字编号是 **0=周一**，而标准 crontab 是 **1=周一**，
+    且 ``CronTrigger.from_crontab`` **不做换算** —— 所以写 ``0 6 * * 1`` 会落到**周二**
+    （2026-10-12 部署后实测 ``next_fire`` 是 10-13 周二，才发现）。改用名称 ``mon`` 无歧义。
+    本用例把结论锁住，避免以后有人"顺手改回数字"。
+    """
+
+    #: 一个已知的周一中午：用它推算"下一个周一 06:00"
+    MONDAY_NOON = datetime(2026, 10, 12, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    def _next_fire(self, cron: str):
+        trig = CronTrigger.from_crontab(cron, timezone=ZoneInfo("Asia/Shanghai"))
+        return trig.get_next_fire_time(None, self.MONDAY_NOON)
+
+    def test_numeric_one_lands_on_tuesday(self):
+        """留着这条是为了说明"为什么不能用数字"：1 → 周二（APScheduler 语义）。"""
+        nxt = self._next_fire("0 6 * * 1")
+        assert nxt is not None and nxt.weekday() == 1  # 1 = Tuesday
+
+    def test_model_default_cron_is_monday(self):
+        nxt = self._next_fire(JobScheduleConfig().cron)
+        assert nxt is not None
+        assert nxt.weekday() == 0, f"默认 cron 未落在周一，而是 {nxt:%Y-%m-%d %A}"
+        assert (nxt.hour, nxt.minute) == (6, 0)
+
+    def test_shipped_config_cron_is_monday(self):
+        """直接校验仓库里 config.yaml 的真实取值（默认值对了不代表配置没被改错）。"""
+        from pathlib import Path
+
+        import yaml
+
+        cfg_path = Path(__file__).resolve().parents[2] / "config.yaml"
+        cron = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["job"]["schedule"]["cron"]
+        nxt = self._next_fire(cron)
+        assert nxt is not None
+        assert nxt.weekday() == 0, f"config.yaml 的 job.schedule.cron={cron!r} 未落在周一，而是 {nxt:%Y-%m-%d %A}"
+        assert (nxt.hour, nxt.minute) == (6, 0)
