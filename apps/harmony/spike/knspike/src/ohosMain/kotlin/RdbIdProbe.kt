@@ -96,6 +96,41 @@ fun sekbSpikeRdbIdProbe(databaseDir: String, runTag: String): String {
             (if (initRows != 0) " ⇒ **库不干净**：上表所有断言都会被残留数据污染" else ""),
     )
 
+    // ⓪ **最小实验（裸 SQL，不经任何封装）**：把每一步的返回码都报出来，
+    //    用来判定"写入不可见"到底是哪一层造成的（2026-10-26 主线加）。
+    run {
+        val t = "probe_raw"
+        val d = store.execute("CREATE TABLE IF NOT EXISTS $t (id TEXT PRIMARY KEY, v TEXT NOT NULL)")
+        val i = store.execute("INSERT OR REPLACE INTO $t (id, v) VALUES ('a', 'hello')")
+        val n1 = runCatching { vs.size() }.getOrElse { -1 }   // 这是 chunks 表，与 t 无关，仅作对照
+        var rawCount = -1
+        val cur = store.query("SELECT COUNT(*) AS n FROM $t")
+        if (cur != null) {
+            if (cursorNext(cur) == 0) rawCount = (cursorInt64(cur, "n") ?: -1L).toInt()
+            cursorDestroy(cur)
+        }
+        var rawVal: String? = null
+        var rawTrace: String = "(未查询)"
+        val cur2 = store.query("SELECT v FROM $t WHERE id='a'")
+        if (cur2 != null) {
+            // 先取轨迹（同一个游标、同一行），再取正式值
+            if (cursorNext(cur2) == 0) {
+                rawTrace = cursorTextProbe(cur2, "v")
+                rawVal = cursorText(cur2, "v")
+            } else {
+                rawTrace = "cursorNext 非 0"
+            }
+            cursorDestroy(cur2)
+        } else {
+            rawTrace = "query 返回 null"
+        }
+        r.check(
+            "raw_sql_visible",
+            d == RdbCode.OK && i == RdbCode.OK && rawCount == 1 && rawVal == "hello",
+            "裸 SQL：create=$d insert=$i count=$rawCount val='${rawVal ?: "<null>"}'（期望 0/0/1/hello）；chunks.size=$n1 ｜ 轨迹=[${rawTrace}]",
+        )
+    }
+
     // ① 写：一条已知记录（走生产路径 upsert → 纯 SQL INSERT OR REPLACE）
     vs.upsert(
         listOf(

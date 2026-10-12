@@ -405,13 +405,18 @@ fun cursorTextProbe(cur: CPointer<OH_Cursor>, name: String): String {
     if (idx < 0) return "$name: idx<0"
     val n = cursorColumnSize(cur, idx)
     val codes = IntArray(2)
+    var v1: String? = null
+    var v2: String? = null
     memScoped {
         val b1 = allocArray<ByteVar>(maxOf(n.toInt(), 1))
         codes[0] = cur.pointed.getText?.invoke(cur, idx, b1, n.toInt()) ?: -1
+        if (codes[0] == RdbCode.OK) v1 = b1.toKString()
         val b2 = allocArray<ByteVar>(maxOf(n.toInt() + 1, 1))
         codes[1] = cur.pointed.getText?.invoke(cur, idx, b2, (n + 1).toInt()) ?: -1
+        if (codes[1] == RdbCode.OK) v2 = b2.toKString()
     }
-    return "$name: idx=$idx size=$n getText(size)=${codes[0]} getText(size+1)=${codes[1]}"
+    return "$name: idx=$idx size=$n getText(size)=${codes[0]}/'${v1 ?: "-"}'" +
+        " getText(size+1)=${codes[1]}/'${v2 ?: "-"}'"
 }
 
 fun cursorInt64(cur: CPointer<OH_Cursor>, name: String): Long? {
