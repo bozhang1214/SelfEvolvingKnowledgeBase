@@ -121,26 +121,32 @@ object SekbApp {
      * @return `{"ok":true|false,"reason":"...","space":"...","dim":N,"millis":N,"db":"sekb_docs.db"}`
      */
     fun open(mp: String, vocab: String, dbDir: String, dbName: String = DOC_DB): String {
+        // ⚠️ **空库名必须归一成默认库**（2026-10-26 主线定位的真缺陷）：
+        //    ArkTS 侧 `openRag()` 传的是 `''`（"用默认库"的约定），而这里原来直接用空串当 `storeName`
+        //    → `OH_Rdb_GetOrOpen(storeName="")` 建出一个**没有名字的库**，写入落在 A 处、读取查 B 处，
+        //    现象就是"ingest 报 ok/chunks≥1、文档登记成功，但列表显示 0 段、检索 0 条"。
+        //    归一后 `activeDb` 与 `dbName` 都是真名，幂等判断（`activeDb == dbName`）也才成立。
+        val wantDb = dbName.ifBlank { DOC_DB }
         return lock.withLock {
             modelPath = mp
             vocabText = vocab
             databaseDir = dbDir
             // 同一个库已经打开 → 直接返回（幂等）
-            if (session != null && activeDb == dbName) return okJson()
+            if (session != null && activeDb == wantDb) return okJson()
             // 换库（自检用隔离库）→ 先关掉旧句柄，避免两个句柄同时持锁
             if (session != null) {
                 runCatching { session?.store?.close() }
                 session = null
             }
-            activeDb = dbName
+            activeDb = wantDb
             val t0 = com.sekb.shared.core.nowMillis()
             try {
                 val emb = MindSporeBgeEmbedding(mp, vocab)
                 emb.open()
-                val store = RdbVectorStore(dbDir, emb.space, dbName)
+                val store = RdbVectorStore(dbDir, emb.space, wantDb)
                 session = LocalDocSession(
                     embed = emb, store = store, index = KnowledgeIndex(emb, store, registry = store),
-                    spaceId = emb.space.id, dim = emb.space.dim, dbName = dbName,
+                    spaceId = emb.space.id, dim = emb.space.dim, dbName = wantDb,
                 )
                 openMs = com.sekb.shared.core.nowMillis() - t0
                 openError = ""

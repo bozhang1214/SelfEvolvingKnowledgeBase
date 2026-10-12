@@ -52,12 +52,31 @@ fun sekbSpikeRdbIdProbe(databaseDir: String, runTag: String): String {
     r.note("库=$dbName dir=$databaseDir")
 
     RdbStore.delete(databaseDir, dbName)
-    val (store, err) = RdbStore.open(databaseDir, dbName)
+    var (store, err) = RdbStore.open(databaseDir, dbName)
     if (store == null) {
-        r.check("open", false, "打开失败 errCode=$err")
-        return r.render()
+        // ⚠️ **对照实验**（2026-10-26 主线）：平台上先后出现过两个 databaseDir ——
+        // 早期探针用的是 `/data/app/el2/100/base/<bundle>/haps/entry/database`（当时 PASS 20/20），
+        // 现在 `UIAbilityContext.databaseDir` 给的是 `/data/storage/el2/database/entry`（报 14800037）。
+        // 两条路径都是"目录存在、可写"却只有一条能开库，所以这里**都试一遍**并分别报出来：
+        // 若旧路径能开、新路径不能 → 是路径/沙箱区域问题（可在 ArkTS 侧换用旧路径或改 area/securityLevel）；
+        // 两条都不能开 → 是这台模拟器实例的 storage 状态问题（换实例/重装系统镜像）。
+        val alt = "/data/app/el2/100/base/com.sekb.ohos.spike/haps/entry/database"
+        val (store2, err2) = RdbStore.open(alt, dbName)
+        r.check(
+            "open_alt_path",
+            store2 != null,
+            "新路径 errCode=$err ｜ 旧路径($alt) errCode=$err2 " +
+                (if (store2 != null) "→ **旧路径能开**（说明是路径/区域问题）" else "→ 两条都不能开（像是实例 storage 状态问题）"),
+        )
+        if (store2 != null) { store = store2; err = err2 }
+        // 两条都失败：如实返回，后续断言会全部标 FAIL（不掩盖）
+        if (store == null) {
+            r.check("open", false, "两条路径都打不开：新=$err 旧=$err2")
+            return r.render()
+        }
+    } else {
+        r.check("open", err == RdbCode.OK, "errCode=$err（新路径 $databaseDir）")
     }
-    r.check("open", err == RdbCode.OK, "errCode=$err")
 
     val vs = RdbVectorStore(databaseDir, com.sekb.shared.embed.EmbeddingSpace("probe@3", 3), dbName)
     r.note("space=${vs.space.id} dim=${vs.space.dim}")
