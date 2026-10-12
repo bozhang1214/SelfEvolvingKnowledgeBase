@@ -5,7 +5,7 @@ owner: SEKB Team
 status: active
 version: v1.0.0
 last-updated: 2026-09-16
-based-on-commit: 44dfed1
+based-on-commit: 69718a1
 related: [01-ARCHITECTURE, 04-DATA-MODEL, 11-EVOLUTION]
 ---
 

@@ -5,7 +5,7 @@ owner: SEKB Team
 status: active
 version: v1.0.0
 last-updated: 2026-09-20
-based-on-commit: 44dfed1
+based-on-commit: 69718a1
 related: [02-RUNTIME-FLOWS, 08-GLOSSARY]
 ---
 
