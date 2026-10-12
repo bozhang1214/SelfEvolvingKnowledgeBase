@@ -521,6 +521,26 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
   a.check('rag_selftest_cleanup', leftovers === 0,
     `自检文档残留=${leftovers}（期望 0；非 0 说明清理没做干净，用户库被污染）`);
 
+  // ── H7：**工具权限三闸门 + 越权拦截率**（复用共享层 ToolRegistry，判定不搬到 ArkTS）──
+  // 为什么放在 RAG 之前：它不碰模型/网络，毫秒级；放前面能让"闸门坏了"这类问题
+  // 不被后面几十秒的重活掩盖。逐行解析与 RAG 评测同一套写法。
+  try {
+    const h7: string = knspike.h7Tools();
+    for (const line of h7.split('\n')) {
+      if (line.length === 0) continue;
+      hilog.info(0x0000, TAG_SELFTEST, 'H7 %{public}s', line);
+      const m = line.match(/^(PASS|FAIL|SKIP)\s+(\S+)\s+—\s+(.*)$/);
+      if (m !== null) {
+        const name: string = `h7_${m[2]}`;
+        if (m[1] === 'PASS') a.check(name, true, m[3]);
+        else if (m[1] === 'FAIL') a.check(name, false, m[3]);
+        else a.skip(name, m[3]);
+      }
+    }
+  } catch (e) {
+    a.check('h7_tools', false, `h7Tools 调用失败（产物旧？缺 sekb_spike_h7_tools）：${e}`);
+  }
+
   // ── H5：**分步检索评测**（12 篇语料 + 33 问 × 5 档阈值）─────────────────────
   // 为什么分步：整段是 90s 级**连续同步**工作，会撞 OHOS 的 `THREAD_BLOCK_6S` 看门狗，
   // 表现是"整段结果都拿不到"（进程被看门狗处理掉）。所以每步之间 `await` 让出主线程。

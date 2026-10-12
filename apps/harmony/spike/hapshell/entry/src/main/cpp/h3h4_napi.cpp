@@ -47,6 +47,8 @@ extern "C" const char* sekb_spike_cred_selftest(const char* files_dir, const cha
 extern "C" const char* sekb_spike_huks_roundtrip(const char* payload);
 // H5 取证（主线）：RDB 里 `source_id` 到底有没有落对（H8 自检出现"能检索到分、但 source 为空"的矛盾证据）
 extern "C" const char* sekb_spike_rdb_id_probe(const char* database_dir, const char* run_tag);
+// H7 工具权限三闸门 + 越权拦截率（复用共享层 ToolRegistry；无参数，毫秒级）
+extern "C" const char* sekb_spike_h7_tools();
 // H5 分步检索评测（主线 2026-10-26 接出）：原来 `sekb_spike_rag_step` 只有 Kotlin 侧实现、
 // **没有 NAPI 入口**，所以"分步跑评测"这条设计好的路一直没被用上（整段同步跑会撞 THREAD_BLOCK_6S）。
 extern "C" const char* sekb_spike_rag_step(int step, const char* model_path, const char* vocab_text,
@@ -158,6 +160,11 @@ napi_value RagStep(napi_env env, napi_callback_info info) {
         sekb_spike_rag_step(step, model.c_str(), vocab.c_str(), dir.c_str(), files.c_str()));
 }
 
+/** H7：工具权限三闸门 + 审计统计（无参数）。 */
+napi_value H7Tools(napi_env env, napi_callback_info /*info*/) {
+    return h3h4_napi::returnString(env, sekb_spike_h7_tools());
+}
+
 /** 主线取证入口：RDB 的 source_id 往返（2 个字符串参数：databaseDir / runTag）。 */
 napi_value RdbIdProbe(napi_env env, napi_callback_info info) {
     const std::string dir = h3h4_napi::argAt(env, info, 2, 0);
@@ -185,6 +192,8 @@ void RegisterSekbH3H4(napi_env env, napi_value exports) {
         {"rdbIdProbe", nullptr, RdbIdProbe, nullptr, nullptr, nullptr, napi_default, nullptr},
         // H5 分步检索评测（主线接出；见 RagStep 的说明——原来只有 Kotlin 实现没有 NAPI 入口）
         {"ragStep", nullptr, RagStep, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // H7 工具权限三闸门（主线接出；判定全在共享层 ToolRegistry，这里只触发）
+        {"h7Tools", nullptr, H7Tools, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     // H8：一行代挂（见上方 RegisterSekbChat 的说明）
