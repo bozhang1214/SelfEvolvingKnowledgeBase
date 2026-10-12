@@ -780,7 +780,18 @@ h8_selftest() {
     local action="SEKB_SELFTEST"
     [ "$red" = "red" ] && action="SEKB_SELFTEST_RED"
     require_target
-    echo "── H8 自检（action=${action}，等待 ${wait_s}s 抓 hilog TAG=${H8_TAG}）──"
+    # ⚠️ **必须先构建并安装**（2026-10-26 主线修的自身缺陷）：
+    #    这个动作原来只 `aa start`，**不构建、不安装** —— 于是"改了 ArkTS/Kotlin 再跑自检"
+    #    取的其实是**上一次装上去的旧包**，而旧包会安静地给出旧结论（本轮实测踩到：
+    #    我加了诊断字段，跑出来却完全没有那些字段；查 HAP 时间戳才发现包是 1 小时前的）。
+    #    这类"验证工具自己在骗人"比被测代码出错更危险，所以构建+安装写进动作里、失败即中止。
+    echo "── 0/2 构建（委托 scripts/harmony_spike.sh all）──"
+    bash "$ROOT/scripts/harmony_spike.sh" all > /tmp/sekb-h8-build.log 2>&1 \
+        || die "构建失败（见 /tmp/sekb-h8-build.log；先看第一处 error，别用窄 grep 过滤）"
+    grep -aE "BUILD SUCCESSFUL|libs/arm64-v8a/libkn.so" /tmp/sekb-h8-build.log | tail -2 | sed 's/^/   /'
+    echo "── 1/2 安装 ──"
+    install
+    echo "── 2/2 H8 自检（action=${action}，等待 ${wait_s}s 抓 hilog TAG=${H8_TAG}）──"
     "$HDC" shell "aa force-stop $BUNDLE" >/dev/null 2>&1 || true
     "$HDC" shell "hilog -r" >/dev/null 2>&1 || true
     "$HDC" shell "aa start -a $ABILITY -b $BUNDLE -m entry -A ${action}" || die "启动失败"

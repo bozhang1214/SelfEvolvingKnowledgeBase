@@ -224,6 +224,16 @@ object SekbApp {
                 o.put("millis", ms)
                 o.put("note", lastIngestNote)
                 o.put("space", rep.space)
+                // ⚠️ **写完立刻回读一次**（2026-10-26 主线加）：自检出现过
+                //    `ingest 报 chunks=1 / ok=true` 但"列表 0 段、检索 0 条"的矛盾证据，
+                //    而 Kotlin/Native 侧没有 hilog，只能靠返回值把事实带出去。
+                //    `dbChunks` = 提交后 `size()` 的实测条数：
+                //      · dbChunks=0 → **写入/可见性**问题（事务未提交或句柄不同源）
+                //      · dbChunks≥1 → 写入没问题，问题在读取/检索那一侧
+                //    这一条把"写错还是读错"从推测变成可读的数字，别再靠猜。
+                val dbChunks = runCatching { s.store.size() }.getOrElse { -1 }
+                o.put("dbChunks", dbChunks)
+                o.put("allRows", runCatching { s.store.all().size }.getOrElse { -1 })
                 o.toString()
             } catch (e: Throwable) {
                 errJson("ingest", "${e::class.simpleName}: ${e.message}")

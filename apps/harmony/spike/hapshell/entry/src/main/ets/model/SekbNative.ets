@@ -67,6 +67,10 @@ export class RagOpResult {
   remaining: number = 0;
   sources: number = 0;
   note: string = '';
+  /** 写入后**立即回读**的条数（Kotlin 侧加；0 = 写入/可见性问题，≥1 = 问题在读取侧）。 */
+  dbChunks: number = -1;
+  /** `all()` 回读条数（同上，用于区分"表里没有"与"读法不对"）。 */
+  allRows: number = -1;
 }
 
 /** `ragRetrieve` 的结果。 */

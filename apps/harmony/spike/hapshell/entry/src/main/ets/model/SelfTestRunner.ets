@@ -395,9 +395,13 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
   const ing1 = ragIngest(srcId, `${srcId}.md`,
     '端侧 RAG 把知识索引放在设备上，检索不出网，因此隐私更好、延迟更低。', 64);
   const ing2 = ragIngest(otherId, `${otherId}.md`, '北京今天多云转晴，最高气温 26 度，适合骑行。', 40);
+  // ⚠️ 这条报告里带上 **`dbChunks`/`allRows`（写入后立即回读的实测条数）**：
+  //    Kotlin/Native 侧没有 hilog，只能靠返回值把事实带出来。`dbChunks=0` 说明写入/可见性坏了，
+  //    `dbChunks≥1` 说明写入没问题、问题在读取或检索那一侧 —— 一句话把"写错还是读错"定下来。
   a.check('rag_ingest_bridge', ing1.ok && ing2.ok && ing1.chunks >= 1 && ing2.chunks >= 1,
     `两次 ingest 的返回：${srcId} chunks=${ing1.chunks} zeroFilled=${ing1.zeroFilled} ok=${ing1.ok}` +
-    ` ｜ ${otherId} chunks=${ing2.chunks} ok=${ing2.ok}` +
+    ` dbChunks=${ing1.dbChunks} allRows=${ing1.allRows}` +
+    ` ｜ ${otherId} chunks=${ing2.chunks} ok=${ing2.ok} dbChunks=${ing2.dbChunks}` +
     `${ing1.ok ? '' : ` ｜ 失败原因：${ing1.reason}`}`);
 
   const docs = ragDocuments();
@@ -419,7 +423,7 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
   }
   for (const line of idReport.split('\n')) {
     if (line.length > 0) {
-      hilog.info(0x0000, TAG, 'RDBID-DETAIL %{public}s', line);
+      hilog.info(0x0000, TAG_SELFTEST, 'RDBID-DETAIL %{public}s', line);
     }
   }
   a.check('rag_source_id_roundtrip', idReport.indexOf('RDBID PASS') >= 0,
@@ -429,10 +433,14 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
   // ⚠️ 判据强化（2026-10-26）：原来只查 `sourceId.length > 0` —— 太弱。
   //    实测出现过空串却能通过（空串的长度不是 0 吗？不——那时是**别的库**的命中），
   //    所以这里改成"首条命中必须**就是**刚导入的那个 sourceId"，否则删除/来源名都不可信。
+  // ⚠️ 报告里必须带 `searchable`/`reason`/`space`/`cloudCompatible`（2026-10-26 主线加）：
+  //    上一轮只打"0 条"，看不出是"没命中"还是"检索被闸门挡住"。这几个字段正是 `Retriever` 的内部判定，
+  //    缺了它们就只能靠猜（本轮就是靠补上它们把范围缩到检索侧）。
   a.check('rag_retrieve', hit.ok && hit.searchable && hit.hits.length > 0 &&
     hit.hits[0].sourceId === srcId,
     `检索 → ${hit.hits.length} 条，首条=${hit.hits.length > 0 ? `${hit.hits[0].sourceId}@${hit.hits[0].score.toFixed(3)}` : '无'}` +
-    `（阈值=${hit.threshold}）`);
+    `（阈值=${hit.threshold} searchable=${hit.searchable} reason=${hit.reason} space=${hit.space}` +
+    ` cloudCompatible=${hit.cloudCompatible} 嵌入=${hit.embedMillis}ms 检索=${hit.searchMillis}ms）`);
   // ⚠️ 这条判据的第一版是**错的**：我按"端侧空间必然异于云端"写了 `cloudCompatible === false`，
   //    但 H6 的**目标**恰恰是"与 Android/云端同空间"（cos=0.2439 同基线）——
   //    `MindSporeBgeEmbedding` 的 spaceId 默认就是 `EmbeddingSpace.SERVER_SPACE_ID`。

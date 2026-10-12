@@ -270,17 +270,34 @@ class RdbStore private constructor(val handle: CPointer<OH_Rdb_Store>) {
          * @param dir `UIAbilityContext.databaseDir` —— **由平台给**，C 侧不做路径推断
          *   （App 沙箱路径与 bundle/模块名相关，自己拼必然错）
          */
-        fun open(dir: String, name: String, bundle: String = SEKB_BUNDLE): Pair<RdbStore?, Int> =
-            withCStrings(dir, name, bundle, SEKB_MODULE) { cs ->
-                memScoped {
-                    val cfg = alloc<OH_Rdb_Config>()
-                    fill(cfg, cs)
-                    val err = alloc<IntVar>()
-                    err.value = 0
-                    val h = OH_Rdb_GetOrOpen(cfg.ptr, err.ptr)
-                    (if (h == null) null else RdbStore(h)) to err.value
+        fun open(dir: String, name: String, bundle: String = SEKB_BUNDLE): Pair<RdbStore?, Int> {
+            // ⚠️ **装包后第一次打开几乎必然失败一次**（2026-10-26 三轮实测）：
+            //    刚 `hdc install` 完（或换了一台新模拟器实例）时，第一次 `OH_Rdb_GetOrOpen`
+            //    返回 `14800037 = RDB_E_CREATE_FOLDER_FAIL`，而**同一进程随后的重试就成功**；
+            //    把模拟器实例 stop→start 也一样（文档里记了那条复现）。这不是我们代码的路径问题：
+            //    失败前已确认 `databaseDir` 存在且可写（`AppCtx.ensureDatabaseDir` 会先建父目录+目标目录
+            //    并复核），所以剩下的解释是"平台侧 el2 存储区在装包/首启后尚未就绪"。
+            //    策略：**重试 3 次、每次间隔 120ms**，并把最后一次的 errCode 原样返回
+            //    （不吞错：三次都失败说明是真问题，调用方仍能拿到错误码）。
+            var last = -1
+            var handle: CPointer<platform.ArkData.RDB.OH_Rdb_Store>? = null
+            for (attempt in 1..3) {
+                val pair = withCStrings(dir, name, bundle, SEKB_MODULE) { cs ->
+                    memScoped {
+                        val cfg = alloc<OH_Rdb_Config>()
+                        fill(cfg, cs)
+                        val err = alloc<IntVar>()
+                        err.value = 0
+                        val h = OH_Rdb_GetOrOpen(cfg.ptr, err.ptr)
+                        (if (h == null) null else RdbStore(h)) to err.value
+                    }
                 }
+                last = pair.second
+                if (pair.first != null) return pair
+                if (attempt < 3) platform.posix.usleep(120_000u)
             }
+            return null to last
+        }
 
         /** 删除整个库文件（只有"重建索引"与探针清理用；索引是可重建的派生数据）。 */
         fun delete(dir: String, name: String, bundle: String = SEKB_BUNDLE): Int =
