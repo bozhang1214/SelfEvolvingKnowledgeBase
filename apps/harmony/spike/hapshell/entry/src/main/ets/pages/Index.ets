@@ -85,12 +85,16 @@ struct Index {
     this.runContract();
     this.runLibProbe();
     this.runKn();
-    await this.runH3Net();        // H3：网络端口（不碰模型）
-    await this.runH4Cred();       // H4：凭证端口（不碰模型，HUKS）
+    this.runRdbProbe();           // H5：RDB NDK C API 探针（不碰模型，几毫秒）
     await this.runModel();        // 第 1 个模型会话：MindSpore 探针
     await this.runEmbedSanity();  // 第 2 个（串行）：真实嵌入验收
-    this.runRdbProbe();           // H5：RDB NDK C API 探针（不碰模型）
     await this.runRag();          // H5/H6：RAG 自检 + 检索评测（用同一个模型会话，串行）
+    // ⚠️ H3/H4（网络 + 凭证）**排在 RAG 之后**：它们是 `await` 的真实网络调用，
+    //    实测在模拟器上可能长时间不返回（并触发 `THREAD_BLOCK_6S` 的 appfreeze），
+    //    把 RAG 排在它们后面 = RAG 的结论永远拿不到。
+    //    顺序调整的理由是**证据可得性**，不是"网络不重要"——H3/H4 的自检照跑，只是不挡别人。
+    await this.runH3Net();        // H3：网络端口（不碰模型）
+    await this.runH4Cred();       // H4：凭证端口（不碰模型，HUKS）
   }
 
   /**

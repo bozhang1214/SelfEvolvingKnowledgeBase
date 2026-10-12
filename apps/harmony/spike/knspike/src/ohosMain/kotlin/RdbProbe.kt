@@ -128,33 +128,31 @@ private fun roundTrip(store: RdbStore, r: RdbReport, tag: String): Boolean {
         rcBlob,
         "putBlob(vector, ${blob.size}B)=$rcBlob（true=RDB_OK）——向量入库走的就是这一条",
     )
-    // 反向验证：往**不存在的列**写必须失败。它证明"put* 的返回值真的能反映失败"，
-    // 否则上面三个判据就只是摆设（"判据本身不成立"的坑本项目踩过多次）。
+    // ⚠️ **如实记录**（不当作通过判据）：往**不存在的列**写，`putText` 竟然返回**成功**。
+    //    这条最初被我写成"必须失败"的反向验证，实测发现它**不成立**——
+    //    也就是说 `put*` 的返回值**不能**用来判断"字段是否被接受"。
+    //    （C++ dlopen 侧同一调用返回 0，两边一致；但 C++ 的 `OH_Rdb_Insert` 成功、Kotlin 的失败。）
+    //    这是"判据本身不成立"的又一例：把它降级为 NOTE，避免拿一个假判据当证据。
     val rcUnknown = bucketPutText(b, "no_such_column", "x")
-    r.check(
-        "${tag}_put_unknown_column_rejected",
-        !rcUnknown,
-        "往不存在的列写 → $rcUnknown（**必须 false**，用来证明 put* 返回值可信）",
-    )
+    r.note("${tag}_put_unknown_column rc=$rcUnknown（**返回成功**，说明 put* 的返回值不可作为字段校验判据）")
     val rowId = store.insert("chunks", b)
     bucketDestroy(b)
     // ── 对照实验（临时诊断）：同一行改用**纯 SQL** 插一次 ─────────────────────
     // 目的：把"ValuesBucket 这条路有 bug"与"RDB 本身插不进去"分开。
     // 若 SQL 版成功而 bucket 版 rowId=-1，问题就在 bucket 的构造/写入这条链上。
-    val hex = blob.joinToString("") { ((it.toInt() and 0xFF) or 0x100).toString(16).substring(1) }
+    // 用共享层的 `sqlBlob`/`sqlQuote`（与生产实现**同一套**转义），避免探针与实现两套写法
     val rcSqlInsert = store.execute(
-        "INSERT OR REPLACE INTO chunks (id, source_id, text, dim, vector) VALUES " +
-            "('probe#sql', 'probe', '端侧 RAG 探针文本', 3, X'$hex')",
+        "INSERT OR REPLACE INTO chunks (id, source_id, text, dim, vector) VALUES (" +
+            "\'probe#sql\', \'probe\', \'端侧 RAG 探针文本\', 3, ${sqlBlob(blob)})",
     )
-    r.note("${tag}_ctrl_sql_insert rc=$rcSqlInsert（对照：纯 SQL 插入，绕过 ValuesBucket）")
-    // ⚠️ 主键已存在时 `OH_Rdb_Insert` 返回 -1（默认 ConflictResolution 不是 REPLACE）。
-    //    所以"重开后"这一轮**预期** rowId=-1：这不是缺陷，它反过来证明**行确实落盘了**；
-    //    真实现的 upsert 必须走 `insertReplace`（RDB_CONFLICT_REPLACE）。
-    r.check(
-        "${tag}_insert",
-        if (tag == "rdb") rowId >= 1 else rowId == -1,
-        "OH_Rdb_Insert rowId=$rowId（首轮期望 ≥1；重开轮期望 -1=主键冲突→证明上一轮的行真的落盘了）",
-    )
+    r.check("${tag}_sql_insert", rcSqlInsert == RdbCode.OK, "纯 SQL 插入 rc=$rcSqlInsert（0=RDB_OK）")
+    // ⚠️⚠️ **本轮最重要的负面结论**：`OH_Rdb_Insert`（结构体函数指针那条路）在
+    //    Kotlin/Native 侧**恒返回 -1**（写不进去），而同一个 C API、同一份 `OH_VBucket`
+    //    布局在 **C++（dlopen）侧返回 1 且数据正确入库**（见 `RDB-DLOPEN PASS`）。
+    //    → 结论：**生产写入走纯 SQL**（`INSERT OR REPLACE`），Kotlin 侧不用 ValuesBucket。
+    //    所以这里**不再把 bucket 插入当作通过判据**（它是已证不可用的路径），
+    //    真正的硬判据是下面那条 SQL 插入 + 读回。
+    r.note("${tag}_insert_bucket rowId=$rowId（**Kotlin 侧恒 -1 = 该路径不可用**；C++ 同调用返回 1）")
 
     // ③ 查回来（ExecuteQuery 走原生 SQL；真实现里 SELECT 也用它）
     val cur = store.query("SELECT id, source_id, text, dim, vector FROM chunks WHERE source_id = 'probe'")
@@ -187,11 +185,10 @@ private fun roundTrip(store: RdbStore, r: RdbReport, tag: String): Boolean {
         )
     }
     cursorDestroy(cur)
-    r.note("${tag}_ctrl_sql_row rows=$rows（含 SQL 对照行；桶行=${rows - store.countRows("probe#sql")}）")
-    r.check("${tag}_query_once", rows >= 1, "GoToNextRow 命中行数=$rows（期望 ≥1）")
+    r.check("${tag}_query_once", rows == 1, "GoToNextRow 命中行数=$rows（期望 1：bucket 没插进去，只有 SQL 那行）")
     r.check(
         "${tag}_text_roundtrip",
-        seenId == "probe#0" && seenSource == "probe" && seenDim == 3L && text == "端侧 RAG 探针文本",
+        seenId == "probe#sql" && seenSource == "probe" && seenDim == 3L && text == "端侧 RAG 探针文本",
         "id='$seenId' source_id='$seenSource' dim=$seenDim text='$text'（中文必须逐字符相同）",
     )
     r.check(

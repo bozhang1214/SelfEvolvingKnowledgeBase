@@ -583,13 +583,18 @@ rag() {
 
     echo
     echo "── 3/3 RAG 结果（原始 hilog）──"
-    # ⚠️ 这里**不再**边等边 `hdc shell hilog` 轮询：实测每调一次 hdc 要 1–2s，
-    #    在模型复制 + 12 篇/33 问 ×5 档阈值的窗口里轮询几十次，纯属浪费，
-    #    而且 `hilog -r` 已经清过缓冲，不存在"用旧结果冒充新结果"的风险。
-    #    所以：一次 sleep 到位，然后分两次抓（一次 `tail -N` 会把首行挤出窗口）。
-    sleep "${wait_s}"
-    local heads
-    heads="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'RAG PASS\|RAG FAIL' | tail -3 || true)"
+    # ⚠️ **轮询**而不是一次 `sleep` 到位：RAG 要串在所有探针之后（模型会话是串行的），
+    #    而 H3 的网络探针可能慢/挂——一次睡死会在"其实早就出结果"或"早就卡住"两种情况下
+    #    都浪费掉整个窗口（实测踩到：睡满 400s 后 `hdc` 拉日志的那次调用被后续操作打断，
+    #    结果什么都没拿到）。这里每 10s 问一次，拿到就立刻进入抓取阶段。
+    local heads="" waited=0
+    while [ "${waited}" -lt "${wait_s}" ]; do
+        sleep 10
+        waited=$((waited + 10))
+        heads="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'RAG PASS\|RAG FAIL' | tail -3 || true)"
+        [ -n "${heads}" ] && break
+    done
+    echo "   （等待 ${waited}s 后$([ -n "${heads}" ] && echo '拿到结果' || echo '仍未拿到结果')）"
     local detail evalrows
     detail="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a -E 'rag_|EVAL|NOTE' | tail -60 || true)"
     evalrows="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'EVAL-TABLE' | tail -10 || true)"

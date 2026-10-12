@@ -31,13 +31,312 @@ package com.sekb.ohos.spike
 import com.sekb.shared.core.Fmt
 import com.sekb.shared.embed.EmbeddingProvider
 import com.sekb.shared.embed.EmbeddingSpace
-import com.sekb.shared.eval.RetrievalEvalRunner
 import com.sekb.shared.eval.RetrievalEvalSet
 import com.sekb.shared.rag.KnowledgeIndex
 import com.sekb.shared.rag.Retriever
 import com.sekb.shared.rag.VectorRecord
 
 /** 报告（与 `EmbedReport`/`RdbReport` 同形状：首行 `RAG PASS|FAIL n/N`）。 */
+/**
+ * 让出主线程的一小段时间（给 ArkTS 侧在重活之间调用）。
+ *
+ * **为什么必须有它**（实测）：
+ * RAG 自检在设备上是**纯同步**的（NAPI 调用 → Kotlin 一路跑完），
+ * 12 篇 ingest + 33 问 ×5 档评测 ≈ 90s 的**连续同步**工作会撞上 OHOS 的
+ * `THREAD_BLOCK_6S` 看门狗（`/data/log/faultlog/faultlogger/appfreeze-*.log`），
+ * 表现是**整段结果都拿不到**（进程被看门狗处理掉）。
+ * 所以 `RagSelfTest.kt` 暴露"分步"入口，ArkTS 在每一步之间 `await` 一次微任务，
+ * 让主线程有喘息机会。判据与逻辑**都在 Kotlin 侧**，ArkTS 只负责"什么时候继续"。
+ */
+@CName("sekb_spike_rag_step")
+fun sekbSpikeRagStep(step: Int, modelPath: String, vocabText: String, databaseDir: String): String =
+    RagSession.step(step, modelPath, vocabText, databaseDir)
+
+/** 分步自检的会话状态（进程内单例：模型会话本来就只该有一个，见 MsSessionCache）。 */
+object RagSession {
+    private var acc: RagAcc? = null
+
+    fun reset() {
+        acc = null
+    }
+
+    fun step(step: Int, modelPath: String, vocabText: String, databaseDir: String): String {
+        val a = acc ?: RagAcc(modelPath, vocabText, databaseDir).also { acc = it }
+        return a.run(step)
+    }
+}
+
+private class RagAcc(
+    private val modelPath: String,
+    private val vocabText: String,
+    private val databaseDir: String,
+) {
+    private val r = RagReport()
+    private var emb: MindSporeBgeEmbedding? = null
+    private var store: RdbVectorStore? = null
+    private var reopened: RdbVectorStore? = null
+    private var index: KnowledgeIndex? = null
+    private var reports: List<KnowledgeIndex.IngestReport> = emptyList()
+    private var sizeBefore = 0
+    private var done = false
+
+    /** 已完成的步数（ArkTS 用它决定还要不要继续调）。 */
+    var stepCount = 0
+        private set
+
+    /** 每一步都返回**当前累计报告**；ArkTS 只在最后一步把结果打 hilog。 */
+    fun run(step: Int): String {
+        if (done) return r.render()
+        when (step) {
+            0 -> stepOpenAndIngest()
+            1 -> stepRetrieveAndGates()
+            2 -> stepPersistAndDelete()
+            3 -> stepEval()
+            else -> { done = true; emb?.close() }
+        }
+        stepCount++
+        return r.render()
+    }
+
+    private fun stepOpenAndIngest() {
+        val e = MindSporeBgeEmbedding(modelPath, vocabText)
+        try {
+            e.open()
+        } catch (t: Throwable) {
+            r.check("rag_embed_open", false, "打开模型失败：${t::class.simpleName}: ${t.message}")
+            done = true
+            return
+        }
+        r.check("rag_embed_open", true, e.diagnostics)
+        emb = e
+        val t0 = com.sekb.shared.core.nowMillis()
+        val dbName = "sekb_rg_${t0 % 1000000}.db"
+        r.note("自检库=$dbName（每轮唯一；后缀末 6 位=库名过长会 errCode=14800037）")
+        RdbStore.delete(databaseDir, dbName)
+        val st = try {
+            RdbVectorStore(databaseDir, e.space, dbName)
+        } catch (t: Throwable) {
+            r.check("rag_store_open", false, "打开 RDB 索引失败：${t::class.simpleName}: ${t.message}")
+            done = true
+            return
+        }
+        r.check("rag_store_open", true, st.openDiagnostics)
+        store = st
+        val ix = KnowledgeIndex(e, st, registry = st)
+        index = ix
+        val docs = listOf(
+            "doc-diet" to "端侧推理省电的原因：计算留在本机，没有网络传输，也没有云端排队等待。",
+            "doc-weather" to "北京今天多云转晴，最高气温 26 度，适合骑行。",
+            "doc-rag" to "端侧 RAG 把知识索引放在设备上，检索不出网，因此隐私更好、延迟更低。",
+        )
+        reports = docs.map { (id, text) -> ix.ingest(id, text, name = "$id.txt") }
+        r.check(
+            "rag_ingest",
+            reports.all { it.chunks >= 1 } && reports.all { it.zeroFilled == 0 },
+            reports.joinToString(" ") { "${it.sourceId}:${it.chunks}块(zeroFilled=${it.zeroFilled})" } +
+                " 空间=${e.space.id} 本机=${e.isOnDevice}",
+        )
+        r.check(
+            "rag_registry_list",
+            ix.documents().size == docs.size,
+            "登记表条数=${ix.documents().size}（期望 ${docs.size}）顺序=${ix.documents().map { it.id }}",
+        )
+        r.check(
+            "rag_stats",
+            ix.stats()["chunks"] == reports.sumOf { it.chunks } && ix.stats()["sources"] == docs.size,
+            "stats=${ix.stats()}（期望 chunks=${reports.sumOf { it.chunks }} sources=${docs.size}）",
+        )
+    }
+
+    private fun stepRetrieveAndGates() {
+        val e = emb ?: run { done = true; return }
+        val st = store ?: run { done = true; return }
+        val ix = index ?: run { done = true; return }
+        val retriever = Retriever(e, st, minScore = 0.5)
+        val hit = retriever.retrieve("端侧 RAG 为什么隐私更好", topK = 3)
+        val top = hit.hits.firstOrNull()
+        r.check(
+            "rag_retrieve",
+            top?.sourceId == "doc-rag",
+            "命中=${top?.sourceId} 分=${top?.let { s -> Fmt.fixed(s.score, 3) }} " +
+                "条数=${hit.hits.size}（Android/iOS 同源首条分 ~0.630 量级）",
+        )
+        r.check(
+            "rag_space_guard",
+            hit.cloudCompatible == (e.space.id == EmbeddingSpace.SERVER_SPACE_ID),
+            "索引空间=${hit.space.id} 与云端一致=${hit.cloudCompatible}",
+        )
+        val miss = retriever.retrieve("我上个月的信用卡账单是多少？", topK = 3)
+        val rawTop = st.search(e.embedOne("我上个月的信用卡账单是多少？"), 1).firstOrNull()
+        r.check(
+            "rag_threshold_refuses",
+            miss.hits.isEmpty(),
+            "库外问题的命中数=${miss.hits.size}（期望 0）reason='${miss.reason}' " +
+                "未过滤前最高分=${rawTop?.let { s -> Fmt.fixed(s.score, 3) }}（阈值=${retriever.minScore}）",
+        )
+        val sameSpaceRemote = object : EmbeddingProvider {
+            override val space: EmbeddingSpace = e.space
+            override val isOnDevice: Boolean = false
+            override fun embed(texts: List<String>): List<FloatArray> = e.embed(texts)
+        }
+        val denied = Retriever(sameSpaceRemote, st).retrieve("端侧 RAG", deviceOnly = true)
+        r.check(
+            "rag_device_only_gate",
+            !denied.searchable && denied.hits.isEmpty(),
+            "deviceOnly=true + 非本机嵌入 → searchable=${denied.searchable} 原因='${denied.reason}'",
+        )
+        val allowed = Retriever(sameSpaceRemote, st).retrieve("端侧 RAG", deviceOnly = false)
+        r.check(
+            "rag_device_only_gate_allows_nond_evice",
+            allowed.searchable,
+            "deviceOnly=false 时 searchable=${allowed.searchable}（构造上不允许「一律拒绝」）",
+        )
+        val ex = runCatching {
+            st.upsert(listOf(com.sekb.shared.rag.VectorRecord("x#0", "x", "t", FloatArray(3))))
+        }.exceptionOrNull()
+        r.check(
+            "rag_dim_mismatch_refused",
+            ex is IllegalArgumentException && (ex.message?.contains("维度不符") == true),
+            "错维度 upsert 抛=${ex?.let { it::class.simpleName }} 消息='${ex?.message?.take(60)}'",
+        )
+    }
+
+    private fun stepPersistAndDelete() {
+        val st = store ?: run { done = true; return }
+        val ix = index ?: run { done = true; return }
+        sizeBefore = st.size()
+        st.close()
+        val re = RdbVectorStore(databaseDir, st.space, st.dbNamePublic)
+        reopened = re
+        r.check(
+            "rag_persist_across_reopen",
+            re.size() == sizeBefore && sizeBefore > 0,
+            "关闭前 size=$sizeBefore 重开后 size=${re.size()}（0 说明没落盘）",
+        )
+        val reIndex = KnowledgeIndex(emb!!, re, registry = re)
+        val doomed = reports.first { it.sourceId == "doc-weather" }.chunks
+        val before = re.all().map { it.sourceId }.toSet()
+        val removed = reIndex.remove("doc-weather")
+        val after = re.all().map { it.sourceId }.toSet()
+        r.check("rag_delete", removed == doomed, "删除返回 $removed（期望 $doomed）")
+        val expectSources = before.filterNot { it == "doc-weather" }.toSet()
+        val sizeNow = re.all().size
+        val expectSize = sizeBefore - doomed
+        r.check(
+            "rag_delete_keeps_others",
+            after == expectSources && sizeNow == expectSize,
+            "删前 sources=$before 删后 sources=$after size=$sizeNow（期望 $expectSize）",
+        )
+        val wide = Retriever(emb!!, re, minScore = 0.0)
+            .retrieve("北京今天多云转晴 最高气温", topK = 10)
+        r.check(
+            "rag_delete_not_retrievable",
+            wide.hits.none { it.sourceId == "doc-weather" },
+            "阈值=0 宽召回 ${wide.hits.size} 条，doc-weather 出现 " +
+                "${wide.hits.count { it.sourceId == "doc-weather" }} 次（期望 0）",
+        )
+        r.check(
+            "rag_delete_idempotent",
+            reIndex.remove("doc-weather") == 0,
+            "再删一次返回 ${reIndex.remove("doc-weather")}（期望 0）",
+        )
+        r.check(
+            "rag_registry_delete",
+            re.get("doc-weather") == null && re.list().size == before.size - 1,
+            "registry 剩余=${re.list().map { it.id }}",
+        )
+    }
+
+    private var evalRows: List<Pair<String?, List<Pair<String, Double>>>>? = null
+    private var evalChunks = 0
+    private var evalSources = 0
+    private var buildMs = 0L
+    private var evalMs = 0L
+
+    private fun stepEval() {
+        val e = emb ?: run { done = true; return }
+        if (evalRows == null) {
+            val t0 = com.sekb.shared.core.nowMillis()
+            val evalDb = "sekb_reval_${t0 % 1000000}.db"
+            RdbStore.delete(databaseDir, evalDb)
+            val es = RdbVectorStore(databaseDir, e.space, evalDb)
+            val eix = KnowledgeIndex(e, es)
+            val errs = mutableListOf<String>()
+            val b0 = com.sekb.shared.core.nowMillis()
+            for (doc in RetrievalEvalSet.corpus) {
+                try {
+                    val rep = eix.ingest(doc.id, doc.text)
+                    if (rep.chunks < 1 || rep.zeroFilled != 0) {
+                        errs += "${doc.id}(chunks=${rep.chunks},zeroFilled=${rep.zeroFilled})"
+                    }
+                } catch (t: Throwable) {
+                    errs += "${doc.id}(${t::class.simpleName})"
+                }
+            }
+            buildMs = com.sekb.shared.core.nowMillis() - b0
+            evalChunks = es.size()
+            evalSources = es.all().map { it.sourceId }.toSet().size
+            r.check(
+                "rag_eval_index_built",
+                evalChunks == RetrievalEvalSet.corpus.size &&
+                    evalSources == RetrievalEvalSet.corpus.size && errs.isEmpty(),
+                "评测索引：chunks=$evalChunks sources=$evalSources（期望各 ${RetrievalEvalSet.corpus.size}）" +
+                    " 失败=${if (errs.isEmpty()) "无" else errs.joinToString("; ")} 用时=${buildMs}ms",
+            )
+            val t1 = com.sekb.shared.core.nowMillis()
+            val rows = mutableListOf<Pair<String?, List<Pair<String, Double>>>>()
+            for (q in RetrievalEvalSet.questions) {
+                val out = Retriever(e, es, minScore = 0.0).retrieve(q.q, topK = 3, deviceOnly = true)
+                rows += q.expected to out.hits.map { it.sourceId to it.score }
+            }
+            evalMs = com.sekb.shared.core.nowMillis() - t1
+            evalRows = rows
+            es.close()
+            return  // 评测是最后一段：下一轮调用再出表
+        }
+        // 第二段：出表 + 断言
+        val rows = evalRows!!
+        val answerable = RetrievalEvalSet.answerable
+        val unanswerable = RetrievalEvalSet.unanswerable
+        fun table(th: Double): Triple<Int, Int, Double> {
+            val ranks = rows.map { (exp, ranked) ->
+                if (exp == null) 0 else ranked.filter { it.second >= th }.indexOfFirst { it.first == exp } + 1
+            }
+            val h1 = rows.indices.count { rows[it].first != null && ranks[it] == 1 }
+            val h3 = rows.indices.count { rows[it].first != null && ranks[it] in 1..3 }
+            val mrr = rows.indices.filter { rows[it].first != null }
+                .map { if (ranks[it] > 0) 1.0 / ranks[it] else 0.0 }
+                .average().takeIf { !it.isNaN() } ?: 0.0
+            return Triple(h1, h3, mrr)
+        }
+        fun fp(th: Double): Int = rows.count { (exp, ranked) -> exp == null && ranked.any { it.second >= th } }
+        r.note(
+            "检索评测：语料 ${RetrievalEvalSet.corpus.size} 篇 建索引=${buildMs}ms " +
+                "33 问单趟嵌入=${evalMs}ms（阈值后处理，与共享层 calibrate 数值等价）",
+        )
+        for (th in listOf(0.2, 0.3, 0.4, 0.5, 0.6)) {
+            val (h1, h3, mrr) = table(th)
+            r.note(
+                "EVAL-TABLE 阈值=${Fmt.fixed(th, 2)} Hit@1=$h1/$answerable Hit@3=$h3/$answerable " +
+                    "MRR=${Fmt.fixed(mrr, 3)} 误召回=${fp(th)}/$unanswerable",
+            )
+        }
+        val (a1, a3, am) = table(0.4)
+        r.check(
+            "rag_eval_threshold_0_40_matches_android",
+            a1 == 26 && a3 == 30 && kotlin.math.abs(am - 0.928) < 0.0005 && fp(0.4) == 0,
+            "Hit@1=$a1/$answerable Hit@3=$a3/$answerable MRR=${Fmt.fixed(am, 3)} " +
+                "误召回=${fp(0.4)}/$unanswerable（Android 基线 26/30、30/30、0.928、0/3）",
+        )
+        evalRows = null
+        done = true
+        emb?.close()
+        r.note("总用时 ${com.sekb.shared.core.nowMillis() - t0Global}ms")
+    }
+
+    private val t0Global = com.sekb.shared.core.nowMillis()
+}
+
 private class RagReport {
     val lines = mutableListOf<String>()
     var failed = 0
@@ -90,7 +389,11 @@ fun sekbSpikeRagSelfTest(modelPath: String, vocabText: String, databaseDir: Stri
     }
     r.check("rag_embed_open", true, emb.diagnostics)
     // 自检用的库名带时间戳后缀：每次跑都是**干净索引**，否则"上一轮的文档"会污染命中数
-    val dbName = "sekb_rag_selftest.db"
+    // 每轮唯一库名（理由见评测段）：跨轮残留的数据会让"块数/来源数"不可解释
+    // ⚠️ 库名长度有上限（实测：`sekb_rag_selftest_1791779491000.db` → `errCode=14800037` 打不开）。
+    //    所以后缀只取时间戳**末 6 位**（够用：自检一轮几十秒，绝不重复），保持库名短。
+    val dbName = "sekb_rag_${t0 % 1000000}.db"
+    r.note("自检库=$dbName（每轮唯一，避免跨轮残留污染判据；后缀末 6 位=库名过长会 errCode=14800037）")
     RdbStore.delete(databaseDir, dbName)
 
     // 需要"进程重启后索引仍在"的证据 → 先关掉，从头打开
@@ -257,20 +560,99 @@ fun sekbSpikeRagSelfTest(modelPath: String, vocabText: String, databaseDir: Stri
     //    **复用共享层的评测集与 runner**（不另写），但索引换成 **RDB 持久化实现**——
     //    这正是"端口实现真的能跑评测"的证据（Android 是在内存库上标定的）。
     run {
-        val evalStore = RdbVectorStore(databaseDir, emb.space, "sekb_rag_eval.db")
-        evalStore.clear()
+        // 给评测库一个**每轮唯一**的名字：跨轮残留会让"库里有几块"变得不可解释
+        //（本轮就踩到了：上一轮的 doc-weather 块留在库里，导致"3 块 1 个 source"这种自相矛盾的数）
+        val evalDb = "sekb_rageval_${t0 % 1000000}.db"
+        RdbStore.delete(databaseDir, evalDb)
+        val evalStore = RdbVectorStore(databaseDir, emb.space, evalDb)
         val evalIndex = KnowledgeIndex(emb, evalStore)
-        val runner = RetrievalEvalRunner(emb)
         val buildT0 = com.sekb.shared.core.nowMillis()
-        RetrievalEvalSet.corpus.forEach { evalIndex.ingest(it.id, it.text) }
+        // ⚠️ 逐篇 ingest 并且**逐篇检查**：一条失败不能静默地让后面 11 篇全不进去
+        //（`forEach` 里抛异常会让整段中止，而"评测表很难看"这个现象与"只进去几篇"长得一模一样）。
+        val ingestErrs = mutableListOf<String>()
+        for (doc in RetrievalEvalSet.corpus) {
+            try {
+                val rep = evalIndex.ingest(doc.id, doc.text)
+                if (rep.chunks < 1 || rep.zeroFilled != 0) {
+                    ingestErrs += "${doc.id}(chunks=${rep.chunks},zeroFilled=${rep.zeroFilled})"
+                }
+            } catch (e: Throwable) {
+                ingestErrs += "${doc.id}(${e::class.simpleName}: ${e.message?.take(40)})"
+            }
+        }
         val buildMs = com.sekb.shared.core.nowMillis() - buildT0
+        val evalChunks = evalStore.size()
+        val evalSources = evalStore.all().map { it.sourceId }.toSet().size
+        r.check(
+            "rag_eval_index_built",
+            evalChunks == RetrievalEvalSet.corpus.size && evalSources == RetrievalEvalSet.corpus.size &&
+                ingestErrs.isEmpty(),
+            "评测索引：chunks=$evalChunks sources=$evalSources（期望各 ${RetrievalEvalSet.corpus.size}）" +
+                " 失败=${if (ingestErrs.isEmpty()) "无" else ingestErrs.joinToString("; ")} 用时=${buildMs}ms",
+        )
+        // ⚠️ **单趟嵌入 + 阈值后处理**（与共享层 `RetrievalEvalRunner.calibrate` 的数值等价，
+        //    但设备上便宜 5 倍）——为什么必须这么做（实测，不是优化癖）：
+        //    `calibrate` 对**每个阈值**各跑一遍完整 33 问（内部 `retriever.retrieve` 会
+        //    重新嵌入查询），5 档 = 165 次嵌入；设备上单次嵌入 ~0.55s → **≈92s**，
+        //    叠加 94MB 模型首拷与 `runAll` 串行，模拟器上直接触发
+        //    `THREAD_BLOCK_6S`（appfreeze，日志在 `/data/log/faultlog/faultlogger/appfreeze-*`）。
+        //    而**同一查询的嵌入结果与阈值无关**——阈值只影响"用不用这条命中"。
+        //    所以：每问嵌入一次、取 topK=3、再对 5 个阈值分别套用同一套判据。
+        //    **评测集与指标口径仍全部来自共享层**（`RetrievalEvalSet` + 与
+        //    `RetrievalEvalRunner.Report` 逐字段相同的定义），鸿蒙侧没有第二套检索逻辑。
         val evalT0 = com.sekb.shared.core.nowMillis()
-        val reports2 = runner.calibrate(evalIndex, evalStore, listOf(0.2, 0.3, 0.4, 0.5, 0.6))
+        val thresholds = listOf(0.2, 0.3, 0.4, 0.5, 0.6)
+        val answerable = RetrievalEvalSet.answerable
+        val unanswerable = RetrievalEvalSet.unanswerable
+        // 每问一行：期望文档、topK=3 的 (sourceId, score)
+        class QRow(val expected: String?, val ranked: List<Pair<String, Double>>)
+        val qrows = mutableListOf<QRow>()
+        for (q in RetrievalEvalSet.questions) {
+            val out = Retriever(emb, evalStore, minScore = 0.0).retrieve(q.q, topK = 3, deviceOnly = true)
+            qrows += QRow(q.expected, out.hits.map { it.sourceId to it.score })
+        }
         val evalMs = com.sekb.shared.core.nowMillis() - evalT0
-        r.note("检索评测：语料 ${RetrievalEvalSet.corpus.size} 篇 建索引用时 ${buildMs}ms，5 档阈值用时 ${evalMs}ms")
-        for (rep in reports2) r.note("EVAL ${rep.line()}")
+        r.note("检索评测：语料 ${RetrievalEvalSet.corpus.size} 篇 建索引用时 ${buildMs}ms，" +
+            "33 问单趟嵌入用时 ${evalMs}ms（阈值后处理，与共享层 calibrate 数值等价）")
+        for (th in thresholds) {
+            val ranks = qrows.map { row ->
+                if (row.expected == null) 0
+                else row.ranked.filter { it.second >= th }.indexOfFirst { it.first == row.expected } + 1
+            }
+            val hit1 = qrows.indices.count { i -> qrows[i].expected != null && ranks[i] == 1 }
+            val hit3 = qrows.indices.count { i -> qrows[i].expected != null && ranks[i] in 1..3 }
+            val mrr = qrows.indices.filter { qrows[it].expected != null }
+                .map { if (ranks[it] > 0) 1.0 / ranks[it] else 0.0 }
+                .average().takeIf { !it.isNaN() } ?: 0.0
+            val fp = qrows.indices.count { i ->
+                qrows[i].expected == null && qrows[i].ranked.any { it.second >= th }
+            }
+            r.note(
+                "EVAL-TABLE 阈值=${Fmt.fixed(th, 2)} Hit@1=$hit1/$answerable Hit@3=$hit3/$answerable " +
+                    "MRR=${Fmt.fixed(mrr, 3)} 误召回=$fp/$unanswerable",
+            )
+        }
+        // 把 0.40 档重算一遍供断言（同一份 qrows，避免上面循环里再取一次）
+        val th40 = 0.4
+        val ranks40 = qrows.map { row ->
+            if (row.expected == null) 0
+            else row.ranked.filter { it.second >= th40 }.indexOfFirst { it.first == row.expected } + 1
+        }
+        val at40Hit1 = qrows.indices.count { i -> qrows[i].expected != null && ranks40[i] == 1 }
+        val at40Hit3 = qrows.indices.count { i -> qrows[i].expected != null && ranks40[i] in 1..3 }
+        val at40Mrr = qrows.indices.filter { qrows[it].expected != null }
+            .map { if (ranks40[it] > 0) 1.0 / ranks40[it] else 0.0 }
+            .average().takeIf { !it.isNaN() } ?: 0.0
+        val at40Fp = qrows.indices.count { i ->
+            qrows[i].expected == null && qrows[i].ranked.any { it.second >= th40 }
+        }
         // Android 基线（0.40 → 26/30、30/30、0.928、0/3）：**逐项相同**才算同表
-        val at40 = reports2.first { it.threshold == 0.4 }
+        val at40 = object {
+            val hit1 = at40Hit1; val hit3 = at40Hit3; val mrr = at40Mrr
+            val falsePositives = at40Fp; val answerable = answerable
+            val unanswerable = unanswerable
+        }
+        // （下面两条 NOTE/断言沿用原口径；`at40` 字段名与共享层 `Report` 对齐，便于对照）
         r.check(
             "rag_eval_threshold_0_40_matches_android",
             at40.hit1 == 26 && at40.hit3 == 30 && at40.answerable == 30 &&
@@ -279,14 +661,6 @@ fun sekbSpikeRagSelfTest(modelPath: String, vocabText: String, databaseDir: Stri
                 "MRR=${Fmt.fixed(at40.mrr, 3)} 误召回=${at40.falsePositives}/${at40.unanswerable}" +
                 "（Android 基线 26/30、30/30、0.928、0/3）",
         )
-        // 全档逐项打印都放进 NOTE（脚本会把 NOTE 行也抓出来存档）
-        for (rep in reports2) {
-            r.note(
-                "EVAL-TABLE 阈值=${Fmt.fixed(rep.threshold, 2)} Hit@1=${rep.hit1}/${rep.answerable} " +
-                    "Hit@3=${rep.hit3}/${rep.answerable} MRR=${Fmt.fixed(rep.mrr, 3)} " +
-                    "误召回=${rep.falsePositives}/${rep.unanswerable}",
-            )
-        }
         evalStore.close()
     }
 

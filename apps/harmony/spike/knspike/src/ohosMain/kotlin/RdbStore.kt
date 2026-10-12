@@ -123,6 +123,32 @@ private inline fun <R> withCStrings(vararg values: String, block: (Array<CPointe
     return block(Array(values.size) { bufs[it].ptr })
 }
 
+/**
+ * SQL 字符串字面量转义（只处理单引号——SQLite 标准做法：`'` → `''`）。
+ *
+ * 为什么需要它：写入路径改走**纯 SQL** 之后（见 [RdbStore.insertReplace] 的说明），
+ * `source_id` / `text` 都是用户内容，不转义就会被引号截断（甚至注入）。
+ * 转义比 `OH_Predicates` 弱一档（没有参数绑定），所以：
+ *   · **只用在"必须拼 SQL"的地方**（写入路径），并且转义必须做全；
+ *   · 检索/查询路径本来就不带用户内容拼串（`SELECT ... WHERE source_id = '<转义后>'`）。
+ * 将来若要回到参数绑定，`OH_Rdb_ExecuteV2(sql, args)` 是正路（本机 API 22 有），
+ * 但它要构造 `OH_Data_Values`，多一层复杂度——当前先用转义 + 统一走这一处。
+ */
+fun sqlQuote(v: String): String = "'" + v.replace("'", "''") + "'"
+
+/** BLOB 的 SQL 字面量：`X'616263'`（十六进制），与 `encodeVector` 的输出逐字节一致。 */
+fun sqlBlob(b: ByteArray): String {
+    val sb = StringBuilder(b.size * 2 + 3)
+    sb.append("X'")
+    for (x in b) {
+        val v = x.toInt() and 0xFF
+        sb.append(HEX[v ushr 4]).append(HEX[v and 0xF])
+    }
+    return sb.append('\'').toString()
+}
+
+private const val HEX = "0123456789ABCDEF"
+
 /** 一个已打开的 RDB store。**必须 close()**：RDB 内部有句柄与页缓存，泄漏会表现为"第二次打开失败"。 */
 class RdbStore private constructor(val handle: CPointer<OH_Rdb_Store>) {
 
@@ -137,7 +163,15 @@ class RdbStore private constructor(val handle: CPointer<OH_Rdb_Store>) {
     fun insert(table: String, bucket: CPointer<OH_VBucket>): Int =
         platform.ArkData.RDB.OH_Rdb_Insert(handle, table, bucket)
 
-    /** **upsert 的正确写法**：`OH_Rdb_Insert` 在主键冲突时返回 -1，不会覆盖。 */
+    /**
+     * **upsert 的正确写法**：`OH_Rdb_Insert` 在主键冲突时返回 -1，不会覆盖。
+     *
+     * ⚠️ **2026-10-26 实测：这条路径在 Kotlin/Native 侧不可用**（返回 -1），
+     * 而**同一个 C API、同一个 `ValuesBucket` 布局**在 C++（dlopen）侧返回 1 且数据正确入库。
+     * 因此生产写入**改走 [execSql]（纯 SQL）**——见 [upsertChunk] / [upsertDocument]。
+     * 这个方法**保留但不再被生产路径调用**，留着是为了让"哪条路走过、结果如何"有迹可循，
+     * 也便于后来者用一个最小用例复现（不要直接删掉又踩回来）。
+     */
     fun insertReplace(table: String, bucket: CPointer<OH_VBucket>): Int = memScoped {
         val rowId = alloc<LongVar>()
         rowId.value = -1L
@@ -146,6 +180,20 @@ class RdbStore private constructor(val handle: CPointer<OH_Rdb_Store>) {
             platform.ArkData.RDB.RDB_CONFLICT_REPLACE, rowId.ptr,
         )
         if (rc != RdbCode.OK) rc else rowId.value.toInt()
+    }
+
+    /**
+     * 执行一条写 SQL，返回**受影响行数**（`OH_Rdb_Execute` 只回状态码，所以这里再查一次
+     * `changes()`；仅用于"删了多少行"这类需要行数的场景）。
+     */
+    fun execChanges(sql: String): Int {
+        val rc = execute(sql)
+        if (rc != RdbCode.OK) return -1
+        val cur = query("SELECT changes() AS n") ?: return 0
+        var n = 0
+        if (cursorNext(cur) == 0) n = (cursorInt64(cur, "n") ?: 0L).toInt()
+        cursorDestroy(cur)
+        return n
     }
 
     /**

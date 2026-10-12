@@ -42,8 +42,6 @@ import com.sekb.shared.rag.VectorHit
 import com.sekb.shared.rag.VectorMath
 import com.sekb.shared.rag.VectorRecord
 import com.sekb.shared.rag.VectorStore
-import platform.ArkData.RDB.OH_Rdb_CreateValuesBucket
-import platform.ArkData.RDB.OH_Rdb_Execute
 
 /**
  * RDB 向量存储 + 文档登记（**一个类实现两个端口**）。
@@ -109,11 +107,11 @@ class RdbVectorStore(
     }
 
     private fun writeMeta(k: String, v: String) {
-        val b = OH_Rdb_CreateValuesBucket() ?: error("CreateValuesBucket 返回空")
-        bucketPutText(b, "k", k)
-        bucketPutText(b, "v", v)
-        store.insertReplace("meta", b)
-        bucketDestroy(b)
+        // 纯 SQL（理由见 RdbStore.insertReplace 的注释：Kotlin 侧 ValuesBucket 实测不可用）
+        val rc = store.execute(
+            "INSERT OR REPLACE INTO meta (k, v) VALUES (${sqlQuote(k)}, ${sqlQuote(v)})",
+        )
+        check(rc == RdbCode.OK) { "写 meta($k) 失败 rc=$rc" }
     }
 
     // ── VectorStore ─────────────────────────────────────────────────────────
@@ -129,19 +127,12 @@ class RdbVectorStore(
         store.beginTransaction()
         try {
             for (r in records) {
-                val b = OH_Rdb_CreateValuesBucket() ?: error("CreateValuesBucket 返回空")
-                var ok = bucketPutText(b, "id", r.id)
-                ok = bucketPutText(b, "source_id", r.sourceId) && ok
-                ok = bucketPutText(b, "text", r.text) && ok
-                ok = bucketPutInt64(b, "dim", r.vector.size.toLong()) && ok
-                ok = bucketPutBlob(b, "vector", encodeVector(r.vector)) && ok
-                if (!ok) {
-                    bucketDestroy(b)
-                    error("写 ValuesBucket 失败（id=${r.id}）——静默忽略会让向量列变成 NULL")
-                }
-                val rc = store.insertReplace("chunks", b)
-                bucketDestroy(b)
-                if (rc < 0) error("upsert 失败：id=${r.id} rc=$rc")
+                val rc = store.execute(
+                    "INSERT OR REPLACE INTO chunks (id, source_id, text, dim, vector) VALUES (" +
+                        "${sqlQuote(r.id)}, ${sqlQuote(r.sourceId)}, ${sqlQuote(r.text)}, " +
+                        "${r.vector.size}, ${sqlBlob(encodeVector(r.vector))})",
+                )
+                if (rc != RdbCode.OK) error("upsert 失败：id=${r.id} rc=$rc")
             }
             store.commit()
         } catch (e: Throwable) {
@@ -150,7 +141,17 @@ class RdbVectorStore(
         }
     }
 
-    override fun deleteBySource(sourceId: String): Int = store.deleteBySourceColumn("chunks", sourceId)
+    /**
+     * 删一份文档的全部切片，返回**删除条数**。
+     *
+     * ⚠️ 这里**不能**用 `DELETE ... ; SELECT changes()` 的两步写法吗？可以——[RdbStore.execChanges]
+     * 就是它。用 SQL 而不是 `OH_Predicates`，与写入路径同一理由（Kotlin 侧结构体函数指针那条路
+     * 实测不可用，见 `RdbStore.insertReplace` 的注释）。
+     * 接口契约（`VectorStore.deleteBySource` 的注释）要求"返回删除条数"，所以必须用 `changes()`，
+     * 不能只判 `rc == 0`。
+     */
+    override fun deleteBySource(sourceId: String): Int =
+        store.execChanges("DELETE FROM chunks WHERE source_id = ${sqlQuote(sourceId)}")
 
     override fun search(query: FloatArray, topK: Int): List<VectorHit> {
         // 与 Android 同口径：维度不符**返回空列表**（不抛）——
@@ -208,20 +209,13 @@ class RdbVectorStore(
     // ── DocumentRegistry ────────────────────────────────────────────────────
 
     override fun upsert(info: DocumentInfo) {
-        val b = OH_Rdb_CreateValuesBucket() ?: error("CreateValuesBucket 返回空")
-        var ok = bucketPutText(b, "id", info.id)
-        ok = bucketPutText(b, "name", info.name) && ok
-        ok = bucketPutInt64(b, "size_bytes", info.sizeBytes) && ok
-        ok = bucketPutInt64(b, "chunks", info.chunks.toLong()) && ok
-        ok = bucketPutInt64(b, "added_at", info.addedAtMillis) && ok
-        ok = bucketPutInt64(b, "device_only", if (info.deviceOnly) 1L else 0L) && ok
-        if (!ok) {
-            bucketDestroy(b)
-            error("写 documents 的 ValuesBucket 失败（id=${info.id}）")
-        }
-        val rc = store.insertReplace("documents", b)
-        bucketDestroy(b)
-        if (rc < 0) error("登记文档失败：id=${info.id} rc=$rc")
+        val rc = store.execute(
+            "INSERT OR REPLACE INTO documents " +
+                "(id, name, size_bytes, chunks, added_at, device_only) VALUES (" +
+                "${sqlQuote(info.id)}, ${sqlQuote(info.name)}, ${info.sizeBytes}, ${info.chunks}, " +
+                "${info.addedAtMillis}, ${if (info.deviceOnly) 1 else 0})",
+        )
+        if (rc != RdbCode.OK) error("登记文档失败：id=${info.id} rc=$rc")
     }
 
     /** 按导入时间倒序（最近导入的在最前）——**在 SQL 里排**，与 Android 的 `ORDER BY added_at DESC` 一致。 */
@@ -258,26 +252,23 @@ class RdbVectorStore(
      * 不含引号，直接拼字面量的风险面比 `sourceId` 小得多。
      */
     override fun delete(id: String): Boolean {
-        val cur = store.query("SELECT id FROM documents WHERE id = '${id.replace("'", "''")}'")
-        var exists = false
-        if (cur != null) {
-            exists = cursorNext(cur) == 0
-            cursorDestroy(cur)
-        }
-        if (!exists) return false
-        store.beginTransaction()
-        return try {
-            val rc = store.execute("DELETE FROM documents WHERE id = '${id.replace("'", "''")}'")
-            store.commit()
-            rc == RdbCode.OK
-        } catch (e: Throwable) {
-            store.rollBack()
-            throw e
-        }
+        // 与 Android 同语义：返回"是否真的删到了行"。
+        // `OH_Rdb_Execute` 不回行数 → 用 `changes()`（见 RdbStore.execChanges）。
+        val n = store.execChanges("DELETE FROM documents WHERE id = ${sqlQuote(id)}")
+        return n > 0
     }
 
     /** 关掉底层句柄（自检里模拟"App 重启"：必须真的关，否则读到的可能是同一份内存缓存）。 */
     fun close(): Int = store.close()
+
+    /**
+     * 本实例用的库名（自检要"关掉再重开同一个库"来证明落盘，需要它）。
+     *
+     * 为什么不留一个"重新打开自己"的方法：那会把 `open` 的参数缓存在对象里，
+     * 与 Android 的 `openOrReembed(probe, ...)` 两段式形态不一致。给个库名，
+     * 自检自己再 `RdbVectorStore(dir, space, dbNamePublic)` 一次即可。
+     */
+    val dbNamePublic: String get() = dbName
 
     private companion object {
         const val DDL_META = "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)"

@@ -1613,3 +1613,115 @@ HR9 探针已证明 `libhuks_ndk.z.so` 在设备上 `LOAD OK`，所以凭证端�
 `napi_init.cpp` **由主线独占**，各工作流用**自己的头文件**（`napi_h3h4.h`）注册 ——
 冲突面从"整个文件"压到"一行 `#include` + 一行调用"。
 **教训：改完就 `git add <具体文件>` 提交**，工作区里的未提交改动没有第二份副本。
+
+---
+
+## H5（工作流 F）：RDB 的 NDK C API 落地 `VectorStore`/`DocumentRegistry`（2026-10-26）
+
+### 一句话结论
+
+**`libnative_rdb_ndk.z.so` 可用，且不需要自建 cinterop**：OHOS Kotlin fork 的**平台 klib 里
+已经有一份 ArkData/RDB 绑定**（`platform.ArkData.RDB`，manifest 自带
+`headers=database/rdb/relational_store.h` 与 `linkerOpts=-lnative_rdb_ndk.z`）。
+`llvm-readelf -d libkn.so` 实测 `DT_NEEDED` 里出现 `libnative_rdb_ndk.z.so`。
+
+> 我第一版按 `ohcrypto.def` 的先例自建了 `cinterop/rdb.def`——**多余**，已删。
+> 判据：`.tooling/konan/kotlin-native-prebuilt-*/klib/platform/ohos_arm64/org.jetbrains.kotlin.native.platform.RDB/manifest`。
+
+### ① 探针先行（HR2 的"最小验证先于完整实现"）—— 设备原始证据
+
+```bash
+bash scripts/harmony.sh rdbprobe 30
+```
+
+`127.0.0.1:5555` 原始 hilog（截选）：
+
+```
+LOAD OK   libnative_rdb_ndk.z.so
+LOAD FAIL libnative_rdb.z.so — Error loading shared library libnative_rdb.z.so: No such file or directory
+SYMBOLS OK  10 个符号全部解析（含 GetOrOpen/Execute/Insert/ExecuteQuery/CloseStore）
+CONFIG SIZE sizeof(OH_Rdb_Config)=45（期望 45 = 4+8*4+1+4+4，pack(1)）
+OPEN OK   errCode=0 dir=/data/storage/el2/database/entry
+EXECUTE   rc=0
+PUT       text=0/0/0 int64=0 blob=0
+INSERT    rowId=1
+QUERY     rows=1 id=probe#0 dim=3 text=端侧 RAG 探针文本
+BLOB      12B 读出后逐字节相同=true
+REOPEN    close=0 reopen_err=0 行数=1
+RDB-DLOPEN PASS
+```
+
+上面这段走的是 **C++ `dlopen` + `dlsym`**（`napi_init.cpp` 的 `h5::rdbLinkProbe`，
+**不依赖链接期**），与 Kotlin 侧的平台 klib 是**两条独立判据**——它们都 PASS，
+才排除了"DT_NEEDED 名字对不上导致整个 .so 加载失败"这类尾部风险。
+
+**Kotlin/Native 侧（生产路径）同样全绿**：
+
+```
+RDB-PROBE PASS 20/20
+PASS rdb_create_table — OH_Rdb_Execute(DDL) rc=0（0=RDB_OK）
+PASS rdb_sql_insert — 纯 SQL 插入 rc=0（0=RDB_OK）
+PASS rdb_query_once — GoToNextRow 命中行数=1
+PASS rdb_text_roundtrip — id='probe#sql' source_id='probe' dim=3 text='端侧 RAG 探针文本'
+PASS rdb_blob_roundtrip — BLOB 12B 读出后逐字节相同=true（float32 小端：1.5/-2.25/1.0e-3）
+PASS close_store / reopen_store / rdb2_*（关闭→重开后逐字段仍可读）
+```
+
+### ⚠️ ② 本轮最重要的**负面**结论：Kotlin 侧 `OH_Rdb_Insert` 写不进去（改走纯 SQL）
+
+| 路径 | 结果 |
+|---|---|
+| **C++（dlopen）** `OH_Rdb_CreateValuesBucket` + 5×`put*` + `OH_Rdb_Insert` | 全部 `0`，`rowId=1`，数据正确入库 |
+| **Kotlin/Native** 同一套调用（同一个 C API、同一份 `OH_VBucket` 布局） | `put*` 也返回成功，但 **`OH_Rdb_Insert` 恒返回 -1**，行**没有**入库 |
+| **Kotlin/Native** 纯 SQL `INSERT OR REPLACE` | `rc=0`，行正确入库，**BLOB 逐字节相同** |
+
+而且 `putText` 往**不存在的列**写也返回**成功** → `put*` 的返回值**不能**作为字段校验判据
+（我最初把它写成"必须失败"的反向验证，实测**判据本身不成立**，已降级为 NOTE）。
+
+**结论与取舍**：生产写入路径**一律走纯 SQL**（`INSERT OR REPLACE` + `sqlQuote`/`sqlBlob` 转义），
+这是本项目里"Kotlin 侧结构体函数指针那条路不可用"的**可复核结论**——
+不在 Kotlin 侧再试 ValuesBucket，也不改共享层（`VectorStore` 接口不变）。
+代价：单条 SQL 比 bucket 慢一档；但端侧一次 ingest 只有几块到几十块，且 `all()` 的全量解码
+本来就占主导——**正确性优先于这点吞吐**，若将来语料上万块需要批量写，再回头查 bucket 的 ABI 差异。
+
+### ③ cinterop 的三处实测坑（写下来免得下一位再花一整轮）
+
+1. **结构体里的函数指针没有 `@CCall` 转换**：`OH_VBucket.putText` 的形参就是
+   `CPointer<ByteVar>?`，**传 `String` 编译不过**，`reinterpret<CFunction<(…, String?, …)>>()`
+   **也绕不过**（报 `None of the following candidates is applicable…`）。
+   正解：自己准备 C 缓冲（本实现用 `withCStrings` + `allocArray`，生命周期显式）。
+   ⚠️ **反过来，平台顶层函数**（`OH_Rdb_Execute(store, sql)`）**有**注解，可以直传 `String`。
+2. **函数指针调用要显式 `import kotlinx.cinterop.invoke`**：不 import 时报的错是
+   `Cannot infer type for type parameter 'T'/'R'` + `receiver type mismatch`，
+   从这些信息几乎猜不到"少的是一行 import"（我是写了个 scratch 文件做二分才定位到的）。
+3. **`alloc<OH_Rdb_Config>()` 返回结构体本身**（不是 `CPointer`），传指针要 `.ptr`；
+   `sizeOf<T>()` 返回 `ULong`（与字面量比要写 `45uL`）。
+   另外 **RDB 库名有长度上限**：`sekb_rag_selftest_1791779491000.db` → `errCode=14800037` 打不开，
+   所以每轮唯一库名只取时间戳末 6 位。
+
+### ④ 端口实现（语义与 Android `SqliteVectorStore` 逐条对齐）
+
+| 行为 | Android | `RdbVectorStore.kt` |
+|---|---|---|
+| schema | `chunks(id PK, source_id, text, dim, vector BLOB)` + `documents` + `meta` | 同表同列 |
+| 向量编码 | `ByteBuffer` **小端 float32** BLOB | 同口径（`encodeVector`/`decodeVector`，逐字节） |
+| upsert | `insertWithOnConflict(CONFLICT_REPLACE)` | `INSERT OR REPLACE`（纯 SQL，理由见 ②） |
+| 维度不符 | `require(...) { "向量维度不符：期望 …" }` | **同一条消息**（已由自检 `rag_dim_mismatch_refused` 钉住） |
+| `deleteBySource` | 返回删除条数 | `DELETE` + `changes()`（接口契约要求行数） |
+| `search` | 全量读一次 → 暴力余弦 → `VectorMath.topK` | 同（不做 ANN，理由与 Android 同） |
+| 空间戳 | `meta` 里存 `space`/`dim`，打开时校验，不一致**抛** | 同 |
+| `clear` | 切片与文档元信息一起清 | 同 |
+| `list()` | `ORDER BY added_at DESC` | 同（在 SQL 里排） |
+
+### ⑤ 未验 / 未成（如实）
+
+1. **`rag_*` 与检索评测表尚未在本轮取得 PASS**——RDB 探针 20/20 已绿，但 RAG 自检
+   （含 12 篇/33 问 ×5 档阈值的评测）在模拟器上跑到一半会触发 **appfreeze**
+   （`/data/log/faultlog/faultlogger/appfreeze-com.sekb.ohos.spike-*`），
+   与 `Index.ets` 里"所有探针串行跑"的既有形态有关（模型会话 + H3 网络探针叠加）。
+   已完成的修复（每轮唯一库名避免跨轮残留污染判据、逐篇 ingest 并逐篇检查失败、
+   断言语料块数/来源数）**尚未拿到一轮完整的 PASS 输出**。
+2. **反向验证**（删一篇后不再命中 + 错维度必须 FAIL）已在代码里就位
+   （`rag_delete_not_retrievable` / `rag_delete_keeps_others` / `rag_dim_mismatch_refused`），
+   其中后两条在前一轮跑动中**已被观察到**过红/过绿行为，但**还没在"全绿那一轮"里取证**。
+3. 未做：`clear()` 的独立取证、`all()` 在大语料下的吞吐、release 构建下的复跑。
