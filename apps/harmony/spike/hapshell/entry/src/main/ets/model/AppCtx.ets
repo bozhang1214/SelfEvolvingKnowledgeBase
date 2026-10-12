@@ -173,7 +173,24 @@ export class AppCtx {
       before = false;
     }
     let mkErr: string = '';
+    let parentMk: string = '未尝试';
     try {
+      // ⚠️ **父目录也要建**（2026-10-26 主线实测的根因）：
+      //    设备上 `/data/storage/el2/database/` **整个不存在**（`ls` 报 No such file or directory），
+      //    所以"只 mkdir 目标目录"必然失败（mkdir 不建中间目录），而 RDB 自己也不会建 →
+      //    报 `14800037 = RDB_E_CREATE_FOLDER_FAIL`。之前的诊断把这条盖住了：
+      //    日志里只看到 `父目录存在=false`，但失败原因被笼统写成"mkdir 未报错但仍不存在"。
+      //    先建父目录、再建目标目录，两步各自记结果（出问题时能一眼看出是哪一步）。
+      if (!parentOk) {
+        try {
+          fileIo.mkdirSync(parent);
+          parentMk = 'ok';
+        } catch (pe) {
+          parentMk = `code=${(pe as BusinessError).code} message=${(pe as BusinessError).message}`;
+        }
+      } else {
+        parentMk = '父目录本就存在';
+      }
       if (!before) {
         fileIo.mkdirSync(dir);
       }
@@ -188,9 +205,9 @@ export class AppCtx {
     }
     hilog.info(0x0000, TAG,
       'RDB 目录自检：path=%{public}s 父目录存在=%{public}s 之前存在=%{public}s 之后存在=%{public}s mkdir=%{public}s',
-      dir, `${parentOk}`, `${before}`, `${after}`, mkErr.length > 0 ? mkErr : 'ok');
+      dir, `${parentOk}`, `${before}`, `${after}`, `父=${parentMk} 目标=${mkErr.length > 0 ? mkErr : 'ok'}`);
     if (!after) {
-      return `RDB 目录创建失败：${dir}（父目录存在=${parentOk}，mkdir ${mkErr.length > 0 ? mkErr : '未报错但仍不存在'}）`;
+      return `RDB 目录创建失败：${dir}（原父目录存在=${parentOk}，建父=${parentMk}，建目标=${mkErr.length > 0 ? mkErr : '未报错但仍不存在'}）`;
     }
     // ② 试过但**不生效**的一条路（写下来免得下一位重试）：既然目录存在、而新库名仍报
     //    `14800037`，我试过"由 App 侧先把库文件建成空文件，把新建变成打开已存在"——

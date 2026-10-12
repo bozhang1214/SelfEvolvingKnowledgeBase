@@ -405,9 +405,32 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
     d.id === srcId && d.chunks >= 1).length === 1,
     `导入「${srcId}」→ 列表里 ${docs.docs.length} 篇（总片段 ${docs.chunks} 段）`);
 
+  // ── 取证（主线 2026-10-26）：`source_id` 到底有没有落对 ──────────────────────────
+  // 为什么要单独插这一条：`rag_retrieve` 旧断言只要求 `sourceId.length > 0`，
+  // 而实测出现过"向量能给出分数（0.696）但 sourceId 是空串、deleteBySource 删 0 行"——
+  // 两条证据互相矛盾，必须把"写错"和"读错"分开判定。`rdbIdProbe` 用**最小用例**分层验：
+  //   单列 SELECT / 多列 SELECT / 生产 all() / deleteBySource / 维度校验，
+  // 首行 `RDBID PASS n/N`，明细里能直接看出是哪一层坏（见 knspike/.../RdbIdProbe.kt 头部）。
+  let idReport: string = '';
+  try {
+    idReport = knspike.rdbIdProbe(ctx.databaseDir, `st${Date.now()}`);
+  } catch (e) {
+    idReport = `RDBID FAIL — rdbIdProbe 调用失败（产物旧？缺 sekb_spike_rdb_id_probe）：${e}`;
+  }
+  for (const line of idReport.split('\n')) {
+    if (line.length > 0) {
+      hilog.info(0x0000, TAG, 'RDBID-DETAIL %{public}s', line);
+    }
+  }
+  a.check('rag_source_id_roundtrip', idReport.indexOf('RDBID PASS') >= 0,
+    idReport.split('\n')[0] + ` ｜ 明细见 hilog 的 RDBID-DETAIL（write/单列/多列/all/delete 各一条）`);
+
   const hit = ragRetrieve('端侧 RAG 为什么隐私更好', 3);
+  // ⚠️ 判据强化（2026-10-26）：原来只查 `sourceId.length > 0` —— 太弱。
+  //    实测出现过空串却能通过（空串的长度不是 0 吗？不——那时是**别的库**的命中），
+  //    所以这里改成"首条命中必须**就是**刚导入的那个 sourceId"，否则删除/来源名都不可信。
   a.check('rag_retrieve', hit.ok && hit.searchable && hit.hits.length > 0 &&
-    hit.hits[0].sourceId.length > 0,
+    hit.hits[0].sourceId === srcId,
     `检索 → ${hit.hits.length} 条，首条=${hit.hits.length > 0 ? `${hit.hits[0].sourceId}@${hit.hits[0].score.toFixed(3)}` : '无'}` +
     `（阈值=${hit.threshold}）`);
   // ⚠️ 这条判据的第一版是**错的**：我按"端侧空间必然异于云端"写了 `cloudCompatible === false`，
