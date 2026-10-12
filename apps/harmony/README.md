@@ -1822,6 +1822,7 @@ bash scripts/harmony.sh h8selftest-red 150
 | 文件 | 证明什么 |
 |---|---|
 | `docs/screenshots/ui-chat-empty.jpeg` | **聊天页空状态**：示例问题 + **输入栏完整可见**、底部四标签都在屏内（深色/浅色未串，底 `#F5F7FA`、卡片白） |
+| `docs/screenshots/ui-chat-restored.jpeg` | **历史真的跨重启存活**：删 `conversations.json` 之前那一张（同样文件名曾用过）显示的正是**上一轮问过的对话**（用户气泡+助手长回答+输入栏+标签栏），说明 `HistoryStore` 的落盘与"按当前会话指针恢复"是有效的 |
 | `docs/screenshots/ui-chat-turn.jpeg` | **流式逐字落地的结果**：用户气泡靠右（蓝 `#1677FF`）、助手气泡靠左（白卡片）——这一轮 `chat stream code=200 bytes=76343 textChars=632`、共享层解出 **361 个 token 事件 + done** |
 | `docs/screenshots/ui-chat-badge.jpeg` | **执行位置徽章 + 原因语义**：绿点「本机完成」+「这次请求在设备能力范围内，按设计优先由本机处理。」（= 共享层原因码 `edge_preferred` 经 `explainReason` 渲染） |
 | `docs/screenshots/ui-history.jpeg` | **历史页真落盘**：`本机会话（1）· 端侧推理为什么更省电? · 2 条 · 12:50`，带「当前」标记与「删除」；文件落盘证据见 §5 |
