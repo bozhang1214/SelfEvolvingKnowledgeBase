@@ -17,10 +17,10 @@
 
 package com.sekb.ohos.spike
 
+import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.COpaquePointerVar
 import kotlinx.cinterop.FloatVar
-import kotlinx.cinterop.LongVar
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.get
 import kotlinx.cinterop.memScoped
@@ -44,6 +44,7 @@ import platform.MindSporeLiteKit.MindSpore.OH_AI_ModelDestroy
 import platform.MindSporeLiteKit.MindSpore.OH_AI_ModelGetInputs
 import platform.MindSporeLiteKit.MindSpore.OH_AI_ModelGetOutputs
 import platform.MindSporeLiteKit.MindSpore.OH_AI_ModelPredict
+import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorGetDataSize
 import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorGetDataType
 import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorGetElementNum
 import platform.MindSporeLiteKit.MindSpore.OH_AI_TensorGetMutableData
@@ -112,14 +113,40 @@ class MsSession private constructor(
      *
      * 改为写 `OH_AI_TensorGetMutableData` 返回的**模型自有**缓冲：既不转移所有权，
      * 也没有悬垂指针，调用方不必关心生命周期（元素数已由调用方与本类双重校验）。
+     *
+     * ⚠️⚠️ **必须按"缓冲实际字节数"决定打包宽度**——这一条是被一次真实缺陷逼出来的（2026-10-26）：
+     * 那个 `.ms`（`bge-maskinput.ms`）在 flatbuffer 里把 `input_ids`/`token_type_ids` 标成
+     * `dtype=34`，而 OHOS 的 `OH_AI_DATATYPE_NUMBERTYPE_INT32` **正好是 34**（INT64 是 35）——
+     * 也就是说**模型声明的就是 int32**，但老代码写死了 `LongArray` 的 8 字节布局，
+     * 每次喂 512 个 id 就写 **4096 B**，而张量缓冲只有 **2048 B** → **越界 2048 B**。
+     * Linux 形态下这一写直接 `malloc(): invalid size (unsorted)` 崩掉（可复现）；
+     * 设备上 musl 不报，于是后半段 id 静默写进隔壁分配块，模型只读到前 256 个 id。
+     * 症状极具误导性：向量能算出来、L2 是 1.0、写读回也对，只是**余弦与 Android 差三倍**。
+     *
+     * 所以这里不再"假设 int64"：由 [OH_AI_TensorGetDataSize] 拿到**真实缓冲字节数**，
+     * 与元素数一除得到每元素宽度（4 或 8），再据此打包；打包后**校验字节数正好相等**，
+     * 越界写被结构性地排除（C 侧的 `reinterpret<T>()` 没有边界检查，只能自己拦）。
      */
-    private fun fillI64(t: COpaquePointer, values: LongArray) {
-        val dst = OH_AI_TensorGetMutableData(t) ?: throw MsError("取输入数据指针失败")
-        val p = dst.reinterpret<LongVar>()
-        for (j in values.indices) p[j] = values[j]
+    private fun fillIds(t: COpaquePointer, values: LongArray) {
+        val num = OH_AI_TensorGetElementNum(t).toInt()
+        if (num <= 0) throw MsError("输入元素数异常 =$num")
+        val bytes = OH_AI_TensorGetDataSize(t).toLong()
+        val name = OH_AI_TensorGetName(t)?.toKString() ?: "?"
+        if (bytes <= 0 || bytes % num != 0L) {
+            throw MsError("输入 $name 缓冲字节数=${bytes}、元素数=${num}——无法判定每元素宽度，拒绝写入")
+        }
+        val stride = (bytes / num).toInt()
+        if (stride != 4 && stride != 8) {
+            throw MsError(
+                "输入 $name 每元素 ${stride} B（元素数=${num}、缓冲=${bytes} B）——" +
+                    "既不是 int32 也不是 int64，拒绝写入（宁可真失败，也不要静默算错向量）",
+            )
+        }
+        setInputStride(name, stride)
+        writePacked(t, packIds(values, stride), bytes.toInt())
     }
 
-    /** 同 [fillI64]，float32 版本（additive mask 走这条）。 */
+    /** 同 [fillIds]，float32 版本（additive mask 走这条）。 */
     private fun fillF32(t: COpaquePointer, values: FloatArray) {
         val dst = OH_AI_TensorGetMutableData(t) ?: throw MsError("取输入数据指针失败")
         val p = dst.reinterpret<FloatVar>()
@@ -127,9 +154,85 @@ class MsSession private constructor(
     }
 
     /**
+     * 把一个整数 id 序列按 [bytesPerElem] 打包成字节数组（**只打包，不写**）。
+     *
+     * 单独拎出来是为了让"要写多少字节"在写入前就**可校验**：见 [writePacked]。
+     */
+    private fun packIds(values: LongArray, bytesPerElem: Int): ByteArray {
+        val buf = ByteArray(values.size * bytesPerElem)
+        for (j in values.indices) {
+            val v = values[j]
+            if (v < Int.MIN_VALUE || v > Int.MAX_VALUE) {
+                throw MsError("token id $v 超出 int32 范围（词表只有 ~21k），拒绝截断")
+            }
+            val x = v.toInt()
+            val base = j * bytesPerElem
+            for (b in 0 until bytesPerElem) {
+                buf[base + b] = ((x ushr (8 * b)) and 0xFF).toByte()
+            }
+        }
+        return buf
+    }
+
+    /**
+     * 把打包好的字节写进张量缓冲，并**在写之前**核对"要写的字节数 == 缓冲字节数"。
+     *
+     * 这条断言就是本次缺陷的守卫：越界写在 C 侧是静默的（没有边界检查），
+     * 而它造成的后果（张量只收到一半 id）只会表现为"向量不对"，极难反查。
+     */
+    private fun writePacked(t: COpaquePointer, bytes: ByteArray, bufferBytes: Int) {
+        if (bufferBytes != bytes.size) {
+            throw MsError(
+                "写入字节数与目标张量缓冲不符：打算写 ${bytes.size} B，缓冲 ${bufferBytes} B" +
+                    "（元素数=${OH_AI_TensorGetElementNum(t)}）——拒绝越界写：" +
+                    "越界是静默的，只会表现为'向量不对'。",
+            )
+        }
+        val dst = OH_AI_TensorGetMutableData(t) ?: throw MsError("取输入数据指针失败")
+        val p = dst.reinterpret<ByteVar>()
+        for (j in bytes.indices) p[j] = bytes[j]
+    }
+
+    /**
+     * 输入缓冲里**每个元素实际占几字节**（4 或 8），由 [fillIds] 按实测缓冲大小登记。
+     *
+     * 为什么要登记它：[diagnostics] 要把"模型**声明**的 dtype"与"缓冲**实测**的宽度"
+     * 分开打印——本次缺陷正是这两者不一致（flatbuffer 声明 int32，而代码当 int64 写）造成的。
+     * 打印出来之后，设备日志里就能直接看到"输入布局"，不必再靠猜。
+     */
+    private val inputStrides = mutableMapOf<String, Int>()
+
+    private fun setInputStride(name: String, bytesPerElem: Int) {
+        inputStrides[name] = bytesPerElem
+    }
+
+    /** 已实测的 stride（诊断打印用）。 */
+    fun strideOf(name: String): Int = inputStrides[name] ?: 0
+
+    /**
+     * 写一个整数 id 输入（公开入口，NAPI 测试用）：与 [fillIds] 同一套判据。
+     */
+    fun writeIds(t: COpaquePointer, values: LongArray) = fillIds(t, values)
+
+    /** 每个输入"声明 dtype + 缓冲字节数 + 实测每元素宽度"的诊断串（自检打印）。 */
+    val inputLayout: String
+        get() = OH_AI_ModelGetInputs(model).useContents {
+            (0 until handle_num.toInt()).mapNotNull { i ->
+                val t = handle_list?.get(i) ?: return@mapNotNull null
+                val name = OH_AI_TensorGetName(t)?.toKString() ?: return@mapNotNull null
+                val num = OH_AI_TensorGetElementNum(t).toInt()
+                val b = OH_AI_TensorGetDataSize(t).toLong()
+                val s = inputStrides[name] ?: 0
+                "$name(元素=$num, 声明dtype=${OH_AI_TensorGetDataType(t)}=0x${
+                    OH_AI_TensorGetDataType(t).toString(16)
+                }, 缓冲=${b}B, 每元素=${if (s == 0) "未实测" else "${s}B"})"
+            }.joinToString(" ")
+        }
+
+    /**
      * 跑一次推理。`feeds` 按**输入名**给数据（长度必须等于该输入的元素数）。
      *
-     * 数据写进模型自有缓冲（见 [fillI64]），所以**不需要**在 `Predict` 期间持有任何指针。
+     * 数据写进模型自有缓冲（见 [fillIds]），所以**不需要**在 `Predict` 期间持有任何指针。
      */
     fun predict(feeds: Map<String, LongArray>) {
         memScoped {
@@ -139,8 +242,8 @@ class MsSession private constructor(
                     val name = OH_AI_TensorGetName(t)?.toKString() ?: continue
                     val values = feeds[name] ?: continue
                     // `OH_AI_TensorSetData` 返回 void，**没有状态可查** → 长度/类型对不上只会
-                    // 表现为"向量不对"。所以调用方与本类都主动校验元素数与类型。
-                    fillI64(t, values)
+                    // 表现为"向量不对"。所以调用方与本类都主动校验元素数与**缓冲字节数**。
+                    fillIds(t, values)
                 }
             }
             val outArr = alloc<OH_AI_TensorHandleArray>()
@@ -201,12 +304,16 @@ class MsSession private constructor(
                     if (feed.size != want) {
                         throw MsError("输入 $name 元素数不符：给了 ${feed.size}，模型要 $want")
                     }
-                    // ⚠️ 不再用 `OH_AI_TensorGetDataType(t) == OH_AI_DATATYPE_NUMBERTYPE_INT64` 做断言：
-                    // 实测该比较在本绑定下**恒为 false**（诊断码 -1033 显示三个输入全被判成"非 int64"），
-                    // 于是它只会制造"类型不符"的假警报。类型由调用方的 `Feed` 子类**显式表达**，
-                    // 这里只按 Feed 分配对应缓冲；（元素数仍严格校验，那个是可靠的。）
+                    // ⚠️ **不要**用 `OH_AI_TensorGetDataType(t)` 判断 token 输入该按几字节写。
+                    // 两次实测都说明它不可信：
+                    //   · 早前：`== OH_AI_DATATYPE_NUMBERTYPE_INT64` **恒为 false**
+                    //     （诊断码 -1033 显示三个输入全被判成"非 int64"）→ 只会制造假警报；
+                    //   · 2026-10-26 `bge-maskinput.ms`：对三个输入**全返回 34**，
+                    //     而 34 是 `OH_AI_DATATYPE_NUMBERTYPE_INT32`（掩码本该是 FLOAT32=43）。
+                    // 可靠判据只有一个：`OH_AI_TensorGetDataSize` —— 由"缓冲字节数 / 元素数"
+                    // 得到真实宽度（见 [fillIds]）。这正是本缺陷的教训：**声明不可信，缓冲才可信**。
                     when (feed) {
-                        is Feed.I64 -> fillI64(t, feed.values)
+                        is Feed.I64 -> fillIds(t, feed.values)
                         is Feed.F32 -> fillF32(t, feed.values)
                     }
                 }
