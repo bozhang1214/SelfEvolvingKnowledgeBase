@@ -172,7 +172,24 @@ class RdbVectorStore(
         // 调用方（Retriever）已在上游用 `space` 判过空间，这里是防御性的第二道。
         if (query.size != space.dim) return emptyList()
         // 只读一次（Android 那份的注释记着教训：读两遍时若数据被改就会 id↔向量错配）
-        val records = all()
+        //
+        // ⚠️ **但这一次读必须"读得到"**（2026-10-26 主线实测）：设备上出现过
+        //    `size()`>0、同一进程稍后 `all()` 也读得到，而**检索当刻的这一次 `all()` 返回空**
+        //    → 分数算不出来、检索 0 条（`reason` 为空、`最高分` 都没有）。
+        //    与写入侧的可见性延迟是同一类现象，所以这里用**同一个办法**：有界轮询
+        //    （最多 4 次 × 40ms）；只要拿到非空就立刻用第一次的结果（仍然只"采用一次"读数，
+        //    不会出现"读两遍导致 id↔向量错配"的老问题）。
+        var records = all()
+        if (records.isEmpty()) {
+            val n = size()
+            if (n > 0) {
+                for (k in 1..3) {
+                    platform.posix.usleep(40_000u)
+                    records = all()
+                    if (records.isNotEmpty()) break
+                }
+            }
+        }
         val byId = records.associateBy { it.id }
         return VectorMath.topK(query, records.map { it.id to it.vector }, topK).mapNotNull { (id, score) ->
             byId[id]?.let { VectorHit(it.id, it.sourceId, it.text, score) }

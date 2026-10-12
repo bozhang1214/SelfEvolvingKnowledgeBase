@@ -116,6 +116,20 @@ export class RagHitsResult {
   searchMillis: number = 0;
   space: string = '';
   cloudCompatible: boolean = false;
+  /** 查询侧嵌入取证（2026-10-26 主线加）：维度/模长/是否全零/两次自洽余弦/前三个分量。 */
+  qDim: number = -1;
+  qNorm: string = '';
+  qZero: boolean = false;
+  qSelfCos: string = '';
+  qHead: string = '';
+  /** 库里存的行数与每行的 dim/norm/头两个分量（用于判定"存的向量像不像"）。 */
+  storedN: number = -1;
+  stored: string = '';
+  /** 与查询向量的**直接余弦**（不经 topK/阈值）——区分"打分坏了"与"语义本来就不像"。 */
+  directTopCos: string = '';
+  directTopId: string = '';
+  /** 文档登记的实际内容（`id:切片数` 列表）——篇数随轮次变时必须看到实际值。 */
+  docIds: string = '';
 }
 
 /** 打开文档库（模型 + RDB 索引）。**失败不抛**，`ok=false` + `reason`。 */
@@ -228,6 +242,16 @@ export function ragRetrieve(query: string, topK: number): RagHitsResult {
     r.searchMillis = o.searchMillis !== undefined ? o.searchMillis : 0;
     r.space = o.space !== undefined ? o.space : '';
     r.cloudCompatible = o.cloudCompatible === true;
+    r.qDim = o.qDim !== undefined ? o.qDim : -1;
+    r.qNorm = o.qNorm !== undefined ? o.qNorm : '';
+    r.qZero = o.qZero === true;
+    r.qSelfCos = o.qSelfCos !== undefined ? o.qSelfCos : '';
+    r.qHead = o.qHead !== undefined ? o.qHead : '';
+    r.storedN = o.storedN !== undefined ? o.storedN : -1;
+    r.stored = o.stored !== undefined ? o.stored : '';
+    r.directTopCos = o.directTopCos !== undefined ? o.directTopCos : '';
+    r.directTopId = o.directTopId !== undefined ? o.directTopId : '';
+    r.docIds = o.docIds !== undefined ? o.docIds : '';
     const hits: Source[] = [];
     if (o.hits !== undefined && o.hits !== null) {
       for (const h of o.hits as RawHit[]) {

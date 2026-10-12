@@ -433,9 +433,13 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
     ` ｜ 原始报文=${ing1.rawJson.substring(0, 220)}`);
 
   const docs = ragDocuments();
+  // 报告里带上**实际登记内容**（每篇 id:切片数）：此前只报"N 篇/M 段"，
+  // 篇数随轮次变时看不出到底哪一篇丢了（2026-10-26 主线加）。
+  const docIdsTxt: string = docs.docs.map((d: DocInfo) => `${d.id}:${d.chunks}`).join(',');
   a.check('rag_ingest', docs.ok && docs.docs.filter((d: DocInfo) =>
     d.id === srcId && d.chunks >= 1).length === 1,
-    `导入「${srcId}」→ 列表里 ${docs.docs.length} 篇（总片段 ${docs.chunks} 段）`);
+    `导入「${srcId}」→ 列表里 ${docs.docs.length} 篇（总片段 ${docs.chunks} 段）` +
+    ` ｜ 实际登记：[${docIdsTxt}]`);
 
   // ── 取证（主线 2026-10-26）：`source_id` 到底有没有落对 ──────────────────────────
   // 为什么要单独插这一条：`rag_retrieve` 旧断言只要求 `sourceId.length > 0`，
@@ -468,7 +472,10 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
     hit.hits[0].sourceId === srcId,
     `检索 → ${hit.hits.length} 条，首条=${hit.hits.length > 0 ? `${hit.hits[0].sourceId}@${hit.hits[0].score.toFixed(3)}` : '无'}` +
     `（阈值=${hit.threshold} searchable=${hit.searchable} reason=${hit.reason} space=${hit.space}` +
-    ` cloudCompatible=${hit.cloudCompatible} 嵌入=${hit.embedMillis}ms 检索=${hit.searchMillis}ms）`);
+    ` cloudCompatible=${hit.cloudCompatible} 嵌入=${hit.embedMillis}ms 检索=${hit.searchMillis}ms` +
+    ` ｜ 查询 dim=${hit.qDim} norm=${hit.qNorm} 全零=${hit.qZero} 自洽=${hit.qSelfCos} 头=${hit.qHead}` +
+    ` ｜ 库里 ${hit.storedN} 行：${hit.stored}` +
+    ` ｜ **直接余弦**=${hit.directTopCos}（${hit.directTopId}）｜ 登记：${hit.docIds}）`);
   // ⚠️ 这条判据的第一版是**错的**：我按"端侧空间必然异于云端"写了 `cloudCompatible === false`，
   //    但 H6 的**目标**恰恰是"与 Android/云端同空间"（cos=0.2439 同基线）——
   //    `MindSporeBgeEmbedding` 的 spaceId 默认就是 `EmbeddingSpace.SERVER_SPACE_ID`。

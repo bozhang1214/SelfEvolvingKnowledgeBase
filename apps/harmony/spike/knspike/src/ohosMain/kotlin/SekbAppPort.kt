@@ -329,6 +329,87 @@ object SekbApp {
                 o.put("embedMillis", out.embedMillis)
                 o.put("searchMillis", out.searchMillis)
                 o.put("threshold", minScore)
+                // ⚠️ **查询侧嵌入的直接取证**（2026-10-26 主线加，用来终结"分数在 0.696/0.214/0.000 间摆"的猜测）：
+                //    同一个查询**嵌入两次**，报出「是否全零 / 模长 / 两次是否一致 / 前三个分量」。
+                //    判据：`qZero=true` ⇒ 嵌入返回了零向量（分数必然 0）；
+                //          `qSelfCos≈1` ⇒ 嵌入是确定性的（摆动就出在打分/阈值，而不是嵌入）。
+                run {
+                    val q1 = runCatching { s.embed.embedOne(query) }.getOrNull()
+                    val q2 = runCatching { s.embed.embedOne(query) }.getOrNull()
+                    fun norm(v: FloatArray?): Double {
+                        if (v == null) return -1.0
+                        var a = 0.0
+                        for (x in v) a += x.toDouble() * x.toDouble()
+                        return kotlin.math.sqrt(a)
+                    }
+                    fun selfCos(a: FloatArray?, b: FloatArray?): Double {
+                        if (a == null || b == null) return -2.0
+                        var d = 0.0
+                        var na = 0.0
+                        var nb = 0.0
+                        for (i in a.indices) {
+                            d += a[i].toDouble() * b[i].toDouble()
+                            na += a[i].toDouble() * a[i].toDouble()
+                            nb += b[i].toDouble() * b[i].toDouble()
+                        }
+                        val den = kotlin.math.sqrt(na) * kotlin.math.sqrt(nb)
+                        return if (den == 0.0) 0.0 else d / den
+                    }
+                    o.put("qDim", q1?.size ?: -1)
+                    o.put("qNorm", Fmt.fixed(norm(q1), 6))
+                    o.put("qZero", q1 != null && norm(q1) < 1e-9)
+                    o.put("qSelfCos", Fmt.fixed(selfCos(q1, q2), 6))
+                    o.put("qHead", q1?.take(3)?.joinToString(",") { Fmt.fixed(it.toDouble(), 6) } ?: "-")
+                }
+                // ⚠️ **命中行的入库向量也要看**（2026-10-26 主线加）：查询向量已确认正常
+                //    （norm=1、两次自洽=1），所以"分数低"只可能出在**库里存的向量**上。
+                //    报出首条命中那行的 dim/模长/头三个分量，以及**库里全部行的 id+模长**。
+                run {
+                    val rows = runCatching { s.store.all() }.getOrElse { emptyList() }
+                    fun nrm(v: FloatArray): Double {
+                        var a = 0.0
+                        for (x in v) a += x.toDouble() * x.toDouble()
+                        return kotlin.math.sqrt(a)
+                    }
+                    o.put("storedN", rows.size)
+                    // **与查询向量的真实余弦**（不经 topK/阈值）：直接判定"存的向量到底像不像"。
+                    // 有了它才能分清"检索打分坏了"与"语义确实不相似（分数天然低）"。
+                    run {
+                        val q = runCatching { s.embed.embedOne(query) }.getOrNull()
+                        if (q != null) {
+                            var best = -2.0
+                            var bestId = "-"
+                            for (r in rows) {
+                                if (r.vector.size != q.size) continue
+                                var d = 0.0
+                                var nq = 0.0
+                                var nr = 0.0
+                                for (i in q.indices) {
+                                    d += q[i].toDouble() * r.vector[i].toDouble()
+                                    nq += q[i].toDouble() * q[i].toDouble()
+                                    nr += r.vector[i].toDouble() * r.vector[i].toDouble()
+                                }
+                                val den = kotlin.math.sqrt(nq) * kotlin.math.sqrt(nr)
+                                val c = if (den == 0.0) 0.0 else d / den
+                                if (c > best) { best = c; bestId = r.id }
+                            }
+                            o.put("directTopCos", Fmt.fixed(best, 6))
+                            o.put("directTopId", bestId)
+                        }
+                    }
+                    o.put(
+                        "stored",
+                        rows.take(4).joinToString(" | ") {
+                            "${it.id}:dim=${it.vector.size},norm=${Fmt.fixed(nrm(it.vector), 4)}" +
+                                ",head=${it.vector.take(2).joinToString(",") { x -> Fmt.fixed(x.toDouble(), 4) }}"
+                        },
+                    )
+                }
+                // 文档登记内容（id 列表 + 每篇切片数）：rag_ingest 里"篇数/片段数"随轮次变，必须看到实际值
+                run {
+                    val dl = runCatching { s.index.documents() }.getOrElse { emptyList() }
+                    o.put("docIds", dl.joinToString(",") { "${it.id}:${it.chunks}" })
+                }
                 val arr = com.sekb.shared.core.JsonArray()
                 for (h in out.hits) {
                     val e = JsonObject()
