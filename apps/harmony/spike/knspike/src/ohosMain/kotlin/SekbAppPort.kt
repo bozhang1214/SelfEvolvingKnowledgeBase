@@ -143,7 +143,11 @@ object SekbApp {
             try {
                 val emb = MindSporeBgeEmbedding(mp, vocab)
                 emb.open()
-                val store = RdbVectorStore(dbDir, emb.space, wantDb)
+                // **每个库只开一个句柄**：这里开的这个交给 RdbVectorStore 注入使用
+                // （见 RdbVectorStore 构造函数的注释——多句柄会互相看不到写入，是自伤级缺陷）。
+                val (handle, herr) = RdbStore.open(dbDir, wantDb)
+                if (handle == null) error("打开 RDB 失败：errCode=$herr dir=$dbDir name=$wantDb")
+                val store = RdbVectorStore(dbDir, emb.space, wantDb, injected = handle)
                 session = LocalDocSession(
                     embed = emb, store = store, index = KnowledgeIndex(emb, store, registry = store),
                     spaceId = emb.space.id, dim = emb.space.dim, dbName = wantDb,

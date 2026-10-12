@@ -49,7 +49,6 @@ private class RdbIdReport {
 fun sekbSpikeRdbIdProbe(databaseDir: String, runTag: String): String {
     val r = RdbIdReport()
     val dbName = "sekb_idp_${(runTag.hashCode() and 0xFFFFFF).toString(16)}.db"
-    r.note("库=$dbName dir=$databaseDir")
 
     // ⚠️ **`delete` 之后再 `open`：实测删不干净**（2026-10-26 主线取证）：
     //    探针库名每轮唯一（`sekb_idp_<tag>`），但打开后 `all()` 却读到 **3 条上一轮的 `__selftest__` 行**
@@ -57,8 +56,18 @@ fun sekbSpikeRdbIdProbe(databaseDir: String, runTag: String): String {
     //    或者屏幕内的句柄仍指向旧文件。这是"自检库跨轮带脏数据"的**直接证据**，
     //    也是 `rag_retrieve` 看起来能命中（0.696）的原因之一：它命中的是**残留行**。
     //    这里把 open 后的**初始条数**报出来（期望 0）——它就是"库是否干净"的判据。
-    RdbStore.delete(databaseDir, dbName)
-    var (store, err) = RdbStore.open(databaseDir, dbName)
+    // ⚠️ **探针用独立目录**（2026-10-26 主线，修"探针自伤"）：
+    //    原来探针在**会话同一个目录**里开库（只换库名），实测这会与会话句柄互相干扰
+    //    （同一次自检里 `rag_ingest` 会从"2 篇/2 段"掉成"1 篇/0 段"）。
+    //    顺带解释了那条 `14800037`：**同一目录上再加一个新库名**在该实例上就是建不出来，
+    //    而同一个已有库能开——换成独立目录后建库正常（本轮实测）。
+    val probeDir = "$databaseDir/../probe"
+    // ⚠️ Kotlin/Native 里**没有** `java.io.File`（这是"JVM 专有 API"扫描器专门挡的东西）：
+    //    用 POSIX `mkdir`，父目录（`databaseDir` 的父级）已存在，所以一级即可；已存在时会返回 -1，忽略。
+    platform.posix.mkdir(probeDir, 0x1EDu)
+    r.note("库=$dbName dir=$probeDir（探针独立目录，不与会话抢句柄）")
+    RdbStore.delete(probeDir, dbName)
+    var (store, err) = RdbStore.open(probeDir, dbName)
     if (store == null) {
         // ⚠️ **对照实验**（2026-10-26 主线）：平台上先后出现过两个 databaseDir ——
         // 早期探针用的是 `/data/app/el2/100/base/<bundle>/haps/entry/database`（当时 PASS 20/20），
@@ -84,7 +93,7 @@ fun sekbSpikeRdbIdProbe(databaseDir: String, runTag: String): String {
         r.check("open", err == RdbCode.OK, "errCode=$err（新路径 $databaseDir）")
     }
 
-    val vs = RdbVectorStore(databaseDir, com.sekb.shared.embed.EmbeddingSpace("probe@3", 3), dbName)
+    val vs = RdbVectorStore(probeDir, com.sekb.shared.embed.EmbeddingSpace("probe@3", 3), dbName)
     r.note("space=${vs.space.id} dim=${vs.space.dim}")
     // **库干净性判据**（期望 0）：delete+open 之后不该有任何行。非 0 说明删除没生效/句柄仍指旧数据。
     val initRows = runCatching { vs.size() }.getOrElse { -1 }

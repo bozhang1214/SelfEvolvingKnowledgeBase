@@ -60,6 +60,17 @@ class RdbVectorStore(
     override val space: EmbeddingSpace,
     private val dbName: String = "sekb_rag.db",
     private val strictSpace: Boolean = true,
+    /**
+     * **外部注入的连接**（2026-10-26 主线加，修一个自伤级缺陷）。
+     *
+     * 为什么需要它：原来这个类**总是自己 `RdbStore.open()`**，于是同一个库文件上会出现**多个句柄**
+     * （`SekbApp` 会话一个、每次 `RdbVectorStore(...)` 又一个、自检探针再一个）。
+     * 实测症状正是"**写后读不到 / 只读到其中一行 / 读到旧数据**"——**多句柄互相看不见对方的写入**。
+     * 真实 UI 路径（只有会话那一个句柄）本来就是好的：把探针关掉之后，
+     * `rag_ingest` 的"2 篇/2 段、登记 [__selftest__:1,__selftest_other__:1]"**稳定 PASS**。
+     * 所以正确做法是**全进程每个库只持有一个句柄**并把它注入进来；不传时才自己开（兼容旧调用）。
+     */
+    injected: RdbStore? = null,
 ) : VectorStore, DocumentRegistry {
 
     private val store: RdbStore
@@ -68,7 +79,8 @@ class RdbVectorStore(
     val openDiagnostics: String
 
     init {
-        val (s, err) = RdbStore.open(databaseDir, dbName)
+        val (s, err) = if (injected != null) injected to RdbCode.OK
+                       else RdbStore.open(databaseDir, dbName)
         require(s != null) { "打开 RDB 失败：errCode=$err dir=$databaseDir name=$dbName" }
         store = s
         var diag = "errCode=$err 库=$dbName"

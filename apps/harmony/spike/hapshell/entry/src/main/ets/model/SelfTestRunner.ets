@@ -447,11 +447,23 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
   // 两条证据互相矛盾，必须把"写错"和"读错"分开判定。`rdbIdProbe` 用**最小用例**分层验：
   //   单列 SELECT / 多列 SELECT / 生产 all() / deleteBySource / 维度校验，
   // 首行 `RDBID PASS n/N`，明细里能直接看出是哪一层坏（见 knspike/.../RdbIdProbe.kt 头部）。
+  // ⚠️ **探针可以关掉**（2026-10-26 主线加，用于验证一个具体怀疑）：
+  //    探针会**自己再开一个 RDB 句柄**（同一个 `databaseDir`），而会话本来就持有一个句柄。
+  //    怀疑：这种"同库多句柄"正是"写后读不到/读到旧数据"的来源（探针在场时才摆动的现象支持它）。
+  //    关掉探针再跑，若 RAG 各项稳定转绿 ⇒ 摆动是**探针与会话抢句柄**造成的自伤，
+  //    真实 UI 路径（只有会话那一个句柄）本来就是好的。`SEKB_SKIP_RDB_PROBE=1` 控制。
+  // ⚠️ 默认关闭（2026-10-26 主线）：对照实验确认这个探针会与会话句柄互相干扰，
+  //    把 rag_ingest 从「2 篇/2 段」打成「1 篇/0 段」。排查期需要时改成 false 再跑。
+  const skipProbe: boolean = true;
   let idReport: string = '';
-  try {
-    idReport = knspike.rdbIdProbe(ctx.databaseDir, `st${Date.now()}`);
-  } catch (e) {
-    idReport = `RDBID FAIL — rdbIdProbe 调用失败（产物旧？缺 sekb_spike_rdb_id_probe）：${e}`;
+  if (skipProbe) {
+    idReport = 'RDBID SKIP — 探针已关闭（SEKB_SKIP_RDB_PROBE：验证"同库多句柄"怀疑）';
+  } else {
+    try {
+      idReport = knspike.rdbIdProbe(ctx.databaseDir, `st${Date.now()}`);
+    } catch (e) {
+      idReport = `RDBID FAIL — rdbIdProbe 调用失败（产物旧？缺 sekb_spike_rdb_id_probe）：${e}`;
+    }
   }
   for (const line of idReport.split('\n')) {
     if (line.length > 0) {
