@@ -1238,10 +1238,18 @@ FAIL embed_mask_value_scan — 扫描：-1e9=0.8154 -65504=0.8154 -1e4=0.8154 -i
 **② 设备侧掩码取值扫描**：把被掩位分别填 `-1e9 / -65504 / -1e4 / -inf` 四次重算 →
 **四个值给出完全相同的 0.8154**。掩码内容已被读回证明写对了，取值又完全不影响结果。
 
-**结论（可证伪，且已被两条实验支持）**：转换出的 `bge-maskinput.ms` **在运行时完全忽略了
-`sekb_additive_mask_zero` 这个图输入**（转换器把改接后的图输入**常量折叠**了）。
+**结论（⚠️ 已被本轮推翻，保留原文以便追溯；正确结论见下一节）**：转换出的 `bge-maskinput.ms`
+**在运行时完全忽略了 `sekb_additive_mask_zero` 这个图输入**（转换器把改接后的图输入**常量折叠**了）。
 于是所有 padding 位都参与注意力 → 两段无关文本的向量被 padding 主导 → 余弦从 0.244 抬到 0.8154。
 **这不是 Kotlin/端口的缺陷**，而是 `.ms` 转换链的缺陷（同一份 ONNX 在 onnxruntime 上是 0.2439）。
+
+> ❌ **上面这段结论是错的**（本轮推翻）：`.ms` 里掩码链路完整（flatbuffer 证据见下一节），
+> 真正的原因在**设备侧喂数**——`input_ids`/`token_type_ids` 是 **int32**（缓冲 2048 B），
+> 旧代码按 **int64** 写 4096 B → 越界 2048 B → 后半段 id 丢失。
+> 至于"四个掩码取值给出完全相同的 0.8154"：那是 **id 已经写坏了**之后的现象，
+> 掩码本身一直在正常工作（本轮修好后 host/设备都给出 0.2439）。
+> 另外，`-1e9/-65504/-1e4/-inf` 四者在 host 上**也**给出完全相同的 cos（softmax 饱和一致），
+> 所以"四个值相同"**本来就不能**作为"掩码被忽略"的证据。
 
 **下一步（不在本轮范围，方向明确）**：让转换后的图**真的保留掩码输入**——可选
 ① 不把掩码重接到"图输入"，而是保留原图的 `attention_mask` 路径，另行解决当初的"0 CPU 挂起"；
@@ -1262,3 +1270,195 @@ FAIL embed_mask_value_scan — 扫描：-1e9=0.8154 -65504=0.8154 -1e4=0.8154 -i
 
 > **另一处必须记的口径修正**：本轮我第一版把余弦判据写成 `cos < 0.95`，于是 `0.8154` 也 PASS——
 > 那是**假绿**。判据已改成 `|cos - 0.244| <= 0.02`（对齐 Android 基线）。**"小于 1 就行"不是判据**。
+
+---
+
+## ✅ H6 达成：同空间 0.2439（= Android 基线 0.244）——根因**不是**"转换器丢掩码"，而是**设备侧喂数越界**（2026-10-26，工作流 D）
+
+上一节把根因写成"转换器把 `sekb_additive_mask_zero` **常量折叠**了"。**本轮把它推翻了**，
+并给出真正的原因、修法、以及"让这类缺陷不可能再静默活下来"的判据。
+
+### 一句话结论
+
+`.ms` **从头到尾都是对的**；错的是**设备侧把 int32 的 token 输入按 int64 写了 4096 B**，
+越界 2048 B → 模型只收到前 256 个 id。掩码从来没被忽略，是**词 id 被写坏了**。
+
+### 根因的两条独立证据（都不是推测）
+
+**证据 1｜图结构：纯 Python 直接打开 `.ms` 的 flatbuffer**（新工具，不依赖 flatc/runtime/设备）
+
+```bash
+python3 scripts/check_ms_mask_wiring.py --ms .tooling/mindspore-lite/work/bge-maskinput.ms
+```
+
+```
+── bge-maskinput.ms：节点 134，张量 261，图输入 3 ──
+   [6] input_ids INT32[1, 512] 元素数=512 消费者=['/m/embeddings/word_embeddings/Gather']
+   [2] token_type_ids INT32[1, 512] 元素数=512 消费者=['/m/embeddings/token_type_embeddings/Gather']
+   [35] sekb_additive_mask_zero FLOAT32[1, 512, 512, 1] 元素数=262144 消费者=['sekb_additive_mask_zero_nh2nc']
+   → 掩码张量 [35] 的下游闭包节点数 = 110
+
+PASS ms_exists — bge-maskinput.ms 94802472 B
+PASS ms_magic — 魔数=MSL2
+PASS mask_input_declared — [35] sekb_additive_mask_zero dims=[1, 512, 512, 1] dtype=FLOAT32
+PASS mask_is_subgraph_input — subgraph.inputIndices 含 35？True（子图输入=[6, 2, 35]）
+PASS mask_reaches_attention_adds_via_closure — 下游闭包里可达的 attention/self/Add = 4 个（要求 ≥4）：['/m/encoder/layer.0/attention/self/Add', '/m/encoder/layer.1/attention/self/Add', '/m/encoder/layer.2/attention/self/Add', '/m/encoder/layer.3/attention/self/Add']
+PASS mask_not_a_constant — has_data=False（True = 掩码被换成了常量张量）
+
+MS-WIRING PASS 6/6
+```
+
+掩码链路完整：`mask 输入 → nh2nc(Transpose，NHWC 适配) → 4×attention/self/Add → Softmax`，
+而且 `has_data=False`（**不是**常量）。**注意 `input_ids` 那行**：
+flatbuffer 的 `dtype=34` 是 **INT32**（OHOS 的 `OH_AI_DATATYPE_NUMBERTYPE_INT32` 也是 34，
+INT64 才是 35）——这就是根因所在。
+
+**证据 2｜运行期：Linux aarch64 runtime 直接跑同一个 `.ms`，并复刻设备的写指针路径**
+
+```bash
+# 容器内 ctypes 调 libmindspore-lite.so（脚本见 scripts/check_ms_numerics.py）
+input_ids               元素数=512    MSTensorGetDataSize=2048 B     ← 512×4 = int32
+token_type_ids          元素数=512    MSTensorGetDataSize=2048 B
+sekb_additive_mask_zero 元素数=262144 MSTensorGetDataSize=1048576 B  ← ×4 = float32
+```
+
+旧代码写的是 `LongArray`（8 B/元素）→ **512×8 = 4096 B 写进 2048 B 的缓冲**。
+Linux 形态下这一写**当场崩**（可复现的原始报错）：
+
+```
+写 input_ids: memmove 4096 B → ptr 0xaaaae626b400（dataSize=2048）
+malloc(): invalid size (unsorted)
+```
+
+鸿蒙的 musl **不报**，于是后半段 id 被静默写进隔壁分配块——这就是"向量看起来正常、余弦却差三倍"的成因。
+把写入限制在缓冲大小内（2048 B）再与 onnxruntime 参考比：
+
+| 喂法（同一 `.ms`、同一套 id、同一掩码） | 与 ONNX 参考的余弦 | cos(A,B) |
+|---|---|---|
+| int64 写 4096 B（**旧代码**，越界） | 0.514（错） | 0.7861 ← 与设备那个 0.8154 同量级 |
+| int32 打包 2048 B（**修好后**） | **1.0000**（逐元素差 ≈4e-6） | **0.2439 = Android 基线** |
+
+### 修法
+
+* **设备侧**（`apps/harmony/spike/knspike/src/ohosMain/kotlin/MsLite.kt`）：
+  不再"假设 int64"，而用 `OH_AI_TensorGetDataSize / OH_AI_TensorGetElementNum` 得到
+  每元素的真实宽度（4 或 8）再打包；`writePacked` 在写之前断言
+  "要写的字节数 == 缓冲字节数"，**越界写在结构上被排除**（C 侧 `reinterpret<T>()` 没有边界检查，
+  只能自己拦）。同时把 `OH_AI_TensorGetDataType` 的口径也记了下来：实测它把三个输入都报成 34
+  （掩码本该是 43），所以**它不是可靠判据**，`GetDataSize` 才是。
+* **顺带补上一处复现性缺口**：`EmbedSanity.kt` 一直在调 `emb.embedOne(...)`，
+  而 `MindSporeBgeEmbedding` **只定义了私有的 `embedOneText`** —— 也就是说
+  **检出状态下源码编不过**（`Unresolved reference: embedOne`），设备上那份"跑通的产物"
+  是**更早的构建缓存**。本轮补上了 `embedOne`（含失败即降级），让"仓库这份代码能编"
+  与"设备上跑通了"重新变成同一件事。
+
+### 验收：三条命令 + 原始输出
+
+**① host：变体 vs 原型，带 padding 逐元素等价（判据 ≤1e-5）**
+
+```bash
+backend/.venv/bin/python3 scripts/check_maskfree_padding_gap.py
+```
+```
+[A] 原型 vs 变体（同一输入）CLS 最大逐元素差 = 1.067e-07 （PASS，判据 ≤1e-05）
+[B] 原型 vs 变体（同一输入）CLS 最大逐元素差 = 1.157e-07 （PASS，判据 ≤1e-05）
+cos(原型图, 有 padding) = 0.2439  PASS（Android 基线 0.244，容差 ±0.02）
+cos(生产变体, 有 padding) = 0.2439  PASS（Android 基线 0.244，容差 ±0.02）
+✅ host 验收通过：变体与原型在带 padding 时数值等价，且都落在 Android 基线同一区间。
+```
+
+> ⚠️ 口径更正：`scripts/model_to_ms_maskfree.py` 头部曾写"带 padding 时预期不一致"——
+> **对本变体不成立**（实测逐元素差 ~1e-7）。那句只适用于"把掩码烘焙成全零常量"的
+> `--mask-free` 诊断变体。脚本的判据也从"'两个余弦一个 >0.5 一个 <0.5'"
+> 改成"逐元素 ≤1e-5 + 都落在 0.244±0.02"（旧判据会把**正确**的模型判成"结论不明确"）。
+
+**② 转换产物侧一键验收（含两条反证，不需要设备）**
+
+```bash
+bash scripts/model_to_ms.sh verify-maskinput
+```
+```
+MS-WIRING PASS 6/6
+ORT：int64 声明 vs int32 声明的 CLS 最大逐元素差 = 0.000e+00，余弦 = 1.000000000
+host ORT 语义基线：正确掩码 cos(A,B)=0.2439，全零掩码 cos(A,B)=0.6319，差=0.3880
+PASS mask_input_present — 输入名=['input_ids', 'token_type_ids', 'sekb_additive_mask_zero']
+PASS buffer_size[input_ids] — 元素数=512 缓冲=2048B 实测每元素=4.0B；flatbuffer 声明=INT32（2048B）
+PASS buffer_size[token_type_ids] — 元素数=512 缓冲=2048B 实测每元素=4.0B；flatbuffer 声明=INT32（2048B）
+PASS buffer_size[sekb_additive_mask_zero] — 元素数=262144 缓冲=1048576B 实测每元素=4.0B；flatbuffer 声明=FLOAT32（1048576B）
+PASS cls_vs_onnx[A] — 与 ONNX(i32) 参考的最大逐元素差=4.046e-06（阈值 ≤1e-05）
+PASS cls_vs_onnx[B] — 与 ONNX(i32) 参考的最大逐元素差=5.181e-06（阈值 ≤1e-05）
+PASS mask_effective — 正确掩码 vs 全零掩码的余弦=0.741133，偏离 1 的量=0.2589（阈值 >0.05）
+PASS ms_matches_host_cosine — .ms cos(A,B)=0.2439 vs host ORT 0.2439（阈值 ±0.002）
+MS-CHECK PASS 8/8
+...
+MS-CHECK FAIL 4/8
+✅ 反证成立：不喂掩码 → 确实变红（判据不是摆设）
+✅ 反证成立：全零掩码 → 3 条判据变红（判据不是摆设）
+✅ 掩码保真一键验收全通过（结构 / host 等价 / .ms 数值 / 两条反证）
+```
+
+**③ 设备：`bash scripts/harmony.sh embed 90`（先跑上面 ①②，再上设备）**
+
+```
+── 0/3 转换产物侧断言（不需要设备）──
+MS-WIRING PASS 6/6
+MS-CHECK PASS 8/8
+── 1/3 构建 ── … ── 2/3 安装并启动（等待 90s）── … ── 3/3 嵌入结果 ──
+10-09 03:26:46.722 32169 32169 I A00000/SEKB_KN_SPIKE: EMBED PASS 10/10
+PASS embed_open_model — 模型=bge-small-fixed512.ms 输入布局=input_ids(元素=512, 声明dtype=34=0x22, 缓冲=2048B, 每元素=4B) token_type_ids(元素=512, 声明dtype=34=0x22, 缓冲=2048B, 每元素=4B) sekb_additive_mask_zero(元素=262144, 声明dtype=43=0x2b, 缓冲=1048576B, 每元素=未实测) 角色识别=尚未推理
+PASS embed_token_debug — A=[101, 4999, 904, 2972, 4415, 711, 784, 720](11) B=[101, 1266, 776, 791, 1921, 1914, 756, 6760](15)
+PASS embed_mask_write_readback — 写入 -inf 个数=256512 读回=256512，逐位一致
+PASS embed_sanity_cosine — cos=0.2439（AWS/Android 基线 0.244，容差 ±0.02；明显偏大说明掩码没生效）
+PASS embed_mask_effective — 正确掩码 cos=0.2439 vs 全零掩码 cos=0.9688：差=0.7250（必须 > 0.05；≈0 说明 mask 输入被运行时忽略）
+PASS embed_mask_value_scan — 扫描：-1e9=0.2439 -65504(fp16 最小有限值)=0.2439 -1e4=0.2439 -inf(默认)=0.2439｜与基线 0.244 的最大偏差=0.0001（全部须 ≤0.02）｜不同取值间极差=0.0000（≈0 是**正常**的：这些大负数在 softmax 里饱和度一致）
+PASS embed_l2_norm — ‖vA‖=1.0000（期望 1.0000）
+PASS embed_deterministic — 两次嵌入逐位相同
+✅ 端侧嵌入验收通过：EMBED PASS 10/10
+   明细 FAIL=0
+```
+
+**对照上一轮的同一条命令（缺陷未修时）**：`FAIL embed_sanity_cosine — cos=0.8154`、
+`FAIL embed_mask_value_scan — 扫描：-1e9=0.8154 -65504=0.8154 -1e4=0.8154 -inf=0.8154`。
+
+### 从干净状态复现（命令顺序）
+
+```bash
+bash scripts/model_to_ms.sh convert-maskinput   # 产出两份掩码作输入的 ONNX + 转换 .ms
+bash scripts/model_to_ms.sh check-maskinput-ref # host ORT 参考 → work/maskref.json
+bash scripts/model_to_ms.sh verify-maskinput    # 结构 / host 等价 / .ms 数值 / 两条反证
+bash scripts/harmony.sh embed 90                # 设备验收（含上面的产物侧断言）
+```
+
+**转换是确定性的（可复核）**：重跑 `convert-maskinput` 后
+
+```
+CONVERT RESULT SUCCESS:0
+  产物 bge-maskinput.ms：94802472 B   魔数: MSL2
+af1a8691d172f26a700671e302626f0b69369bdd0ce6cfefcc59f12c3c0e720c  bge-maskinput.ms
+af1a8691d172f26a700671e302626f0b69369bdd0ce6cfefcc59f12c3c0e720c  bge-maskinput-i32.ms
+```
+
+即 int64 / int32 两种声明的 ONNX **转换出逐字节相同**的 `.ms`——这与运行期实测的
+"两个 token 输入都声明 INT32"完全吻合，也说明"按 int32 喂"不是妥协，而是**产物的真实契约**。
+
+### 判据升级（**这是本轮最重要的产出之一**）
+
+缺陷能活到今天，不是因为它隐蔽，而是因为**没有任何一条检查会发现"设备上的向量与 host 不一致"**：
+
+| 旧判据 | 为什么抓不住 | 现在 |
+|---|---|---|
+| `cos < 0.95` 就算过 | 0.8154 也是绿的（**假绿**） | `embed_sanity_cosine`：`\|cos-0.244\|≤0.02`，**硬 FAIL** |
+| 写读回判据只覆盖**掩码** | 越界正好发生在 **token** 张量上 | 新增 `embed_mask_effective`：正确掩码 vs **全零**掩码必须差 >0.05（≈0 = 掩码被忽略） |
+| 只在 host 验证 ONNX | 抓不到"设备喂数"这一层 | `.ms` 侧 `cls_vs_onnx` 逐元素 ≤1e-5 + **缓冲字节数 ≤ 声明宽度**断言 |
+| 无结构判据 | 转换器哪天真的折叠了输入，没人知道 | `check_ms_mask_wiring`（flatbuffer，6 条） |
+| 反证缺失 | 不知道判据会不会红 | 两条反证：不喂掩码 / 全零掩码 → 必须变红 |
+
+> **设备侧对照值已经拿到**：`embed_open_model` 那一行现在直接打印
+> `OH_AI_TensorGetDataSize` 的实测值 —— `input_ids(元素=512, 声明dtype=34=0x22, 缓冲=2048B, 每元素=4B)`、
+> `sekb_additive_mask_zero(元素=262144, 声明dtype=43=0x2b, 缓冲=1048576B)`。
+> 注意 `声明dtype=34`（= OHOS 的 INT32）与 `OH_AI_TensorGetDataType` 对掩码也返回 34 这件事：
+> **该 getter 在本绑定下不可信**，唯一的可靠判据是缓冲字节数。
+>
+> **仍未做**：`.ms` 的数值判据跑的是 **Linux aarch64 runtime**（与鸿蒙 runtime 是同一套 C API 的两个
+> 名字、同一份转换产物），**不是**鸿蒙 runtime 本身；`bge-maskinput-i32.ms`（与产物同声明的对照产物）
+> 已能转换但没有单独上设备跑，其数值等价由 host 侧两条断言覆盖。
