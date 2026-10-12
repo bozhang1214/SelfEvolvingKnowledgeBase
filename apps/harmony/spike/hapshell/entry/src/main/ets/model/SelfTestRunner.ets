@@ -404,6 +404,16 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
     ` ｜ ${otherId} chunks=${ing2.chunks} ok=${ing2.ok} dbChunks=${ing2.dbChunks}` +
     `${ing1.ok ? '' : ` ｜ 失败原因：${ing1.reason}`}`);
 
+  // ！"诊断字段缺失"必须自己是一条断言（2026-10-26 主线加，血泪教训）：
+  //    我连着几轮"加了诊断却读不到"，一路怀疑打包/陈旧库，最后发现真正的问题是
+  //    **跑的不是带诊断的产物**，而自检对此**一声不响**（ArkTS 读到 undefined -> 类默认 -1，
+  //    报告里看着像"读取抛异常"）。所以这里显式断言：Kotlin 侧的 dbChunks 字段**必须出现**。
+  //    它一旦变红，第一件事就是确认"设备上跑的到底是不是刚构建的产物"，而不是去查业务逻辑。
+  a.check('rag_diag_fields_present', ing1.dbChunks !== -1 || ing1.sizeErr.length > 0,
+    `Kotlin 侧回读诊断字段：dbChunks=${ing1.dbChunks} allRows=${ing1.allRows}` +
+    ` sizeErr=${ing1.sizeErr} allErr=${ing1.allErr}` +
+    `（两个都是默认 -1 且无错误信息 ⇒ Kotlin 侧那段诊断根本没执行：先确认产物是否最新，别查业务）` +\n    ` ｜ 原始报文=${ing1.rawJson.substring(0, 220)}`);
+
   const docs = ragDocuments();
   a.check('rag_ingest', docs.ok && docs.docs.filter((d: DocInfo) =>
     d.id === srcId && d.chunks >= 1).length === 1,

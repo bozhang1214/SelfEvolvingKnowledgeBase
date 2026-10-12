@@ -75,6 +75,8 @@ export class RagOpResult {
   sizeErr: string = '';
   /** `all()` 失败原因（同上）。 */
   allErr: string = '';
+  /** **原始 JSON 报文**（不含在正常解析里，只用于诊断"跑的是哪个版本的产物"）。 */
+  rawJson: string = '';
 }
 
 /** `ragRetrieve` 的结果。 */
@@ -145,7 +147,11 @@ export function ragDocuments(): RagDocsResult {
 export function ragIngest(sourceId: string, name: string, text: string, sizeBytes: number): RagOpResult {
   const r = new RagOpResult();
   try {
-    const o = JSON.parse(knspike.ragIngest(sourceId, name, text, `${sizeBytes}`)) as RagOpResult;
+    // 保留**原始 JSON**（2026-10-26 主线加）：连着几轮"诊断字段读不到"时，唯一能终结猜测的
+    // 就是原始报文本身——它同时证明"跑的是哪个版本的 Kotlin 产物"。
+    const raw: string = knspike.ragIngest(sourceId, name, text, `${sizeBytes}`);
+    r.rawJson = raw;
+    const o = JSON.parse(raw) as RagOpResult;
     r.ok = o.ok === true;
     r.reason = o.reason !== undefined ? o.reason : '';
     r.chunks = o.chunks !== undefined ? o.chunks : 0;
