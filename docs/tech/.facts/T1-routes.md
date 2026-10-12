@@ -151,24 +151,24 @@ ASGI 入口：`backend/app/api/main.py:14`（`app = get_app()`，延迟构建）
 | 方法 | 路径 | 端点级认证 | 处理函数 | 证据 |
 |---|---|---|---|---|
 | POST | `/api/v1/job/analyze` | 用户/设备 | `analyze_job` | `app/api/routes/job.py:75` |
-| GET | `/api/v1/job/apply-plan` | 用户/设备 | `list_apply_plan` | `app/api/routes/job.py:509` |
-| POST | `/api/v1/job/apply-plan` | 用户/设备 | `save_apply_plan` | `app/api/routes/job.py:519` |
-| DELETE | `/api/v1/job/apply-plan/{plan_id}` | 用户/设备 | `delete_apply_plan` | `app/api/routes/job.py:529` |
+| GET | `/api/v1/job/apply-plan` | 用户/设备 | `list_apply_plan` | `app/api/routes/job.py:510` |
+| POST | `/api/v1/job/apply-plan` | 用户/设备 | `save_apply_plan` | `app/api/routes/job.py:520` |
+| DELETE | `/api/v1/job/apply-plan/{plan_id}` | 用户/设备 | `delete_apply_plan` | `app/api/routes/job.py:530` |
 | DELETE | `/api/v1/job/batch-analyze` | 用户/设备 | `delete_batch_analysis` | `app/api/routes/job.py:256` |
 | POST | `/api/v1/job/batch-analyze` | 用户/设备 | `batch_analyze` | `app/api/routes/job.py:206` |
 | GET | `/api/v1/job/batch-analyze/cached` | 用户/设备 | `get_cached_batch_analysis` | `app/api/routes/job.py:272` |
 | POST | `/api/v1/job/boss/qr/start` | 用户/设备 | `boss_qr_start` | `app/api/routes/job.py:169` |
 | POST | `/api/v1/job/boss/qr/status` | 用户/设备 | `boss_qr_status` | `app/api/routes/job.py:180` |
-| GET | `/api/v1/job/cache/latest` | 用户/设备 | `get_latest_job_cache` | `app/api/routes/job.py:424` |
-| GET | `/api/v1/job/cache/list` | 用户/设备 | `list_job_caches` | `app/api/routes/job.py:444` |
-| POST | `/api/v1/job/cache/save` | 用户/设备 | `save_job_cache` | `app/api/routes/job.py:406` |
-| GET | `/api/v1/job/cache/search/{search_id}` | 用户/设备 | `get_search_jobs` | `app/api/routes/job.py:352` |
+| GET | `/api/v1/job/cache/latest` | 用户/设备 | `get_latest_job_cache` | `app/api/routes/job.py:425` |
+| GET | `/api/v1/job/cache/list` | 用户/设备 | `list_job_caches` | `app/api/routes/job.py:445` |
+| POST | `/api/v1/job/cache/save` | 用户/设备 | `save_job_cache` | `app/api/routes/job.py:407` |
+| GET | `/api/v1/job/cache/search/{search_id}` | 用户/设备 | `get_search_jobs` | `app/api/routes/job.py:353` |
 | POST | `/api/v1/job/fetch` | 用户/设备 | `fetch_jobs` | `app/api/routes/job.py:108` |
-| POST | `/api/v1/job/import` | 用户/设备 | `import_jobs` | `app/api/routes/job.py:364` |
-| POST | `/api/v1/job/refresh` | 用户/设备 | `refresh_job` | `app/api/routes/job.py:387` |
-| GET | `/api/v1/job/reports` | 用户/设备 | `list_archived_reports` | `app/api/routes/job.py:454` |
-| DELETE | `/api/v1/job/reports/{report_id}` | 用户/设备 | `delete_archived_report` | `app/api/routes/job.py:475` |
-| GET | `/api/v1/job/reports/{report_id}` | 用户/设备 | `get_archived_report` | `app/api/routes/job.py:463` |
+| POST | `/api/v1/job/import` | 用户/设备 | `import_jobs` | `app/api/routes/job.py:365` |
+| POST | `/api/v1/job/refresh` | 用户/设备 | `refresh_job` | `app/api/routes/job.py:388` |
+| GET | `/api/v1/job/reports` | 用户/设备 | `list_archived_reports` | `app/api/routes/job.py:455` |
+| DELETE | `/api/v1/job/reports/{report_id}` | 用户/设备 | `delete_archived_report` | `app/api/routes/job.py:476` |
+| GET | `/api/v1/job/reports/{report_id}` | 用户/设备 | `get_archived_report` | `app/api/routes/job.py:464` |
 | GET | `/api/v1/job/searches` | 用户/设备 | `list_searches` | `app/api/routes/job.py:293` |
 
 ### knowledge（6 个，prefix `/api/v1/knowledge`）

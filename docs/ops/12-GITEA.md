@@ -2,7 +2,7 @@
 
 > 依据 RFC `docs/RFC-自迭代闭环设计.md` 的 **D-02 / D-08 / D-09**。
 > 定位：**版本管理权威源**（自建 Gitea 为主，GitHub 降为归档镜像）。
-> 最后更新：2026-09-14
+> 最后更新：2026-10-12（补服务器公网入口与镜像同步实测；main 跟踪分支已改指权威源）
 
 ---
 
@@ -74,16 +74,18 @@ git remote -v
 # origin  git@github.com:bozhang1214/SelfEvolvingKnowledgeBase.git
 ```
 
-> ⚠️ **本地 `main` 的跟踪分支指向 `origin/main`（GitHub 归档镜像），而非权威源 `gitea/main`**（实测 2026-09-14）。
-> 后果有二：裸敲 `git push` / `git pull` 会直接操作 **GitHub**，绕过 Gitea 权威源，可能造成两侧分叉；
-> 且 `origin/main` 长期不 fetch，`git status` 会显示「领先 N 个提交」这类**陈旧计数**，具有误导性。
-> 建议改为跟踪权威源（一次性）：
+> ✅ **已落地（实测 2026-10-12）**：本地 `main` 的跟踪分支**已改为权威源 `gitea/main`**：
 >
 > ```bash
-> git branch -u gitea/main main   # 之后裸 git push/pull 即走 Gitea
+> git branch -u gitea/main main                         # main@{upstream} → gitea/main
+> git rev-list --left-right --count gitea/main...HEAD   # 期望 0  0
 > ```
+>
+> 改之前它是 `origin/main`（GitHub 归档镜像），后果有二：裸敲 `git push`/`git pull` 会直接操作 **GitHub**、
+> 绕过权威源；且 `origin/main` 长期不 fetch 时，`git status` 会显示「领先 N 个提交」这类**陈旧计数**。
+> **换机器时记得重做**——跟踪配置是 per-clone 的，不进版本库。
 
-**首次接入一台新机器**（三步，缺前两步会直接失败）：
+**首次接入一台新机器**（四步，缺前两步会直接失败）：
 
 ```bash
 # 1) 本机公钥加到 Gitea：Gitea → Settings → SSH/GPG Keys（或用 POST /api/v1/user/keys）
@@ -96,7 +98,39 @@ ssh-keyscan -p 2222 -t ed25519 100.71.24.105 >> ~/.ssh/known_hosts
 # 3) 建议关掉主机密钥自动补全，否则每次推送会打印
 #    "hostfile_replace_entries: mkstemp: Operation not permitted" 警告（无害但吵闹）
 git config --local core.sshCommand "ssh -o UpdateHostKeys=no"
+
+# 4) 把 main 指向权威源（否则裸 git push 会去 GitHub 镜像）
+git branch -u gitea/main main
 ```
+
+### 4.1.1 服务器管理入口（**两条路，别再只写一条**）
+
+> 2026-10-12 补：本节此前只有 **Tailscale 到 Gitea** 那条，而"触发镜像同步 / 看容器状态"必须登
+> **服务器本体**——换人接手或 Tailscale 掉线时，只有一条路就会卡住。
+
+| 目的 | 入口 | 说明 |
+|---|---|---|
+| `git push/pull`（Gitea） | `ssh://git@100.71.24.105:2222/bo/sekb.git`（**Tailscale**） | 只在 Tailscale 网内；`3000/2222` 公网不可达（`ufw` 只放行 22/80/443/41641） |
+| **服务器运维**（镜像同步 / 容器 / 部署） | `ssh -i ~/.ssh/sekb_tencent_key bo@49.232.42.91` | 公网 SSH（腾讯云 VM `VM-0-13-ubuntu`）；仓库在 `/opt/self-evolving-kb/SelfEvolvingKnowledgeBase` |
+
+```bash
+# 触发 Gitea → GitHub 归档镜像（在服务器上跑；Gitea token 在 /home/bo/.gitea-token）
+ssh -i ~/.ssh/sekb_tencent_key bo@49.232.42.91 \
+  'cd /opt/self-evolving-kb/SelfEvolvingKnowledgeBase && python3 scripts/gitea_mirror.py status'
+ssh -i ~/.ssh/sekb_tencent_key bo@49.232.42.91 \
+  'cd /opt/self-evolving-kb/SelfEvolvingKnowledgeBase && python3 scripts/gitea_mirror.py sync'
+```
+
+> ⚠️ **两种"成功"要分清**（实测 2026-10-12）：`gitea_mirror.py sync` 打印「全部同步成功」只说明
+> **Gitea 接受了请求且没报错**；要证明"GitHub 上确实是最新"，必须**比对 commit**：
+>
+> ```bash
+> curl -s https://api.github.com/repos/bozhang1214/SelfEvolvingKnowledgeBase/commits/main | grep -m1 '"sha"'
+> git rev-parse HEAD     # 两者应指向同一个 commit
+> ```
+>
+> 本机**不能**用 `git ls-remote https://github.com/...` 验证 GitHub：本机 `insteadOf`（见下文 §5）
+> 会把它**重写成 Gitea**，看起来"GitHub 是这个 commit"，其实问的是 Gitea。用 API 或 `git@github.com:` 形式。
 
 ### 4.2 服务器拉取（新发布链路，**取代原 bundle+scp**）
 
