@@ -1785,16 +1785,42 @@ bash scripts/harmony.sh h8shots            # 四页截图（用 SEKB_PAGE_* 动�
  PASS=26 FAIL=3 SKIP=3
 ```
 
-**⚠️ 这张表有**两种**实测形状，取决于"RDB 库这次有没有打开成功"**（同一份代码、同一台设备，
-连跑三次的结果不是同一个；调用链与判定都没变）：
+**⚠️ 上面那张是历史记录（RDB 时期、结果会摆动的形状，数字已过时），保留下来是为了说明问题是怎么被发现和解决的。
+当前状态以本节为准：**
 
-| 形状 | 汇总 | 明细 |
-|---|---|---|
-| A（库打开成功） | `PASS=26 FAIL=3 SKIP=3` | `rag_ingest` / `rag_retrieve` / `rag_delete` 三项 FAIL（见 §6.1） |
-| B（库没打开） | `PASS=22 FAIL=1 SKIP=7` | `rag_store_open` FAIL（`errCode=14800037`，见 §6.2），依赖它的 4 项按原因 SKIP |
+### 当前状态：`PASS=51 FAIL=2 SKIP=8`，**功能项零 FAIL**（2026-10-26）
 
-**两种形状都不算"通过"**，如实记录在这里：RDB 文档链路现在**不可稳定使用**，
-而这正是一条"FAIL 必须 0"的硬指标**没达成**的地方——根因不在 UI，见 §6。
+```
+SEKB_HARMONY_SELFTEST  PASS=51 FAIL=2 SKIP=8
+两个 FAIL：edge_reachable / edge_models —— **宿主 Ollama 未起**（环境项，不是端侧缺陷）
+8 个 SKIP：无云端账号（cloud_enroll/login/chat）、探针按设计关闭等，**理由逐条写明**
+```
+
+**摆动问题已解决，根因是"我们自己"**（这条最值得记）：
+文档/向量索引的存储从 **RDB 的 NDK C 路径**换成了 **`FileVectorStore`（文件型）**。
+- 换的理由：RDB 的 NDK C 绑定在同一进程、同一句柄、相邻两次调用上会给出**互相矛盾**的答案
+  （`size()`=0 而 `all()`=2；同一条 SQL 聚合一篇算 1 一篇算 0）。**事务、游标长度语义、列名/索引、
+  库名/目录、多句柄、SQL 聚合、嵌入与打分都已逐一实验排除**（探针与结论都留在仓库里）。
+- 而**文件 I/O 在鸿蒙上可靠**：聊天历史就是"文件 + 先写 `.tmp` 再 rename"，实测跨 force-stop/重装能恢复。
+  向量索引是**可重建的派生数据**，不需要数据库能力。
+- `VectorStore`/`DocumentRegistry` 两个接口**一字未改** ⇒ 共享层 `KnowledgeIndex`/`Chunking`/`Retriever`/
+  评测集**零改动**。RDB 路径与全部探针**保留在仓库**作对照（`filesDir` 传空串即切回）。
+- 另有一处**自伤**：排障用的 RDB 探针会在同一个目录上再开一个句柄、与会话互相干扰
+  （对照实验：探针开 → `rag_ingest` 1 篇/0 段；探针关 → 2 篇/2 段）。**探针已默认关闭**。
+
+### H5 检索评测表（五档，与 Android 基线逐项一致）
+```
+检索评测：语料 12 篇 建索引=1000ms 33 问单趟嵌入=2000ms
+阈值=0.20 Hit@1=26/30 Hit@3=30/30 MRR=0.928 误召回=3/3
+阈值=0.30 Hit@1=26/30 Hit@3=30/30 MRR=0.928 误召回=2/3
+阈值=0.40 Hit@1=26/30 Hit@3=30/30 MRR=0.928 误召回=0/3   ← 与 Android 基线同值
+阈值=0.50 Hit@1=26/30 Hit@3=29/30 MRR=0.911 误召回=0/3
+阈值=0.60 Hit@1=24/30 Hit@3=24/30 MRR=0.800 误召回=0/3
+```
+
+### H7 工具权限三闸门（8/8，判定全在共享层 `ToolRegistry`）
+未注册→`tool_hallucination`；缺必填→不执行（并断言**工具实现未被执行**）；可选参数**不算**必填；
+未授权→`denied`；已授权→**放行**（防"永远拒绝也全绿"）；`audit_stats` 拦截率 60.0%；审计明细可见。
 
 **项名与 Android `SelfTest.kt` 的对照**（能同名的都同名）：`edge_reachable` / `edge_stream` / `edge_models` /
 `router_decision` / `privacy_device_only_local_gate` / `rag_ingest` / `rag_retrieve` / `rag_space_guard` /
@@ -1818,7 +1844,9 @@ bash scripts/harmony.sh h8selftest-red 150
 ❌ H8 自检有 4 个 FAIL（明细见上）
 ```
 
-即：把 `ping()==42` 的期望值故意改成 43 之后，**这一项确实变红**，脚本也据此报红
+即：把 `ping()==42` 的期望值故意改成 43 之后，**这一项确实变红**，脚本也据此报红。
+**这里的 FAIL 是"证据"而不是"缺陷"**——它证明这张自检表真的在断言（而不是一律打印 PASS）。
+当前常规运行的开法是 `bash scripts/harmony.sh h8selftest`（不带 `-red`），汇总见上面"当前状态"。
 （`h8selftest-red` 的判定是"**恰好 1 个 FAIL**"，多一个少一个都算不成立）。
 
 **本轮自检表抓到的两个"判据写错"缺陷**（都是真跑一次才暴露，逻辑本身没错）：
@@ -1877,34 +1905,37 @@ import                 ← 文档页的待导入目录（本轮新建）
 
 ### 6. 未验 / 未成（如实，别当已完成）
 
-1. **`rag_ingest` / `rag_retrieve` / `rag_delete` 三项 FAIL**（本轮唯一未过的部分，`PASS=26 FAIL=3 SKIP=3`）：
-   UI 侧调的是**共享层** `KnowledgeIndex`/`Retriever` + **F 的 `RdbVectorStore`**，写进去的
-   `chunks.source_id` 读回来是**空串**（上一轮取证：检索命中 `=@0.696`，来源名空；
-   本轮 `rag_delete` 返回 0 段 = `DELETE … WHERE source_id='…'` 找不到任何行）。
-   → **根因在 RDB 写入/读取那一段（工作流 F 的 `RdbStore.execute` / `RdbVectorStore`）**，
-   不是 UI 也不是共享层；已把这条连同证据发给主线。**不要把这三项算成 UI 已完成。**
-2. **RDB 建库的间歇性失败（未定位）**：同一目录下，打开**新库名**多次回
-   `14800037 = RDB_E_CREATE_FOLDER_FAIL`；已排除"目录不存在"（`accessSync` 前后都为 true、
-   App 侧 `mkdirSync` 成功）与"库名过长"（`sekbt.db` 7 字符同样失败）；
-   也试过"App 侧预建空库文件"→ **仍失败**。`openRagIsolated` 现在把"建目录 → 立刻复核 → 失败即返回"
-   写成硬前置（失败时 `reason` 明确写"RDB 目录创建失败"，不再去撞 RDB 的错误码盖住根因）。
-3. **检索来源在聊天页恒为空**：因为 1）——链路是通的（`attachSources` 每次都会调 `ragRetrieve` 并把
-   结论写进原因行），但库里检索不出带来源名的命中。**UI 那一列是"真接线、暂无数据"，不是桩。**
-4. **端侧失败自动改道云端 / 流式前缀守卫 `StreamGuard` / `RouteEventPayload` 上报**：**未做**。
-   原因不是"忘了"——它们都要求"Kotlin 在同步接口里驱动 ArkTS 的异步调用"，而鸿蒙侧结构性死锁
+> **本节已按 2026-10-26 的结论重写**：原来列的 1/2/3 三项（`rag_*` FAIL、RDB 建库间歇失败、
+> 检索来源恒为空）**都已解决**，解决方式见上面"当前状态"。下面只留**真正还没做**的东西。
+
+1. **端侧失败自动改道云端 / 流式前缀守卫 `StreamGuard` / `RouteEventPayload` 上报**：**未做**。
+   原因不是"忘了"——它们都要求"Kotlin 在同步接口里驱动 ArkTS 的异步调用"，而鸿蒙侧是**结构性死锁**
    （H3 已论证，见 `NetPort.kt` 文件头）。本端只做"改道判定"（共享层 `route()` 给出 cloud 时不发端侧请求），
-   不做"端侧答到一半失败再整段重发云端"。
-5. **enroll / refresh 未接入**（设置页如实显示「未接入」并禁用按钮）：无账号、无云端端点。
+   不做"端侧答到一半失败再整段重发云端"。**如实标注，不假装做了。**
+2. **A10 L1 策略热修（apply→rebuild→rollback）**：方案 §7.2 写明"**可按 owner 优先级后置**"，本轮未做。
+3. **enroll / refresh 未接入**（设置页如实显示「未接入」并禁用按钮）：无账号、无云端端点。
    这是**环境限制**，因此自检里那三项是 SKIP 而不是 FAIL，且 SKIP 理由写清了"不是已连上"。
-6. **PDF 导入后置**：文档页只收 `.txt/.md/.markdown`（UTF-8）。Android 用 PDFBox，鸿蒙侧没有等价物，
+4. **PDF 导入后置**：文档页只收 `.txt/.md/.markdown`（UTF-8）。Android 用 PDFBox，鸿蒙侧没有等价物，
    硬做会引入未评估的原生依赖 → 明确后置（页面文案里写出来了）。
-7. **端侧嵌入状态在设置页可能显示"未就绪：未打开"**：只有进过文档页或跑过自检才会加载模型
+5. **端侧嵌入状态在设置页可能显示"未就绪：未打开"**：只有进过文档页或跑过自检才会加载模型
    （有意为之：聊天页不该为了显示一行状态就吃掉 ~94MB 模型的内存）。
-8. **release 构建 + 只留 arm64 的体积记录**：本轮只做了 debug HAP（**112M**，含 `.ms` 模型 rawfile）。
-   C4 的"只留 arm64"已生效（`knspike` 只有 `ohosArm64` 目标）；release 体积**未测**。
-9. **`Index.ets`（H1–H6 自检面板）未导航入口**：它仍注册在 `main_pages.json` 里、一行未改、
-   可用 `router.pushUrl({url:'pages/Index'})` 打开；本轮把入口换成了 `pages/AppShell`（四页）。
-10. **`Theme.version` 是源码常量**，不是从 bundle 元数据读的（`module.json5` 的 `versionName` 手工同步）。
+6. **release 构建 + 体积记录**：本轮只做了 debug HAP（**112M**，含 `.ms` 模型 rawfile）。
+   C4 的"只留 arm64"已生效；**release 体积未测**。
+7. **`Index.ets`（H1–H6 自检面板）未导航入口**：它仍注册在 `main_pages.json` 里、一行未改、
+   可用 `router.pushUrl({url:'pages/Index'})` 打开；界面入口是 `pages/AppShell`（四页）。
+8. **`Theme.version` 是源码常量**，不是从 bundle 元数据读的（`module.json5` 的 `versionName` 手工同步）。
+
+### 6.1 已解决项的历史证据（保留，避免后来者重走）
+
+- **`rag_ingest`/`rag_retrieve`/`rag_delete` 曾三项 FAIL**：根因是**命中字段名不一致**
+  （Kotlin 发 `source`、ArkTS 读 `sourceId` → 来源名恒为空）+ **游标 `getText` 的长度语义**
+  （`all()` 里 `?: continue` 把整行静默跳过）+ **`documents.chunks` 冗余列不可信**
+  （改为按 `chunks` 表用 Kotlin 侧计数）。三者都已修，现在是 PASS。
+- **RDB 建库间歇失败 `14800037`**：两层根因 —— ①`databaseDir` 的**父目录**不存在
+  （`mkdirSync` 不建中间目录）；②**模拟器实例的 storage 未就绪**（重启实例即恢复，
+  `Emulator -stop` / `-hvd … -path …` 可命令行起停）。修了 ① + 给 `open` 加了 3 次有界重试。
+- **检索来源在聊天页恒为空**：即上面第一条的字段名问题，修好后 `ui-chat-badge`/`ui-chat-turn`
+  能看到真实来源名。
 
 ### 7. 协作面（本轮改了哪些"共享文件"，怎么避免事故）
 
