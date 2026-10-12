@@ -245,6 +245,7 @@ object SekbApp {
                     o.put("allErr", "${t::class.simpleName}: ${t.message}")
                 }
                 o.put("allRows", allRows)
+                o.put("tx", s.store.lastTx)   // 事务诊断：begin/before/inTx/commit/after
                 o.toString()
             } catch (e: Throwable) {
                 errJson("ingest", "${e::class.simpleName}: ${e.message}")

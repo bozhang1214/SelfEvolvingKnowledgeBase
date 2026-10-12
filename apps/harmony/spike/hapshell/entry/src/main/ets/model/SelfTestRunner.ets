@@ -411,7 +411,7 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
   //    它一旦变红，第一件事就是确认"设备上跑的到底是不是刚构建的产物"，而不是去查业务逻辑。
   a.check('rag_diag_fields_present', ing1.dbChunks !== -1 || ing1.sizeErr.length > 0,
     `Kotlin 侧回读诊断字段：dbChunks=${ing1.dbChunks} allRows=${ing1.allRows}` +
-    ` sizeErr=${ing1.sizeErr} allErr=${ing1.allErr}` +
+    ` sizeErr=${ing1.sizeErr} allErr=${ing1.allErr} tx=[${ing1.tx}]` +
     `（两个都是默认 -1 且无错误信息 ⇒ Kotlin 侧那段诊断根本没执行：先确认产物是否最新，别查业务）` +
     ` ｜ 原始报文=${ing1.rawJson.substring(0, 220)}`);
 

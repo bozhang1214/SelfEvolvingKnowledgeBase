@@ -77,6 +77,8 @@ export class RagOpResult {
   allErr: string = '';
   /** **原始 JSON 报文**（不含在正常解析里，只用于诊断"跑的是哪个版本的产物"）。 */
   rawJson: string = '';
+  /** 事务诊断：`begin=? before=? inTx=? commit=? after=?`（一眼判定事务是否生效）。 */
+  tx: string = '';
 }
 
 /** `ragRetrieve` 的结果。 */
@@ -166,6 +168,7 @@ export function ragIngest(sourceId: string, name: string, text: string, sizeByte
     r.allRows = o.allRows !== undefined ? o.allRows : -1;
     r.sizeErr = o.sizeErr !== undefined ? o.sizeErr : '';
     r.allErr = o.allErr !== undefined ? o.allErr : '';
+    r.tx = o.tx !== undefined ? o.tx : '';
   } catch (e) {
     r.ok = false;
     r.reason = `桥不可用：${e}`;

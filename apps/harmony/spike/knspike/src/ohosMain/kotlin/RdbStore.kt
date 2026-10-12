@@ -329,6 +329,34 @@ fun cursorDestroy(cur: CPointer<OH_Cursor>) {
     cur.pointed.destroy?.invoke(cur)
 }
 
+/**
+ * **列名自省**（2026-10-26 主线加，用来终结"按名字取不到列"的猜测）。
+ *
+ * 为什么需要：实测出现 `getColumnIndex("id")` 取不到（`cursorText` 返回 null → `all()` 把整行跳过），
+ * 而同一张表的 `COUNT(*)` 又是对的。与其猜，不如把游标**自己报告的列名**列出来对比。
+ * 返回 `"0=id|1=source_id|2=text"` 这种形式。
+ */
+fun cursorColumnNames(cur: CPointer<OH_Cursor>): String {
+    val n = memScoped {
+        val c = alloc<IntVar>()
+        c.value = -1
+        val rc = cur.pointed.getColumnCount?.invoke(cur, c.ptr) ?: -1
+        if (rc != RdbCode.OK) -1 else c.value
+    }
+    if (n <= 0) return "getColumnCount 失败/0（n=$n）"
+    val sb = StringBuilder()
+    for (i in 0 until n) {
+        if (i > 0) sb.append('|')
+        sb.append(i).append('=')
+        memScoped {
+            val buf = allocArray<ByteVar>(128)
+            val rc = cur.pointed.getColumnName?.invoke(cur, i, buf, 128) ?: -1
+            sb.append(if (rc == RdbCode.OK) buf.toKString() else "?rc=$rc")
+        }
+    }
+    return sb.toString()
+}
+
 fun cursorColumnIndex(cur: CPointer<OH_Cursor>, name: String): Int =
     withCStrings(name) { cs ->
         memScoped {
@@ -352,11 +380,38 @@ fun cursorText(cur: CPointer<OH_Cursor>, name: String): String? {
     if (idx < 0) return null
     val n = cursorColumnSize(cur, idx)
     if (n < 0) return null
-    return memScoped {
-        val buf = allocArray<ByteVar>(n + 1)
-        val rc = cur.pointed.getText?.invoke(cur, idx, buf, (n + 1).toInt()) ?: -1
-        if (rc != RdbCode.OK) null else buf.toKString()
+    // ⚠️ **长度语义**（2026-10-26 主线实测）：`OH_Cursor::getText(cursor, idx, buf, length)` 的
+    // `length` 文档写"可由 getSize 得到"。第一版传 `n+1`（多留 1 字节给 NUL）——
+    // 在 `id`（值较长、`doc-probe#0`）这一列上**实测返回非 0**（拿不到值），
+    // 而 `source_id`（`doc-probe`）却正常；`getColumnIndex`/列名/索引都已自省确认无误。
+    // 现在按"先试它说的大小"再退"多一个字节"的顺序取，**两者都失败才算失败**（不再靠一个魔数）。
+    // 让 `all()` 的 `?: continue` 不再把整行静默跳过——那是"库里明明有数据却检索不到"的直接来源。
+    val attempts = intArrayOf(n.toInt(), (n + 1).toInt())
+    for (len in attempts) {
+        if (len <= 0) continue
+        val got = memScoped {
+            val buf = allocArray<ByteVar>(len)
+            val rc = cur.pointed.getText?.invoke(cur, idx, buf, len) ?: -1
+            if (rc != RdbCode.OK) null else buf.toKString()
+        }
+        if (got != null) return got
     }
+    return null
+}
+
+/** 诊断：某列 `getSize` 的返回值与两次 `getText` 的返回码（用于上面那条长度语义实验）。 */
+fun cursorTextProbe(cur: CPointer<OH_Cursor>, name: String): String {
+    val idx = cursorColumnIndex(cur, name)
+    if (idx < 0) return "$name: idx<0"
+    val n = cursorColumnSize(cur, idx)
+    val codes = IntArray(2)
+    memScoped {
+        val b1 = allocArray<ByteVar>(maxOf(n.toInt(), 1))
+        codes[0] = cur.pointed.getText?.invoke(cur, idx, b1, n.toInt()) ?: -1
+        val b2 = allocArray<ByteVar>(maxOf(n.toInt() + 1, 1))
+        codes[1] = cur.pointed.getText?.invoke(cur, idx, b2, (n + 1).toInt()) ?: -1
+    }
+    return "$name: idx=$idx size=$n getText(size)=${codes[0]} getText(size+1)=${codes[1]}"
 }
 
 fun cursorInt64(cur: CPointer<OH_Cursor>, name: String): Long? {

@@ -124,7 +124,12 @@ class RdbVectorStore(
                 "向量维度不符：期望 ${space.dim}，实际 ${r.vector.size}（换了嵌入模型就必须重建索引）"
             }
         }
-        store.beginTransaction()
+        // ⚠️ **事务三个函数的返回值必须检查**（2026-10-26 主线加）：原来 `beginTransaction()`/`commit()`
+        //    不看返回值，而实测出现过"insert rc=0 但提交后仍读不到/读到旧数据"的怪象。
+        //    把三个 rc 记进 `lastTx` 并带进返回值，一眼能判定"事务是不是没生效"。
+        val rcb = store.beginTransaction()
+        if (rcb != RdbCode.OK) error("beginTransaction 失败 rc=$rcb")
+        val before = runCatching { size() }.getOrElse { -1 }
         try {
             for (r in records) {
                 val rc = store.execute(
@@ -134,12 +139,21 @@ class RdbVectorStore(
                 )
                 if (rc != RdbCode.OK) error("upsert 失败：id=${r.id} rc=$rc")
             }
-            store.commit()
+            val mid = runCatching { size() }.getOrElse { -1 }   // 事务内应能看到新行
+            val rcc = store.commit()
+            val after = runCatching { size() }.getOrElse { -1 }  // 提交后也应看得到
+            lastTx = "begin=$rcb before=$before inTx=$mid commit=$rcc after=$after"
+            if (rcc != RdbCode.OK) error("commit 失败 rc=$rcc（数据未落盘）")
         } catch (e: Throwable) {
             store.rollBack()
+            lastTx = "$lastTx rollback=1 err=${e.message}"
             throw e
         }
     }
+
+    /** 最近一次写入的事务诊断（`begin/before/inTx/commit/after` 五个数，一眼判定事务是否生效）。 */
+    var lastTx: String = ""
+        private set
 
     /**
      * 删一份文档的全部切片，返回**删除条数**。

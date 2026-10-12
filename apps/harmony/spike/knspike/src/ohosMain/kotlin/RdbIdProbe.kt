@@ -115,7 +115,13 @@ fun sekbSpikeRdbIdProbe(databaseDir: String, runTag: String): String {
         } else {
             var idv: String? = null
             var src: String? = null
-            if (cursorNext(cur) == 0) {
+            val nextRc = cursorNext(cur)
+            val names = cursorColumnNames(cur)
+            val textProbeId = cursorTextProbe(cur, "id")
+            val textProbeSrc = cursorTextProbe(cur, "source_id")
+            val idIdx = cursorColumnIndex(cur, "id")
+            val srcIdx = cursorColumnIndex(cur, "source_id")
+            if (nextRc == 0) {
                 idv = cursorText(cur, "id")
                 src = cursorText(cur, "source_id")
             }
@@ -123,7 +129,9 @@ fun sekbSpikeRdbIdProbe(databaseDir: String, runTag: String): String {
             r.check(
                 "read_multi_column",
                 idv == "doc-probe#0" && src == "doc-probe",
-                "id='${idv ?: "<null>"}' source_id='${src ?: "<null>"}'（期望 doc-probe#0 / doc-probe）",
+                "nextRc=$nextRc 列名=[$names] idx(id)=$idIdx idx(source_id)=$srcIdx" +
+                    " 探针=[${textProbeId} | ${textProbeSrc}]" +
+                    " id='${idv ?: "<null>"}' source_id='${src ?: "<null>"}'（期望 doc-probe#0 / doc-probe）",
             )
         }
     }
