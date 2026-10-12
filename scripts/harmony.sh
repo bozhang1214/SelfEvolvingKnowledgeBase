@@ -20,6 +20,9 @@
 #   bash scripts/harmony.sh sync-huks-headers  # 把 sysroot 里的 HUKS 头同步到仓库内（H4 cinterop 用）
 #   bash scripts/harmony.sh rdbprobe [秒数]    # H5-F：RDB NDK C API 探针（建表/往返/关闭重开）
 #   bash scripts/harmony.sh rag [秒数]         # H5-F：RAG 自检（含反向验证）+ 检索评测同表（5 档阈值）
+#   bash scripts/harmony.sh h8selftest [秒数]  # H8（G）：**四页 UI 的自检表**（TAG=SEKB_HARMONY_SELFTEST）
+#   bash scripts/harmony.sh h8selftest-red [秒] # H8：反向验证——注入错期望值，**必须恰好 1 个 FAIL**
+#   bash scripts/harmony.sh h8shots            # H8：四页截图（用 SEKB_PAGE_* 动作确定性开页，不点屏幕）
 #   bash scripts/harmony.sh log                # 只抓最近的 hilog（按 TAG 过滤）
 #   bash scripts/harmony.sh crash [--save]     # 列 faultlogger；--save 把最新一条拉回 docs/tmp/
 #   bash scripts/harmony.sh all                # build + install + selftest
@@ -732,6 +735,70 @@ net() {
 }
 
 require_hdc
+
+# ── H8（工作流 G）：四页 UI 的自检表 + 截图取证 ────────────────────────────────
+# 为什么单独一个动作而不是改 `selftest`：`selftest` 是 C/H1–H6 的自检面板
+# （TAG=SEKB_KN_SPIKE、入口 pages/Index），**别人在用**。H8 的自检表有自己的 TAG、
+# 自己的入口（EntryAbility 收到 action 后在进程内直接跑 `runSelfTest`），互不干扰。
+#
+# ⚠️ `-A` 与 `-a/-b/-m` 的**顺序有讲究**：实测 `aa start -A SEKB_SELFTEST -b ... -a ...`
+#    会把 action 丢掉（onCreate 收到空 action），必须写成 `-a … -b … -m … -A …`。
+H8_TAG="SEKB_HARMONY_SELFTEST"
+
+h8_selftest() {
+    local wait_s="${1:-100}" red="${2:-}"
+    local action="SEKB_SELFTEST"
+    [ "$red" = "red" ] && action="SEKB_SELFTEST_RED"
+    require_target
+    echo "── H8 自检（action=${action}，等待 ${wait_s}s 抓 hilog TAG=${H8_TAG}）──"
+    "$HDC" shell "aa force-stop $BUNDLE" >/dev/null 2>&1 || true
+    "$HDC" shell "hilog -r" >/dev/null 2>&1 || true
+    "$HDC" shell "aa start -a $ABILITY -b $BUNDLE -m entry -A ${action}" || die "启动失败"
+    sleep "$wait_s"
+    local out
+    out="$("$HDC" shell "hilog -x -T ${H8_TAG}" 2>/dev/null | sed 's/.*SEKB_HARMONY_SELFTEST//')"
+    echo "$out"
+    echo
+    echo "── 判定 ──"
+    local summary
+    # ⚠️ 上面的 `sed` 已经把 `SEKB_HARMONY_SELFTEST` 前缀去掉了（它同时也是 hilog 的 tag），
+    #    所以这里匹配的是 **`PASS=n FAIL=n SKIP=n`** 这一段，不要再带上那个前缀。
+    summary="$(echo "$out" | grep -aE 'PASS=[0-9]+ FAIL=[0-9]+ SKIP=[0-9]+' | tail -1 | tr -d '\r')"
+    [ -n "$summary" ] || die "没抓到汇总行（自检没跑完？把等待秒数调大：bash scripts/harmony.sh h8selftest 180）"
+    echo "   SEKB_HARMONY_SELFTEST ${summary}"
+    local fails
+    fails="$(echo "$summary" | sed -n 's/.*FAIL=\([0-9]*\).*/\1/p')"
+    if [ "$red" = "red" ]; then
+        # 反向验证：**必须**恰好 1 个 FAIL（见 SelfTestRunner.stepRedCheck）
+        [ "$fails" = "1" ] || die "反向验证失败：期望恰好 1 个 FAIL，实测 FAIL=${fails}（表可能是摆设）"
+        echo "   ✅ 反向验证成立：注入错期望值后恰好 1 个 FAIL=${fails}"
+    else
+        [ "$fails" = "0" ] || die "H8 自检有 ${fails} 个 FAIL（明细见上）"
+        echo "   ✅ H8 自检 FAIL=0"
+    fi
+}
+
+# 四页截图（每页一张）。⚠️ **不靠点屏幕**：模拟器上 `uitest uiInput click` 的坐标与页面
+# 坐标实测对不上（点标签栏会落到滑杆上），所以用 `SEKB_PAGE_*` 动作**确定性地**开页。
+h8_shots() {
+    require_target
+    local dir="$ROOT/apps/harmony/docs/screenshots"
+    mkdir -p "$dir"
+    local -a pages=(CHAT HISTORY DOCS SETTINGS)
+    local -a names=(ui-chat-empty ui-history ui-documents ui-settings)
+    echo "── H8 四页截图 → ${dir} ──"
+    for i in "${!pages[@]}"; do
+        local action="SEKB_PAGE_${pages[$i]}" name="${names[$i]}"
+        "$HDC" shell "aa force-stop $BUNDLE" >/dev/null 2>&1 || true
+        sleep 2
+        "$HDC" shell "aa start -a $ABILITY -b $BUNDLE -m entry -A ${action}" >/dev/null || die "启动 ${action} 失败"
+        sleep "${H8_SHOT_WAIT:-25}"
+        "$HDC" shell "snapshot_display -f /data/local/tmp/${name}.jpeg" >/dev/null || die "截图失败 ${name}"
+        "$HDC" file recv "/data/local/tmp/${name}.jpeg" "$dir/${name}.jpeg" >/dev/null || die "取回失败 ${name}"
+        echo "   ✅ ${name}.jpeg（${action}）"
+    done
+}
+
 case "${1:-}" in
     build)    build ;;
     install)  require_target; install ;;
@@ -746,12 +813,16 @@ case "${1:-}" in
     sync-huks-headers) sync_huks_headers ;;
     # H5（工作流 F）：RDB 探针 / RAG 自检 + 检索评测
     rdbprobe) require_target; rdb_probe "${2:-}" ;;
+    # H8（工作流 G）：四页 UI 的自检表（TAG=SEKB_HARMONY_SELFTEST）+ 反证 + 截图
+    h8selftest)     h8_selftest "${2:-}" ;;
+    h8selftest-red) h8_selftest "${2:-}" red ;;
+    h8shots)        h8_shots ;;
     rag)      require_target; rag "${2:-}" ;;
     log)      require_target; log ;;
     crash)    require_target; crash "${2:-}" ;;
     all)      require_target; build && install && selftest "${2:-}" ;;
     # 校验 target 的动作都要联网检查，所以放在 case 内做
-    *) echo "用法：bash scripts/harmony.sh [build|install|start|selftest|smoke|contract|contract-red|probe|embed|rdbprobe|rag|log|crash|all]" >&2; exit 2 ;;
+    *) echo "用法：bash scripts/harmony.sh [build|install|start|selftest|smoke|contract|contract-red|probe|embed|rdbprobe|rag|h8selftest|h8selftest-red|h8shots|log|crash|all]" >&2; exit 2 ;;
 esac
 
 # 说明：这里**不做** `require_target` 的统一前置检查，因为 `build` 是纯本机构建、

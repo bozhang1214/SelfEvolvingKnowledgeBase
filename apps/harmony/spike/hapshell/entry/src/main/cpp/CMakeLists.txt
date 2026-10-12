@@ -14,8 +14,10 @@ add_library(kn SHARED IMPORTED)
 set_target_properties(kn PROPERTIES
     IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/${OHOS_ARCH}/libkn.so)
 
-# ⚠️ 两个翻译单元（不是 glob）：`napi_init.cpp` 是主模块，
-# `h3h4_napi.cpp` 是 H3/H4 的入口（工作流 E′ 独立成文件，减少与 H5 同时改本目录的冲突面）。
+# ⚠️ 三个翻译单元（不是 glob）：`napi_init.cpp` 是主模块，
+# `h3h4_napi.cpp` 是 H3/H4 的入口（工作流 E′），`sekb_chat_napi.cpp` 是 H8 的
+# 聊天/文档入口（工作流 G）。后两者各自把入口注册到**同一个** exports 对象，
+# 于是 `napi_init.cpp`（主线独占）一行都不用再改。
 # 新增 .cpp 时**要显式加到这里**（glob 会让"漏加文件"变成静默少功能）。
-add_library(knspike SHARED napi_init.cpp h3h4_napi.cpp)
+add_library(knspike SHARED napi_init.cpp h3h4_napi.cpp sekb_chat_napi.cpp)
 target_link_libraries(knspike PUBLIC libace_napi.z.so kn)

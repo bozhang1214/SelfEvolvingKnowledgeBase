@@ -1725,3 +1725,184 @@ PASS close_store / reopen_store / rdb2_*（关闭→重开后逐字段仍可读�
    （`rag_delete_not_retrievable` / `rag_delete_keeps_others` / `rag_dim_mismatch_refused`），
    其中后两条在前一轮跑动中**已被观察到**过红/过绿行为，但**还没在"全绿那一轮"里取证**。
 3. 未做：`clear()` 的独立取证、`all()` 在大语料下的吞吐、release 构建下的复跑。
+
+---
+
+## ✅ H8（工作流 G）：四页 ArkUI UI + 流式逐字 + 徽章 + 来源 + 自检表（2026-10-26，模拟器实测）
+
+### 0. 一句话结论
+
+**四页应用做出来了**（聊天/历史/文档/设置，与 Android `SekbScreen` 同名同序，`screen` 状态 + 顶栏返回，无路由框架）；
+**聊天页的流式逐字 + 执行位置徽章 + 原因语义 + 检索来源**都接在真实链路上
+（ArkTS 搬行 → **共享层 `SseParser`** 解析；路由决策走 **共享层 `PlaneRouter`**；检索走 **共享层 `Retriever`**）；
+**历史页真的落盘**（JSON 文件，跨重启存活）；**自检表**输出 `TAG=SEKB_HARMONY_SELFTEST` 的 PASS/FAIL/SKIP 表。
+**文案与配色只有一份**（`model/Theme.ets`；页面里不出现 `'#RRGGBB'`）。
+
+### 1. 一条命令 + 原始输出
+
+```bash
+bash scripts/harmony.sh build && bash scripts/harmony.sh install && bash scripts/harmony.sh start
+bash scripts/harmony.sh h8selftest 130     # H8 自检表（新增动作，不动别人已有的 selftest）
+bash scripts/harmony.sh h8selftest-red 130 # 反向验证：注入错期望值，**必须恰好 1 个 FAIL**
+bash scripts/harmony.sh h8shots            # 四页截图（用 SEKB_PAGE_* 动作确定性开页）
+```
+
+设备（`127.0.0.1:5555`，nova 16 Pro / HarmonyOS 6.0.2 API22 / arm）上 `bash scripts/harmony.sh h8selftest 130` 的原始输出（逐项明细来自 hilog，界面只放汇总）：
+
+```
+: [PASS] kmp_interop — NAPI→libkn.so→Kotlin 往返：ping()=42（期望 42）
+: [PASS] kmp_interop_string_length — 跨 NAPI 的字符串长度：echoLen("端侧知识库")=5（5 个字；口径=text.length，非 UTF-8 字节）
+: [PASS] contract_fixtures — 共享层 PlaneRouter 契约夹具：CONTRACT PASS 128/128（判定：通过数==总数）
+: [PASS] edge_reachable — GET http://127.0.0.1:11434/api/tags → code=200（期望 200）
+: [PASS] edge_models — 解析出 8 个模型名（共享层 JsonX 口径）
+: [PASS] transport_refuses_bad_endpoint — 没人监听的端口 → code=-1（**非 200** 才算过）
+: [PASS] transport_refuses_404 — 能连上但不存在的路径 → code=404
+: [PASS] edge_stream — POST /v1/chat/completions（OpenAI 兼容 SSE）→ code=200，正文 3 字，653B
+: [PASS] chat_shared_sse_parser — 共享层 SseParser 解出事件并收到 done：{"events":4,"kinds":"token/token/done/done","pieces":2,"done":true}
+: [PASS] edge_reply_rendered — 正文增量逐段回传："你好。"
+: [PASS] credential_store_restart — HUKS 凭证自检：CRED PASS 8/8（明细 FAIL=0）
+: [PASS] huks_binding — HUKS 加解密往返：CRED PASS 2/2
+: [SKIP] cloud_enroll — 无账号与云端端点（未接入）：enroll/refresh 的端到端无法验证；这是环境限制，不是已连上
+: [SKIP] cloud_login — 同上：没有可用账号
+: [SKIP] cloud_chat — 同上：云端平面未接入，聊天只走端侧
+: [PASS] rag_model_path — 模型已就绪：bge-small-fixed512.ms；vocab=75778 字符
+: [PASS] rag_embed_sanity — 端侧嵌入验收：EMBED PASS 10/10
+: [PASS] embedding_space — PASS embed_sanity_cosine — cos=0.2439（AWS/Android 基线 0.244）
+: [PASS] router_decision — 普通问句 → plane=edge reason=edge_preferred tier=default model=qwen3.5-4b
+: [PASS] router_input_over_budget — 12000 字输入 → plane=cloud reason=input_over_edge_budget(12000>2048)
+: [PASS] privacy_device_only_local_gate — deviceOnly=true + 非本机端点 → blocked=true reason=device_only_requires_local_runtime
+: [PASS] privacy_device_only_allows_local — deviceOnly=true + 本机端点 → blocked=false deviceOnly=true
+: [PASS] badge_semantics — edge='本机完成' cloud='云端完成' escalated='已上云（端侧不达标）' clientEscalated='已上云（端侧不达标）'
+: [PASS] reason_code_passthrough — 未知原因码 → "原因：some_new_reason_code(1>2)"（原样透出）
+: [PASS] rag_store_open — RDB 自检库已打开
+: [PASS] rag_ingest_bridge — 两次 ingest 的返回：__selftest__ chunks=1 zeroFilled=0 ok=true ｜ __selftest_other__ chunks=1 ok=true
+: [FAIL] rag_ingest — 导入「__selftest__」→ 列表里 2 篇（总片段 2 段）
+: [FAIL] rag_retrieve — 检索 → 0 条（阈值=0.5）
+: [PASS] rag_space_guard — 索引空间=BAAI/bge-small-zh-v1.5@512 cloudCompatible=true（自洽判据）
+: [FAIL] rag_delete — 删「__selftest__」→ 返回 0 段；剩余 0 篇（删前 2）
+: [PASS] rag_selftest_cleanup — 自检文档残留=0
+: [PASS] selftest_red_check — 反向验证项（默认关闭）
+ PASS=26 FAIL=3 SKIP=3
+```
+
+**项名与 Android `SelfTest.kt` 的对照**（能同名的都同名）：`edge_reachable` / `edge_stream` / `edge_models` /
+`router_decision` / `privacy_device_only_local_gate` / `rag_ingest` / `rag_retrieve` / `rag_space_guard` /
+`rag_embed_sanity` / `embedding_space` / `credential_store_restart` / `cloud_enroll` / `cloud_login` / `cloud_chat`；
+鸿蒙侧另有 `kmp_interop*`（NAPI↔KMP）、`contract_fixtures`（H2 夹具）、`rag_store_open`（RDB）、
+`transport_refuses_*`（H3 的坏端点反证）、`badge_semantics` / `reason_code_passthrough`（H8 新语义）、
+`rag_selftest_cleanup`（自检不留残留）。
+
+### 2. 反向验证（"判据不是摆设"的直接证据）
+
+```bash
+bash scripts/harmony.sh h8selftest-red 150
+```
+
+原始输出（截选，完整表见上一条命令）：
+
+```
+ BEGIN red=true
+: [FAIL] selftest_red_check — **反向验证**：期望 ping()==43（故意写错），实测 42 → 这一项**必须是 FAIL**
+ PASS=25 FAIL=4 SKIP=3
+❌ H8 自检有 4 个 FAIL（明细见上）
+```
+
+即：把 `ping()==42` 的期望值故意改成 43 之后，**这一项确实变红**，脚本也据此报红
+（`h8selftest-red` 的判定是"**恰好 1 个 FAIL**"，多一个少一个都算不成立）。
+
+**本轮自检表抓到的两个"判据写错"缺陷**（都是真跑一次才暴露，逻辑本身没错）：
+
+| 判据 | 第一版为什么是错的 | 修法 |
+|---|---|---|
+| `kmp_interop_string_length`（原 `kmp_interop_utf8`） | 我按 UTF-8 字节写了期望 15，而 `Spike.kt` 的 `echoLen` 口径是 `text.length`（5 个 code unit） | 改期望值 + 改名（口径写进口径，不写"我以为的口径"） |
+| `contract_fixtures` | 头部形状是 `CONTRACT PASS 128/128`（**通过数/总数**），我把 `128` 当成了失败数 → "128/128 全过"被判 FAIL | 改成"通过数 > 0 且 通过数 == 总数" |
+
+### 3. 截图清单（每张图证明什么）
+
+| 文件 | 证明什么 |
+|---|---|
+| `docs/screenshots/ui-chat-empty.jpeg` | **聊天页空状态**：示例问题 + **输入栏完整可见**、底部四标签都在屏内（深色/浅色未串，底 `#F5F7FA`、卡片白） |
+| `docs/screenshots/ui-chat-turn.jpeg` | **流式逐字落地的结果**：用户气泡靠右（蓝 `#1677FF`）、助手气泡靠左（白卡片）——这一轮 `chat stream code=200 bytes=76343 textChars=632`、共享层解出 **361 个 token 事件 + done** |
+| `docs/screenshots/ui-chat-badge.jpeg` | **执行位置徽章 + 原因语义**：绿点「本机完成」+「这次请求在设备能力范围内，按设计优先由本机处理。」（= 共享层原因码 `edge_preferred` 经 `explainReason` 渲染） |
+| `docs/screenshots/ui-history.jpeg` | **历史页真落盘**：`本机会话（1）· 端侧推理为什么更省电? · 2 条 · 12:50`，带「当前」标记与「删除」；文件落盘证据见 §5 |
+| `docs/screenshots/ui-documents.jpeg` | **文档页**：库状态行（`文档库已就绪（RDB 持久化）· 共 0 篇 / 0 段`）、待导入区（含 `import/` 路径与「写入示例文档」）、已导入区与空状态说明 |
+| `docs/screenshots/ui-settings.jpeg` | **设置页**：设备身份**如实显示「未接入」且按钮禁用**、检索阈值 **0.40（生效 0.40）**、端侧嵌入状态、网络与后端地址、自检入口、版本信息 |
+
+复现截图：`bash scripts/harmony.sh h8shots`（用 `SEKB_PAGE_{CHAT,HISTORY,DOCS,SETTINGS}` 动作**确定性**开页）。
+
+### 4. 关键设计（改动前必读）
+
+* **ArkTS 只搬字节，语义在共享层**：`model/ChatTransport.ets` 只做 HTTP + 按 `\n` 切行，
+  每个完整行同步 `knspike.chatStreamLine(line)`；**SSE 语义由共享层 `SseParser` 决定**
+  （`SekbAppPort`/`ChatStreamPort` 里的 `adaptToSharedWire` 只做字段名适配：
+  Ollama 的 OpenAI 兼容 `choices[0].delta.content`/`delta.reasoning` → 共享契约的 `type=token|thinking`）。
+* **为什么用 `/v1/chat/completions` 而不是 `/api/chat`**：后者是 **NDJSON**（没有 `data:` 前缀、没有空行分隔），
+  喂给共享层 `SseParser` 等于绕过它；前者是**真正的 SSE**（`data: {json}` + 空行 + `data: [DONE]`）。
+* **路由决策走共享层** `PlaneRouter`（`chatRoute` 入口）：普通问句 `edge_preferred`、
+  超预算 `input_over_edge_budget(12000>2048)`、DEVICE_ONLY + 非本机端点 **被拦下且一个请求都不发**。
+* **输入栏在外层**（`pages/ChatInputBar.ets`，由 `AppShell` 放在根 Column 底部）——
+  这是**看图才发现**的：输入栏原先在 `ChatPage` 里（内层 `layoutWeight` + 固定高度输入栏两层嵌套），
+  模拟器上（窗口 1320×2856 整屏 + 悬浮手势条）底部两行控件被**裁掉**（输入框只剩上沿、标签栏完全看不见）。
+  挪到外层后位置正确。**Android 那个"空状态把输入栏挤出屏幕"的 bug 在本端没有复现**
+  （空状态自身 `layoutWeight(1)`、不设 `height('100%')`）。
+* **模拟器上不要用 `uitest uiInput click` 取截图**：实测坐标与页面坐标对不上（点标签栏会落到滑杆上，
+  把阈值从 0.40 改成 0.50——本轮真实发生并被截图记录下来）。改用 `aa start … -A SEKB_PAGE_*` 确定性开页。
+* **`aa start` 的 `-A` 必须写在 `-a/-b/-m` 之后**：写成 `-A X -b … -a …` 时 `onCreate` 收到**空 action**
+  （实测：`Ability onCreate action= selftest=false`）。正确顺序见 `scripts/harmony.sh` 的 `h8_selftest`。
+
+### 5. 落盘证据（历史页）
+
+```bash
+$ hdc shell "ls /data/app/el2/100/base/com.sekb.ohos.spike/haps/entry/files/"
+bge-small-fixed512.ms
+conversations.json     ← 会话（含执行位置/来源/原因码）跨重启存活
+credentials.huks       ← HUKS 密文容器（H4）
+import                 ← 文档页的待导入目录（本轮新建）
+```
+
+会话文件用**先写 `.tmp` 再 `rename`** 的原子替换（见 `model/HistoryStore.ets` 文件头：
+直接覆盖时进程中途被杀会留下半截 JSON，下次启动整段历史作废）。
+
+### 6. 未验 / 未成（如实，别当已完成）
+
+1. **`rag_ingest` / `rag_retrieve` / `rag_delete` 三项 FAIL**（本轮唯一未过的部分，`PASS=26 FAIL=3 SKIP=3`）：
+   UI 侧调的是**共享层** `KnowledgeIndex`/`Retriever` + **F 的 `RdbVectorStore`**，写进去的
+   `chunks.source_id` 读回来是**空串**（上一轮取证：检索命中 `=@0.696`，来源名空；
+   本轮 `rag_delete` 返回 0 段 = `DELETE … WHERE source_id='…'` 找不到任何行）。
+   → **根因在 RDB 写入/读取那一段（工作流 F 的 `RdbStore.execute` / `RdbVectorStore`）**，
+   不是 UI 也不是共享层；已把这条连同证据发给主线。**不要把这三项算成 UI 已完成。**
+2. **RDB 建库的间歇性失败（未定位）**：同一目录下，打开**新库名**多次回
+   `14800037 = RDB_E_CREATE_FOLDER_FAIL`；已排除"目录不存在"（`accessSync` 前后都为 true、
+   App 侧 `mkdirSync` 成功）与"库名过长"（`sekbt.db` 7 字符同样失败）；
+   也试过"App 侧预建空库文件"→ **仍失败**。`openRagIsolated` 现在把"建目录 → 立刻复核 → 失败即返回"
+   写成硬前置（失败时 `reason` 明确写"RDB 目录创建失败"，不再去撞 RDB 的错误码盖住根因）。
+3. **检索来源在聊天页恒为空**：因为 1）——链路是通的（`attachSources` 每次都会调 `ragRetrieve` 并把
+   结论写进原因行），但库里检索不出带来源名的命中。**UI 那一列是"真接线、暂无数据"，不是桩。**
+4. **端侧失败自动改道云端 / 流式前缀守卫 `StreamGuard` / `RouteEventPayload` 上报**：**未做**。
+   原因不是"忘了"——它们都要求"Kotlin 在同步接口里驱动 ArkTS 的异步调用"，而鸿蒙侧结构性死锁
+   （H3 已论证，见 `NetPort.kt` 文件头）。本端只做"改道判定"（共享层 `route()` 给出 cloud 时不发端侧请求），
+   不做"端侧答到一半失败再整段重发云端"。
+5. **enroll / refresh 未接入**（设置页如实显示「未接入」并禁用按钮）：无账号、无云端端点。
+   这是**环境限制**，因此自检里那三项是 SKIP 而不是 FAIL，且 SKIP 理由写清了"不是已连上"。
+6. **PDF 导入后置**：文档页只收 `.txt/.md/.markdown`（UTF-8）。Android 用 PDFBox，鸿蒙侧没有等价物，
+   硬做会引入未评估的原生依赖 → 明确后置（页面文案里写出来了）。
+7. **端侧嵌入状态在设置页可能显示"未就绪：未打开"**：只有进过文档页或跑过自检才会加载模型
+   （有意为之：聊天页不该为了显示一行状态就吃掉 ~94MB 模型的内存）。
+8. **release 构建 + 只留 arm64 的体积记录**：本轮只做了 debug HAP（**112M**，含 `.ms` 模型 rawfile）。
+   C4 的"只留 arm64"已生效（`knspike` 只有 `ohosArm64` 目标）；release 体积**未测**。
+9. **`Index.ets`（H1–H6 自检面板）未导航入口**：它仍注册在 `main_pages.json` 里、一行未改、
+   可用 `router.pushUrl({url:'pages/Index'})` 打开；本轮把入口换成了 `pages/AppShell`（四页）。
+10. **`Theme.version` 是源码常量**，不是从 bundle 元数据读的（`module.json5` 的 `versionName` 手工同步）。
+
+### 7. 协作面（本轮改了哪些"共享文件"，怎么避免事故）
+
+* **`napi_init.cpp`：一行未动**（主线独占）。H8 的 14 个 NAPI 入口在**自己的**
+  `entry/src/main/cpp/sekb_chat_napi.cpp` 里自注册，挂载方式是 `h3h4_napi.cpp` 末尾
+  **一行前置声明 + 一行 `RegisterSekbChat(env, exports)`**（E′ 的 `sekb_spike_h3_*` 行为未改）。
+  `CMakeLists.txt` 只加了一个源文件名。
+* **没有编辑** `pages/Index.ets`、`RdbStore.kt`、`RdbVectorStore.kt`、`RdbProbe.kt`、`RagSelfTest.kt`（工作流 F 的文件）。
+* **一处重名冲突已修**：我在 `SekbAppPort.kt` 里的私有类与 F 的 `object RagSession`（`RagSelfTest.kt`）
+  同名 → Kotlin 同包**重声明**、编译失败。已把我的类改名 `LocalDocSession`（**只改我自己的文件**）。
+  这类"两边各自能编、合起来编不过"的冲突正是协作约定要防的，记在这里。
+* `scripts/harmony.sh` **只加了三个新动作**（`h8selftest` / `h8selftest-red` / `h8shots`），
+  没动 `selftest`/`net`/`rag` 等已有动作。

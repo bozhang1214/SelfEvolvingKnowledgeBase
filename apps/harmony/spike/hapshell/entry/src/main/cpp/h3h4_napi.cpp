@@ -125,6 +125,15 @@ static napi_value HuksRoundtrip(napi_env env, napi_callback_info info) {
 }
 
 /**
+ * H8（工作流 G）的入口注册在**它自己的文件** `sekb_chat_napi.cpp` 里。
+ *
+ * 为什么由本文件代挂一行：`napi_init.cpp` 是**主线独占**（协作硬约定，见文件头），
+ * 而本文件已经是被 `Init()` 调用的注册点。这里只加**一行调用**，
+ * E′ 自己的 `sekb_spike_h3_*` / `sekb_spike_cred_*` 行为一字未动。
+ */
+void RegisterSekbChat(napi_env env, napi_value exports);
+
+/**
  * 把 H3/H4 的入口挂到主模块的 exports 上（由 `napi_init.cpp` 的 `Init()` 调用）。
  *
  * `napi_define_properties` 是**追加**语义：与主模块已有的 17 个入口互不影响。
@@ -142,4 +151,6 @@ void RegisterSekbH3H4(napi_env env, napi_value exports) {
         {"huksRoundtrip", nullptr, HuksRoundtrip, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
+    // H8：一行代挂（见上方 RegisterSekbChat 的说明）
+    RegisterSekbChat(env, exports);
 }

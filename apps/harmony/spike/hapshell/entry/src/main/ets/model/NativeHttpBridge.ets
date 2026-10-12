@@ -51,6 +51,24 @@ let lastMeta: string = 'HTTP -1 bodyUTF8=0 inv=0';
 /** 最近一次缓冲式请求的响应体。 */
 let lastBody: string = '';
 let invocations: number = 0;
+/** 最近一次**流式**请求的观察结果（H8 聊天页要把失败原因显示出来，不能只说"失败了"）。 */
+let lastStreamNote: string = '';
+let lastStreamBytes: number = 0;
+
+/** 最近一次流式的 `code=... err=...`（H8 聊天页错误提示用）。 */
+export function lastStreamDetail(): string {
+  return lastStreamNote;
+}
+
+/** 最近一次流式收到的字节数。 */
+export function lastStreamByteCount(): number {
+  return lastStreamBytes;
+}
+
+/** 最近一次缓冲式请求的响应体原文（H8 设置页列模型名用）。 */
+export function lastBodyText(): string {
+  return lastBody;
+}
 
 function decodeUtf8(bytes: Uint8Array): string {
   if (bytes.length === 0) {
@@ -174,6 +192,7 @@ async function streamHttp(
   let status: number = -1;
   let pending: string = '';
   let total: number = 0;
+  let connError: string = '';
   req.on('headersReceive', (h: Object) => {
     const obj = h as Record<string, Object>;
     const code: Object | undefined = obj['responseCode'];
@@ -197,6 +216,7 @@ async function streamHttp(
     }
   } catch (e) {
     const be = e as BusinessError;
+    connError = `code=${be.code} msg=${be.message}`;
     hilog.error(0x0000, TAG, 'HTTP stream 失败 url=%{public}s err=code=%{public}d msg=%{public}s',
       url, be.code, be.message);
     status = -1;
@@ -206,6 +226,8 @@ async function streamHttp(
     req.destroy();
   }
   hilog.info(0x0000, TAG, 'HTTP stream %{public}s → code=%{public}d bytes=%{public}d', url, status, total);
+  lastStreamNote = connError.length > 0 ? `code=${status} ${connError}` : `code=${status}`;
+  lastStreamBytes = total;
   return status;
 }
 
