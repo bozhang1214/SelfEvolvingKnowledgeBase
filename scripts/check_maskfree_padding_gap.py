@@ -1,39 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""量化"去掉动态掩码链"那个模型变体在**带 padding** 时的等价性缺口（H6 的关键实验）。
+"""**host 验收实验**：变体 ONNX（掩码作输入）与原型 ONNX（图内掩码链）在**带 padding** 输入上等价。
 
-## 要回答的问题（一句话）
+## 要回答的问题
 
-鸿蒙端侧嵌入在设备上跑通了，但**余弦与 Android 基线差三倍**：
-设备实测 `cos(端侧推理为什么省电, 北京今天多云转晴适合骑行) = 0.8154`，而 Android 基线是 **0.244**。
-这到底是
-  (a) 我的 Kotlin 输入/掩码构造写错了，还是
-  (b) `bge-maskinput.ms` 这个"掩码改由宿主喂入"的变体在**有 padding** 时本身就不等价？
+鸿蒙端侧嵌入曾出现"余弦与 Android 基线差三倍"（设备 0.8154 vs Android 0.244）。
+本轮查清根因**不在**模型变体、也**不在**转换器，而在**设备侧的喂数路径**
+（把 int32 的 token 输入按 int64 写了 4096 B，越界 2048 B → 后半段 id 丢失；
+证据与修法见 `apps/harmony/README.md` 的本轮小节）。所以这个实验的结论要重新表述：
 
-## 为什么这个实验能分辨两者
+> **变体图本身是对的**：带 padding 时它与原型图的 CLS 逐元素差 **~1e-7**（远小于 1e-5 判据），
+> 两图算出的余弦都应落在 Android 基线 **0.244±0.02** 内。
 
-把**同一套 token id / 同一套 attention_mask** 分别喂给两张图，只看余弦：
+上一版脚本把这句话写反了（`model_to_ms_maskfree.py` 头部曾说"带 padding 时预期不一致"），
+而且判据写成"两个余弦必须一个 >0.5 一个 <0.5"——**那是把"设备上的错误现象"
+当成了"模型应有的性质"**，于是正确的模型反而被判成"结论不明确"。本版把它纠正为：
 
-| 图 | 输入 | 期望 |
-|---|---|---|
-| `ms-static-1x512.onnx`（原型，图内含动态掩码链） | input_ids / token_type_ids / **attention_mask** | 应 ≈ **0.244**（与 Android 对齐；也顺带验证分词口径） |
-| `ms-static-maskinput.onnx`（生产变体，掩码作为输入） | input_ids / token_type_ids / **sekb_additive_mask_zero**（可见 0、被掩 -inf） | 若 ≈0.81 → **(b)**：变体在 padding 下不等价，Kotlin 没错；若 ≈0.24 → **(a)**：我的掩码/角色构造有问题 |
+1. **等价性**（硬判据）：每条文本上 `|CLS_proto − CLS_variant|_max ≤ 1e-5`；
+2. **同空间**（硬判据）：两个余弦都满足 `|cos − 0.244| ≤ 0.02`；
+3. **反向验证**（`--red`）：故意喂全零掩码 → 余弦必须**明显偏离** 0.244（证明判据会红）。
 
-## 已有文档里的旁证（`scripts/model_to_ms_maskfree.py` 头部）
-
-> 全零 additive mask **只在 attention_mask 全 1（无 padding）时与原型严格等价**；
-> 带 padding 时**预期不一致**——那是用来把"这个变体不能用于生产"量化出来，而不是掩盖它。
-
-本脚本就是把那句话**测出数字来**，并顺便给出"无 padding 时是否真的逐位相同"的复核。
-
-## 用法
+用法：
 
     backend/.venv/bin/python3 scripts/check_maskfree_padding_gap.py
-
-不需要设备、不需要重新转换（用 `.tooling/mindspore-lite/work/` 下已有的 onnx）。
+    backend/.venv/bin/python3 scripts/check_maskfree_padding_gap.py --red   # 反证
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -41,14 +35,17 @@ import numpy as np
 import onnxruntime as ort
 
 ROOT = Path(__file__).resolve().parent.parent
-WORK = ROOT / ".tooling/mindspore-lite/work"
-VOCAB = ROOT / ".tooling/models/bge-small-zh-v1.5/vocab.txt"
+WORK = ROOT / ".tooling" / "mindspore-lite" / "work"
+VOCAB = ROOT / ".tooling" / "models" / "bge-small-zh-v1.5" / "vocab.txt"
 PROTO = WORK / "ms-static-1x512.onnx"
 VARIANT = WORK / "ms-static-maskinput.onnx"
 
 TEXTS = ["端侧推理为什么省电", "北京今天多云转晴，适合骑行"]
 MAXLEN = 512
 MASK_NAME = "sekb_additive_mask_zero"
+ANDROID_COS = 0.244
+COS_TOL = 0.02
+EQ_TOL = 1e-5
 
 
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
@@ -57,15 +54,14 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def load_tokenizer():
-    """优先用 transformers（与共享层 `BertWordPieceTokenizer` 同一套 WordPiece 规则）。"""
-    from tokenizers import BertWordPieceTokenizer as FastBPE  # tokenizers 与 transformers 同装
+    """与共享层 `BertWordPieceTokenizer` 同一套 WordPiece 规则（lowercase=False）。"""
+    from tokenizers import BertWordPieceTokenizer as FastBPE
 
     tok = FastBPE(str(VOCAB), lowercase=False)
 
     def encode(text: str):
         enc = tok.encode(text)
-        ids = [101] + list(enc.ids[1:-1])[: MAXLEN - 2] + [102]
-        return ids
+        return [101] + list(enc.ids[1:-1])[: MAXLEN - 2] + [102]
 
     return encode, "tokenizers.BertWordPieceTokenizer（lowercase=False）"
 
@@ -78,26 +74,31 @@ def pad(ids: list[int]):
     return row, att
 
 
-def additive(att: np.ndarray) -> np.ndarray:
-    """可见位 0、被掩位 -inf，形状 [1,1,512,512]（只掩 key：按列）。"""
+def additive(att: np.ndarray, fill: float = -np.inf) -> np.ndarray:
+    """可见位 0、被掩位 [fill]，形状 [1,1,512,512]（只掩 key：按列）。"""
     n = att.shape[1]
-    m = np.zeros((1, 1, n, n), dtype=np.float32)   # 零 = 全部可见
+    m = np.zeros((1, 1, n, n), dtype=np.float32)
     for j in range(n):
         if att[0, j] == 0:
-            m[0, 0, :, j] = -np.inf
+            m[0, 0, :, j] = fill
     return m
 
 
 def cls(sess, feeds) -> np.ndarray:
-    out = sess.run(None, feeds)[0]           # [1, 512, 512]
-    v = np.asarray(out[0, 0], dtype=np.float32)
+    out = sess.run(None, feeds)[0]
+    v = np.asarray(out[0, 0], dtype=np.float64)
     return v / (np.linalg.norm(v) + 1e-12)
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--red", action="store_true",
+                    help="反证：把 additive mask 换成全零（= 不掩任何位），期望判据变红")
+    a = ap.parse_args()
+
     for p in (PROTO, VARIANT):
         if not p.is_file():
-            print(f"❌ 缺少 {p}（先跑 scripts/model_to_ms.sh 生成）", file=sys.stderr)
+            print(f"❌ 缺少 {p}（先跑 scripts/model_to_ms.sh convert-maskinput）", file=sys.stderr)
             return 2
 
     encode, how = load_tokenizer()
@@ -111,7 +112,8 @@ def main() -> int:
     print(f"变体图输入  ：{[i.name for i in s_var.get_inputs()]}")
     print()
 
-    rows = []
+    fail = 0
+    v_proto_all, v_var_all = [], []
     for label, t in zip(("A", "B"), TEXTS):
         row, att = pad(ids[0] if label == "A" else ids[1])
         # 原型：图内自己从 attention_mask 展开 additive mask
@@ -119,38 +121,44 @@ def main() -> int:
             "input_ids": row, "token_type_ids": np.zeros_like(row), "attention_mask": att,
         })
         # 生产变体：宿主算好 additive mask 喂进去
+        mask = additive(att)
+        if a.red:
+            mask = np.zeros_like(mask)          # 反证：全零 = 不掩任何位
         v_var = cls(s_var, {
-            "input_ids": row, "token_type_ids": np.zeros_like(row), MASK_NAME: additive(att),
+            "input_ids": row, "token_type_ids": np.zeros_like(row), MASK_NAME: mask,
         })
-        rows.append((v_proto, v_var))
-        # 单条上两图输出的差异（逐元素最大差）：这才是"同一输入两图是否等价"的直接判据
+        v_proto_all.append(v_proto)
+        v_var_all.append(v_var)
         d = float(np.max(np.abs(v_proto - v_var)))
-        print(f"[{label}] 原型 vs 变体（同一输入）CLS 向量最大逐元素差 = {d:.3e}")
+        ok = d <= EQ_TOL
+        fail += 0 if ok else 1
+        print(f"[{label}] 原型 vs 变体（同一输入）CLS 最大逐元素差 = {d:.3e} "
+              f"（{'PASS' if ok else 'FAIL'}，判据 ≤{EQ_TOL:g}）")
 
-    cos_proto = cosine(rows[0][0], rows[1][0])
-    cos_var = cosine(rows[0][1], rows[1][1])
+    cos_proto = cosine(v_proto_all[0], v_proto_all[1])
+    cos_var = cosine(v_var_all[0], v_var_all[1])
     print()
-    print(f"cos(原型图, 有 padding)      = {cos_proto:.4f}   ← Android 基线 0.244 应对上这个")
-    print(f"cos(生产变体, 有 padding)    = {cos_var:.4f}   ← 设备实测 0.8154 应对上这个")
-    print()
-
-    # 无 padding 复核：脚本头声称"全 1 mask 时逐位相同"。用两段**恰好填满 512**的输入验证。
-    full = ((ids[0] + [100] * MAXLEN)[:MAXLEN],)
-    row = np.array([full[0]], dtype=np.int64)
-    att1 = np.ones((1, MAXLEN), dtype=np.int64)
-    v1 = cls(s_proto, {"input_ids": row, "token_type_ids": np.zeros_like(row), "attention_mask": att1})
-    v2 = cls(s_var, {"input_ids": row, "token_type_ids": np.zeros_like(row), MASK_NAME: additive(att1)})
-    d_nopad = float(np.max(np.abs(v1 - v2)))
-    print(f"无 padding（attention_mask 全 1）时两图 CLS 向量最大逐元素差 = {d_nopad:.3e}")
-    print("   → 若为 0 或 ~1e-7，说明'无 padding 严格等价'的说法成立，缺口确实只在 padding 上")
+    for name, c in (("原型图", cos_proto), ("生产变体", cos_var)):
+        ok = abs(c - ANDROID_COS) <= COS_TOL
+        fail += 0 if ok else 1
+        print(f"cos({name}, 有 padding) = {c:.4f}  {'PASS' if ok else 'FAIL'}"
+              f"（Android 基线 {ANDROID_COS}，容差 ±{COS_TOL}）")
 
     print()
-    if cos_var > 0.5 > cos_proto:
-        print("✅ 结论：**缺口来自模型变体在 padding 下的不等价**（(b)），不是 Kotlin 的输入构造。")
-        print("   端侧嵌入要拿到与 Android 相同的 0.244，必须换回'图内掩码'的模型，")
-        print("   或在变体上重新标定阈值并接受'空间不再与云端一致'（那违反 RFC M3 不变量）——需 owner 决策。")
+    if a.red:
+        if fail > 0:
+            print(f"✅ 反证成立：全零掩码 → {fail} 条判据变红（判据不是摆设）")
+            return 0
+        print("❌ 反证失败：全零掩码竟然全绿 → 判据无效", file=sys.stderr)
+        return 1
+
+    if fail == 0:
+        print("✅ host 验收通过：变体与原型在带 padding 时数值等价，且都落在 Android 基线同一区间。")
+        print("   注意口径：**这条只证明模型变体是对的**；设备上是否真的用掩码，")
+        print("   由 `bash scripts/harmony.sh embed` 的 embed_mask_effective / embed_sanity_cosine")
+        print("   与 `.ms` 侧数值判据（model_to_ms.sh --check-ms）分别把关。")
         return 0
-    print("⚠️ 结论不明确：两个余弦都偏高或都低 → 需要再查（可能分词口径不同）。")
+    print(f"❌ host 验收未通过：{fail} 条判据失败", file=sys.stderr)
     return 1
 
 

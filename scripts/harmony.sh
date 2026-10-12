@@ -432,13 +432,35 @@ probe() {
     echo "✅ 平台能力探针完成（结论已如实打印；libcurl 不可用是**事实**，不是脚本失败）"
 }
 
-# ── H6：端侧嵌入验收（同空间三项 + 降级契约）────────────────────────────────
+# ── H6：端侧嵌入验收（同空间三项 + 降级契约 + **掩码真的生效**）────────────────
 # 与 Android `SelfTest.kt` 的 `rag_embed_sanity` 同一口径（同一批文本、同一期望）：
 #   ① 两段无关文本余弦（Android 基线 **0.244**）；② L2 范数 **1.0000**；③ 两次嵌入逐位相同；
 #   ④ 模型不可用时 **embed 返回同数量零向量**（HR8：返回空数组会让 ingest 越界崩溃）。
-# 期望行：`EMBED PASS 5/5`（明细里含 cos 与 ‖v‖ 的实测值，便于与 Android 逐项对照）。
+#   ⑤ **掩码生效**：正确掩码 vs 全零掩码必须明显不同（≈0 说明 mask 输入被运行时忽略）。
+#
+# ⚠️ 为什么 ⑤ 必须在设备上（而不只是 host）：本缺陷活到现在的直接原因是
+#    "host 上对、设备上错"这件事**没有任何检查**。`embed_sanity_cosine` 是硬 FAIL 判据
+#    （`|cos-0.244|<=0.02`），再加上掩码敏感性，两条一起才能在设备上把这类缺陷钉死。
+#
+# 设备跑之前先跑**转换产物侧**的两条（不需要设备、几秒钟）：
+#   · `check-maskinput-wiring`：flatbuffer 里掩码输入还在计算路径上（没被折叠）；
+#   · `check-maskinput-ms`：在 Linux runtime 上跑 `.ms`，与 ONNX 参考逐元素比对 + 掩码生效。
+# 这样"产物坏了"与"设备喂数坏了"能在同一条命令里被分开定位。
 embed() {
     local wait_s="${1:-40}"
+    echo "── 0/3 转换产物侧断言（不需要设备）──"
+    if ! bash "$ROOT/scripts/model_to_ms.sh" check-maskinput-wiring; then
+        die "❌ 转换产物的图结构断言失败（掩码输入不在计算路径上）——先修转换，再谈设备"
+    fi
+    if [ -f "$ROOT/.tooling/mindspore-lite/work/maskref.json" ]; then
+        if ! bash "$ROOT/scripts/model_to_ms.sh" check-maskinput-ms; then
+            die "❌ 转换产物的数值保真断言失败（.ms 与 ONNX 不一致 / 掩码不生效）"
+        fi
+    else
+        echo "   ⚠️ 缺 maskref.json，跳过数值保真断言（补跑：bash scripts/model_to_ms.sh check-maskinput-ref）"
+    fi
+
+    echo
     echo "── 1/3 构建（KMP 产物 + HAP，含 vocab.txt）──"
     bash "$ROOT/scripts/harmony_spike.sh" all || die "构建失败（先看输出里的第一处 error）"
 

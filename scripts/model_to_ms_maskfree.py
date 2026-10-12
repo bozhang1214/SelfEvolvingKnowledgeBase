@@ -20,6 +20,12 @@ MindSpore Lite 转换出的 `.ms` 在 `benchmark` 里 **0 CPU 挂起**（不是 
 
 ## 等价性边界（重要，不许含糊）
 
+⚠️ **这里说的"预期不一致"只适用于本脚本不带 `--mask-input` 的默认形态（掩码被烘焙成全零常量）**，
+**不适用于 `--mask-input` 的产物**。2026-10-26 实测：`--mask-input` 变体在**带 padding** 输入上
+与原型图的 CLS 逐元素差只有 **1.07e-07**（判据 ≤1e-5），两图余弦都是 **0.2439**
+（见 `scripts/check_maskfree_padding_gap.py`）。上一轮把这两者混为一谈，导致
+"带 padding 时预期不一致"被当成了生产变体的性质——那是错的，也正是缺陷得以存活的原因之一。
+
 全零 additive mask **只在 `attention_mask` 全 1（无 padding）时与原型严格等价**。
 - 脚本默认在随机输入 + **全 1 mask** 下比对两图输出，**必须逐位相同**才继续；
 - 若传入 `--check-padded`，它会在**带 padding** 的输入上比对，并**预期不一致**——
@@ -29,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 import numpy as np
 import onnx
@@ -40,7 +47,8 @@ MASK_TARGETS = [f"/m/encoder/layer.{i}/attention/self/Where_output_0" for i in r
 CONST_NAME = "sekb_additive_mask_zero"
 
 
-def rewire_and_prune(model: onnx.ModelProto, mask_input: bool = False) -> tuple[onnx.ModelProto, int, int]:
+def rewire_and_prune(model: onnx.ModelProto, mask_input: bool = False,
+                     id_dtype: int = onnx.TensorProto.INT64) -> tuple[onnx.ModelProto, int, int]:
     g = model.graph
     consumers: dict[str, list[str]] = {}
     for n in g.node:
@@ -58,6 +66,26 @@ def rewire_and_prune(model: onnx.ModelProto, mask_input: bool = False) -> tuple[
                     rewired += 1
     if rewired != len(MASK_TARGETS):
         raise SystemExit(f"❌ 只重接了 {rewired}/{len(MASK_TARGETS)} 处注意力掩码输入，图结构与预期不符，停止")
+
+    # ── 1b) token 输入的数据类型：默认保持 int64，可改为 int32 ─────────────────
+    #
+    # **为什么需要这个选项**（这是本轮缺陷的直接产物，2026-10-26）：
+    # 转换出来的 `bge-maskinput.ms` 里，`input_ids`/`token_type_ids` 的 flatbuffer `dtype`
+    # 是 **34 = INT32**（不是 ONNX 的 INT64），运行期也只给它们分配 **512×4=2048 B**。
+    # 而宿主按 int64 写 4096 B → **越界 2048 B**，后半段 id 静默丢失，
+    # 设备上表现为"余弦 0.8154 / 掩码取值不影响结果"（Linux runtime 上直接堆崩溃）。
+    #
+    # 于是"转换产物到底是什么 dtype"必须能被**host 侧复现并证明数值等价**：
+    # 这里提供 int32 版本，供 `make_maskref.py` 生成 int32 声明的参考输出，
+    # 与 int64 版本逐元素比对（Gather 两种索引类型都支持，数值必须相同）。
+    if id_dtype != onnx.TensorProto.INT64:
+        changed = 0
+        for vi in g.input:
+            if vi.name in ("input_ids", "token_type_ids"):
+                vi.type.tensor_type.elem_type = id_dtype
+                changed += 1
+        if changed != 2:
+            raise SystemExit(f"❌ 只把 {changed}/2 个 token 输入改成 {id_dtype}，图结构与预期不符，停止")
 
     if mask_input:
         # **生产形态**：additive mask 作为**模型输入**，由宿主按实际 padding 计算后喂入。
@@ -142,22 +170,103 @@ def run(path: str, feeds: dict[str, np.ndarray], exact: bool = False) -> np.ndar
     return sess.run(None, feeds)[0]
 
 
+def dump_maskinput(src: str, out_i64: str, out_i32: str) -> int:
+    """一次产出**两份**"掩码作输入"的 ONNX（token 输入分别声明 int64 / int32）并证明数值一致。
+
+    为什么要有这个动作（而不是手敲两遍 `--id-dtype`）：
+
+    * 转换出来的 `.ms` 里 token 输入实测是 **int32**（见本文件 `--id-dtype` 的说明）；
+    * 但原型 ONNX（`ms-static-1x512.onnx`）声明的是 int64，本仓库既有的
+      `ms-static-maskinput.onnx` 也是 int64；
+    * 于是"生产变体到底该按哪种 dtype 喂"这件事必须**有 host 侧证据**，
+      否则只能在设备上试错。这里用 onnxruntime 证明：同一套 id、同一个掩码下，
+      两种声明给出的 CLS **逐元素差 ≈ 0**（差异只在运行期的缓冲宽度）。
+    """
+    model = onnx.load(src)
+    for dst, dt, name in ((out_i64, onnx.TensorProto.INT64, "int64"),
+                          (out_i32, onnx.TensorProto.INT32, "int32")):
+        m2, rewired, removed = rewire_and_prune(onnx.load(src), mask_input=True, id_dtype=dt)
+        onnx.save(m2, dst)
+        print(f"  → {dst}（token 输入={name}；重接 {rewired} 处掩码，删 {removed} 个节点，"
+              f"节点 {len(model.graph.node)} → {len(m2.graph.node)}）")
+
+    # ── 等价性 1：原型（图内掩码链）vs 变体（掩码作输入），带 padding ──
+    rng = np.random.default_rng(11)
+    ids = rng.integers(0, 1000, size=(1, 512)).astype(np.int64)
+    att = np.ones((1, 512), dtype=np.int64)
+    att[0, 300:] = 0                                   # 后半段是 padding
+    proto_feeds = {"input_ids": ids, "token_type_ids": np.zeros_like(ids), "attention_mask": att}
+    mask_add = np.zeros((1, 1, 512, 512), dtype=np.float32)
+    mask_add[0, 0, :, 300:] = -np.inf                  # 只掩 key（列）
+    var_feeds_i64 = {"input_ids": ids, "token_type_ids": np.zeros_like(ids), CONST_NAME: mask_add}
+
+    so = ort.SessionOptions()
+    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    s_proto = ort.InferenceSession(src, so, providers=["CPUExecutionProvider"])
+    s_i64 = ort.InferenceSession(out_i64, so, providers=["CPUExecutionProvider"])
+    s_i32 = ort.InferenceSession(out_i32, so, providers=["CPUExecutionProvider"])
+
+    o_proto = s_proto.run(None, proto_feeds)[0]
+    o_i64 = s_i64.run(None, var_feeds_i64)[0]
+    var_feeds_i32 = dict(var_feeds_i64)
+    var_feeds_i32["input_ids"] = ids.astype(np.int32)
+    var_feeds_i32["token_type_ids"] = np.zeros_like(ids, dtype=np.int32)
+    o_i32 = s_i32.run(None, var_feeds_i32)[0]
+
+    d_proto = float(np.max(np.abs(o_proto - o_i64)))
+    d_dtype = float(np.max(np.abs(o_i64 - o_i32)))
+
+    def cls(v):
+        x = np.asarray(v[0, 0], dtype=np.float64)
+        return x / (np.linalg.norm(x) + 1e-12)
+
+    cos_dtype = float(cls(o_i64) @ cls(o_i32))
+
+    print(f"  【带 padding｜关闭优化】原型 vs 变体(int64) 最大逐元素差 = {d_proto:.3e}")
+    print(f"  【带 padding｜关闭优化】变体 int64 vs 变体 int32 最大逐元素差 = {d_dtype:.3e}，"
+          f"CLS 余弦 = {cos_dtype:.9f}")
+
+    ok = True
+    if d_proto > 1e-5:
+        print("  ❌ 原型与变体在带 padding 时不一致（掩码语义被改坏了）", file=sys.stderr)
+        ok = False
+    if d_dtype > 1e-5:
+        print("  ❌ int64/int32 两种声明数值不一致——不能拿 int32 版做对照", file=sys.stderr)
+        ok = False
+    if ok:
+        print("  ✅ 两份变体都与原型一致，且两种 dtype 声明数值等价")
+    return 0 if ok else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="src", default=".tooling/mindspore-lite/work/ms-static-1x512.onnx")
     ap.add_argument("--out", dest="dst", default="/tmp/ms-static-nomask.onnx")
     ap.add_argument("--mask-input", action="store_true",
                     help="把 additive mask 作为模型输入（生产形态），而不是全零常量")
+    ap.add_argument("--id-dtype", choices=["int64", "int32"], default="int64",
+                    help="token 输入（input_ids/token_type_ids）的声明类型；"
+                         "转换产物实测是 int32，用 int32 可生成与之同声明的对照图")
+    ap.add_argument("--dump-mask-input", metavar="DIR", default="",
+                    help="一次产出两份「掩码作输入」的 ONNX（int64/int32）并证明数值等价，"
+                         "写入 DIR/ms-static-maskinput.onnx 与 DIR/ms-static-maskinput-i32.onnx")
     ap.add_argument("--check-padded", action="store_true",
                     help="额外在带 padding 的输入上比对（**预期不一致**，用于量化等价边界）")
     a = ap.parse_args()
 
+    if a.dump_mask_input:
+        d = Path(a.dump_mask_input)
+        d.mkdir(parents=True, exist_ok=True)
+        return dump_maskinput(a.src, str(d / "ms-static-maskinput.onnx"),
+                             str(d / "ms-static-maskinput-i32.onnx"))
+
+    id_dtype = onnx.TensorProto.INT64 if a.id_dtype == "int64" else onnx.TensorProto.INT32
     model = onnx.load(a.src)
     before = len(model.graph.node)
-    model, rewired, removed = rewire_and_prune(model, mask_input=a.mask_input)
+    model, rewired, removed = rewire_and_prune(model, mask_input=a.mask_input, id_dtype=id_dtype)
     onnx.save(model, a.dst)
     print(f"  重接 {rewired} 处掩码输入；死代码消除删除 {removed} 个节点；"
-          f"节点数 {before} → {len(model.graph.node)}")
+          f"节点数 {before} → {len(model.graph.node)}；token 输入声明={a.id_dtype}")
 
     # ── 等价性：随机输入 + 全 1 mask，必须逐位相同 ──
     rng = np.random.default_rng(7)

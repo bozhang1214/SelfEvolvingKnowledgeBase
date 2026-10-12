@@ -105,6 +105,57 @@
 # 宿主侧契约（Kotlin 实现时要照做）：additive mask 取值 —— 可见位置 `0`、被掩位置 `-inf`，
 # 形状 `[1,1,512,512]`；实测该张量**四层完全相同**，故单个输入即可。
 #
+# ============================================================
+# ## ✅✅ 根因改判（2026-10-26）：`.ms` **没有**丢掩码，缺陷在**设备侧喂数的字节宽度**
+# ============================================================
+#
+# 上一轮这里（以及 `apps/harmony/README.md`）把 H6 的"余弦 0.8154 vs Android 0.244"
+# 归因为"**转换器把掩码输入常量折叠了**"。本轮用两条独立证据把它**推翻**：
+#
+# **证据 1（图结构，直接读 `.ms` 的 flatbuffer）**
+#   `scripts/check_ms_mask_wiring.py` + `scripts/ms_flatbuffer.py`（纯 Python，不依赖
+#   flatc/runtime/设备）打开 `bge-maskinput.ms` 后是：
+#       [6]  input_ids                 INT32   [1,512]      消费者=[/m/embeddings/word_embeddings/Gather]
+#       [2]  token_type_ids            INT32   [1,512]      消费者=[/m/embeddings/token_type_embeddings/Gather]
+#       [35] sekb_additive_mask_zero   FLOAT32 [1,512,512,1] 消费者=[sekb_additive_mask_zero_nh2nc]
+#       掩码下游闭包内可达的 attention/self/Add = 4 个（layer.0..3），闭包节点数 110
+#       掩码张量 has_data=False（**不是**常量）
+#   即：链条完整 —— `mask 输入 → nh2nc(Transpose, NHWC 适配) → 4×attention/self/Add → Softmax`。
+#   **没有任何"被折叠"的迹象**。而且要注意 `dtype=34` 在 flatbuffer 里是 **INT32**
+#   （OHOS 的 `OH_AI_DATATYPE_NUMBERTYPE_INT32` 也正好是 34；INT64 才是 35）——
+#   这行字就是根因：**token 输入是 int32，不是 int64**。
+#
+# **证据 2（运行期数值，Linux aarch64 runtime 直接跑同一个 `.ms`）**
+#   `scripts/check_ms_numerics.py`（容器内 ctypes 调 `libmindspore-lite.so`，复刻设备的
+#   "读输入 → 写 MSTensorGetMutableData → Predict"路径）给出：
+#       input_ids            元素数=512    MSTensorGetDataSize=**2048 B**（= 512×4，int32）
+#       token_type_ids       元素数=512    MSTensorGetDataSize=**2048 B**
+#       sekb_additive_mask_zero 元素数=262144  MSTensorGetDataSize=1048576 B（= ×4，float32）
+#   而旧代码写死了 `LongArray` 的 8 字节布局 → 每次喂 512 个 id **写 4096 B**，
+#   **越界 2048 B**。Linux 形态下这一写直接崩（可复现）：
+#       malloc(): invalid size (unsorted)      ← glibc 当场报堆破坏
+#   鸿蒙的 musl 不报，于是**后半段 id 被静默写进隔壁分配块**，模型只读到前 256 个 id。
+#   用"安全写入（只写 2048 B）"跑同一个 `.ms` 并与 onnxruntime 参考逐元素比：
+#       int64 半写：与 ONNX 参考的余弦 = 0.514（错）；cos(A,B)=0.7861（≈ 设备那个 0.8154 量级）
+#       int32 打包：与 ONNX 参考**余弦 = 1.0000**（逐元素差 ≈4e-6）；cos(A,B)=0.2439 = Android 基线
+#   → **运行时按 int32 读，喂对了就完全正确**。掩码从来没被忽略。
+#
+# **修法**：设备侧不再"假设 int64"，而按 `OH_AI_TensorGetDataSize / OH_AI_TensorGetElementNum`
+#   得到每元素真实宽度（4 或 8）再打包，并在写入前断言"要写的字节数 == 缓冲字节数"。
+#   见 `apps/harmony/spike/knspike/src/ohosMain/kotlin/MsLite.kt` 的 `fillIds/writePacked`。
+#
+# **为什么这个缺陷能活这么久**（值得单独记住）：它的每一条"自检"都是真的，只是**都没碰到痛处**：
+#   · 写读回判据只覆盖了**掩码**张量，没覆盖 token 张量（越界正好发生在 token 包装上）；
+#   · L2=1.0000、确定性、维度都成立——错向量同样是合法的归一化向量；
+#   · "余弦 < 0.95 就算过"曾是判据，于是 0.8154 也算 PASS（**假绿**）。
+#   所以本轮同时把"设备向量与 host 不一致"变成**硬 FAIL**（`|cos-0.244|≤0.02`）并新增
+#   "**掩码敏感性**"判据（正确掩码 vs 全零掩码必须明显不同），另加转换产物侧的三条断言。
+#
+# **一键验收**（不需要设备，约 1 分钟；含两条反证）：
+#     bash scripts/model_to_ms.sh verify-maskinput
+# **设备验收**（模拟器，约 3 分钟）：
+#     bash scripts/harmony.sh embed 90        # 现在会先跑上面那几条，再上设备
+
 
 #
 # `scripts/model_to_ms_maskfree.py --mask-input` 把 additive mask 由常量改为**模型输入**
@@ -224,6 +275,17 @@ in_docker() {   # 在 arm64 容器里跑（原生，无模拟）
     docker run --rm -v "$WORK/..:/w" -w /w/mindspore-lite/work "$DOCKER_IMG" bash -c "$1"
 }
 
+# `.ms` 数值保真检查：把**仓库根**挂到 /w（脚本与 .tooling 的相对路径都成立），
+# 并把 runtime 的依赖库目录（third_party/glog）也加进 LD_LIBRARY_PATH——
+# 只加 runtime/lib 会 `OSError: libmindspore_glog.so.0`（实测踩过）。
+run_ms_check() {   # $1 = "" 或 "--red"
+    docker run --rm -v "$ROOT:/w" -w /w \
+        -e LD_LIBRARY_PATH="/w/.tooling/mindspore-lite/${MS_A64}/runtime/lib:/w/.tooling/mindspore-lite/${MS_A64}/runtime/third_party/glog" \
+        "$DOCKER_IMG" python3 -u /w/scripts/check_ms_numerics.py \
+        --ms "/w/.tooling/mindspore-lite/work/bge-maskinput.ms" \
+        --ref "/w/.tooling/mindspore-lite/work/maskref.json" $1
+}
+
 fetch() {
     mkdir -p "$WORK"
     ( cd "$WORK"
@@ -287,7 +349,12 @@ check() {
     in_docker "export LD_LIBRARY_PATH=$LDP; /w/mindspore-lite/${MS_A64}/tools/benchmark/benchmark --modelFile=${model} ${shape_arg} --device=CPU --warmUpLoopCount=1 --loopCount=3" 2>&1 | tr -d '\000' | tail -14
 }
 
-case "${1:-all}" in
+# 统一入口动作名：有的人（包括脚本内部）会带 `--` 前缀调用，这里一次去掉，
+# 避免 "--optimize=xxx 的破折号"这种两套写法互相踩。
+ACTION="${1:-all}"
+ACTION="${ACTION#--}"
+
+case "$ACTION" in
     fetch)   fetch ;;
     rewrite) rewrite ;;
     convert) convert ;;
@@ -297,7 +364,49 @@ case "${1:-all}" in
     convert-nomask) convert ms-static-nomask.onnx bge-nomask ;;
     # 去掩码链变体的运行期检验（输入里已无 attention_mask）
     check-nomask)  check bge-nomask.ms 'input_ids:1,512;token_type_ids:1,512' ;;
-    convert-maskinput) convert ms-static-maskinput.onnx bge-maskinput ;;
+    # ── 生产形态：additive mask 作为图输入 ────────────────────────────────────
+    # 先由 maskfree 脚本产出**两份**变体（token 输入声明 int64 / int32）并证明二者数值等价；
+    # 转换产物实测声明 int32（见脚本头与本仓库 README 的本轮小节），两份都转，便于对照。
+    convert-maskinput)
+        "$PY" "$ROOT/scripts/model_to_ms_maskfree.py" \
+            --in "$WORK/work/ms-static-1x512.onnx" \
+            --dump-mask-input "$WORK/work" || exit 1
+        convert ms-static-maskinput.onnx bge-maskinput || exit 1
+        convert ms-static-maskinput-i32.onnx bge-maskinput-i32 || exit 1
+        ;;
+    # 图结构断言（纯 flatbuffer 解析，不需要 runtime/设备）：掩码输入还在计算路径上吗？
+    check-maskinput-wiring)
+        python3 "$ROOT/scripts/check_ms_mask_wiring.py" \
+            --ms "$WORK/work/bge-maskinput.ms"
+        ;;
+    # host 参考（ORT）：把两份变体的输入与 CLS 参考输出固化到 work/maskref.json
+    check-maskinput-ref)
+        "$PY" "$ROOT/scripts/make_maskref.py" \
+            --onnx-i64 "$WORK/work/ms-static-maskinput.onnx" \
+            --onnx-i32 "$WORK/work/ms-static-maskinput-i32.onnx" \
+            --out "$WORK/work/maskref.json"
+        ;;
+    # **.ms 数值保真**（在 arm64 容器里跑 Linux 版 runtime，与上面的 ORT 参考逐元素比）
+    #   · 正确掩码 vs 全零掩码必须明显不同（掩码真的生效）
+    #   · 每个输入的缓冲字节数必须容得下声明的宽度（本轮缺陷的那条守卫）
+    check-maskinput-ms)
+        [ -f "$WORK/work/maskref.json" ] || { echo "❌ 缺 maskref.json（先跑 check-maskinput-ref）" >&2; exit 1; }
+        # ⚠️ 这个检查**不用** in_docker 的挂载（它只挂 .tooling/mindspore-lite，脚本在仓库根下）。
+        #    改成把**仓库根**挂到 /w，这样脚本与 .tooling 的相对路径都成立。
+        run_ms_check "" 
+        ;;
+    check-maskinput-ms-red)
+        [ -f "$WORK/work/maskref.json" ] || { echo "❌ 缺 maskref.json（先跑 check-maskinput-ref）" >&2; exit 1; }
+        run_ms_check "--red"
+        ;;
+    # 兼容旧名（不带 -ms 后缀）
+    check-ms)
+        [ -f "$WORK/work/maskref.json" ] || { echo "❌ 缺 maskref.json（先跑 check-maskinput-ref）" >&2; exit 1; }
+        run_ms_check ""
+        ;;
+    # host 端"变体 vs 原型"等价实验（带 padding，逐元素 ≤1e-5）
+    check-padding-gap) "$PY" "$ROOT/scripts/check_maskfree_padding_gap.py" ;;
+    check-padding-gap-red) "$PY" "$ROOT/scripts/check_maskfree_padding_gap.py" --red ;;
     check-maskinput)  check bge-maskinput.ms 'input_ids:1,512;token_type_ids:1,512;sekb_additive_mask_zero:1,1,512,512' ;;
     # 不带 --inputShape：模型本身是静态的，用于排除"工具解析 4D 形状"这一层
     # 真正**不传** --inputShape（用于区分工具解析问题 vs 模型不接受 4D 输入）
@@ -305,6 +414,21 @@ case "${1:-all}" in
     check)   check ;;
     # 静态化产物（512 定长）：M7 路线判定的决定性实验——此前只验过它能转换，没验过它能运行
     check-static) check bge-static.ms 'input_ids:1,512;attention_mask:1,512;token_type_ids:1,512' ;;
+    # ── 掩码保真的**一键验收**（结构断言 + host 等价 + .ms 数值 + 两条反证）────
+    # ⚠️ 动作名与函数名**不同名**（`check-maskinput-*` 会与 `check-maskinput` 的
+    #    前缀匹配歧义），所以这里**递归调用脚本自身**而不是直接调函数——
+    #    直接写函数名会被 bash 当外部命令，报 `command not found`（我踩过一次）。
+    verify-maskinput)
+        for act in check-maskinput-wiring check-maskinput-ref check-padding-gap \
+                   check-maskinput-ms check-maskinput-ms-red check-padding-gap-red; do
+            echo
+            echo "════════ ${act} ════════"
+            bash "${BASH_SOURCE[0]}" "$act" || { echo "❌ ${act} 失败" >&2; exit 1; }
+        done
+        echo
+        echo "✅ 掩码保真一键验收全通过（结构 / host 等价 / .ms 数值 / 两条反证）"
+        echo "   设备侧留一条：bash scripts/harmony.sh embed 90"
+        ;;
     all)     fetch && rewrite && convert && check ;;
-    *) echo "用法：bash scripts/model_to_ms.sh [fetch|rewrite|convert|check|all]" >&2; exit 2 ;;
+    *) echo "用法：bash scripts/model_to_ms.sh [fetch|rewrite|convert|all|convert-static|convert-maskinput|check-maskinput-wiring|check-maskinput-ref|check-maskinput-ms|check-maskinput-ms-red|check-padding-gap|verify-maskinput]" >&2; exit 2 ;;
 esac
