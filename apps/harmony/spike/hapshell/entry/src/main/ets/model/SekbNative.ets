@@ -134,10 +134,12 @@ export class RagHitsResult {
 
 /** 打开文档库（模型 + RDB 索引）。**失败不抛**，`ok=false` + `reason`。 */
 export function ragOpen(modelPath: string, vocabText: string, dbDir: string,
-                        dbName: string = ''): RagOpenResult {
+                        dbName: string = '', filesDir: string = ''): RagOpenResult {
   const r = new RagOpenResult();
   try {
-    const o = JSON.parse(knspike.ragOpen(modelPath, vocabText, dbDir, dbName)) as RagOpenResult;
+    // 第 5 参 filesDir：**非空即让 Kotlin 侧走文件型存储**（绕开 RDB 的读一致性问题，
+    // 理由见 apps/harmony/.../FileVectorStore.kt 头部）。空串则退回 RDB（对照/回归用）。
+    const o = JSON.parse(knspike.ragOpen(modelPath, vocabText, dbDir, dbName, filesDir)) as RagOpenResult;
     r.ok = o.ok === true;
     r.reason = o.reason !== undefined ? o.reason : '';
     r.space = o.space !== undefined ? o.space : '';

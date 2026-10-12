@@ -42,7 +42,7 @@ extern "C" const char* sekb_chat_stream_line(const char* line);
 extern "C" const char* sekb_chat_stream_finish();
 extern "C" const char* sekb_chat_stream_summary();
 extern "C" const char* sekb_rag_open(const char* model_path, const char* vocab_text, const char* db_dir,
-                                     const char* db_name);
+                                     const char* db_name, const char* files_dir);
 extern "C" const char* sekb_rag_status();
 extern "C" const char* sekb_rag_documents();
 extern "C" const char* sekb_rag_ingest(const char* source_id, const char* name, const char* text,
@@ -107,13 +107,15 @@ static napi_value ChatStreamSummary(napi_env env, napi_callback_info /*info*/) {
 
 // ── rag*（文档页 / 检索来源）──
 static napi_value RagOpen(napi_env env, napi_callback_info info) {
-    const std::string model = sekb_chat_napi::argAt(env, info, 4, 0);
-    const std::string vocab = sekb_chat_napi::argAt(env, info, 4, 1);
-    const std::string dir = sekb_chat_napi::argAt(env, info, 4, 2);
+    const std::string model = sekb_chat_napi::argAt(env, info, 5, 0);
+    const std::string vocab = sekb_chat_napi::argAt(env, info, 5, 1);
+    const std::string dir = sekb_chat_napi::argAt(env, info, 5, 2);
     // 库名：空串 → 共享层的默认库（界面用固定库累积，自检用隔离库，见 SekbAppPort.kt）
-    const std::string name = sekb_chat_napi::argAt(env, info, 4, 3);
+    const std::string name = sekb_chat_napi::argAt(env, info, 5, 3);
+    // 应用私有 filesDir：**非空即走文件型存储**（绕开 RDB，理由见 FileVectorStore.kt 头部）
+    const std::string files = sekb_chat_napi::argAt(env, info, 5, 4);
     return sekb_chat_napi::returnString(env,
-        sekb_rag_open(model.c_str(), vocab.c_str(), dir.c_str(), name.c_str()));
+        sekb_rag_open(model.c_str(), vocab.c_str(), dir.c_str(), name.c_str(), files.c_str()));
 }
 
 static napi_value RagStatus(napi_env env, napi_callback_info /*info*/) {

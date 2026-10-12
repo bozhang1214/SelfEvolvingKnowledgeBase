@@ -470,8 +470,16 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
       hilog.info(0x0000, TAG_SELFTEST, 'RDBID-DETAIL %{public}s', line);
     }
   }
-  a.check('rag_source_id_roundtrip', idReport.indexOf('RDBID PASS') >= 0,
-    idReport.split('\n')[0] + ` ｜ 明细见 hilog 的 RDBID-DETAIL（write/单列/多列/all/delete 各一条）`);
+  // ⚠️ 探针被关掉时必须记 **SKIP 而不是 FAIL**（2026-10-26 修正）：
+  //    FAIL 的语义是"测得不对"，而这里是"**没测**"——把两者混起来会让汇总线失去意义
+  //    （此前它一直占着一个 FAIL，看起来像还有缺陷）。SKIP 的理由必须写清"为什么没测"。
+  if (skipProbe) {
+    a.skip('rag_source_id_roundtrip',
+      'RDB 探针已关闭（对照实验证明它会与会话句柄互相干扰，默认关闭；排查时改 skipProbe=false 再跑）');
+  } else {
+    a.check('rag_source_id_roundtrip', idReport.indexOf('RDBID PASS') >= 0,
+      idReport.split('\n')[0] + ` ｜ 明细见 hilog 的 RDBID-DETAIL（write/单列/多列/all/delete 各一条）`);
+  }
 
   const hit = ragRetrieve('端侧 RAG 为什么隐私更好', 3);
   // ⚠️ 判据强化（2026-10-26）：原来只查 `sourceId.length > 0` —— 太弱。

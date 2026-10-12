@@ -140,7 +140,9 @@ export class AppCtx {
       }
       const mp: string = await this.modelPath(ctx);
       const vocab: string = await this.rawText(ctx, 'vocab.txt');
-      const r = ragOpen(mp, vocab, this.databaseDir, dbName);
+      // 第 5 参传 `filesDir`：让 Kotlin 侧走**文件型存储**（RDB 的 NDK 路径读一致性不可靠，
+      // 见 FileVectorStore.kt 头部）。这是本次修复的关键一行。
+      const r = ragOpen(mp, vocab, this.databaseDir, dbName, this.filesDir);
       hilog.info(0x0000, TAG, 'ragOpen ok=%{public}s space=%{public}s dim=%{public}d reason=%{public}s',
         `${r.ok}`, r.space, r.dim, r.reason);
       this.lastRagReady = r.ok;

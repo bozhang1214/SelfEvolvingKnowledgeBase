@@ -33,6 +33,7 @@ import com.sekb.shared.core.JsonObject
 import com.sekb.shared.embed.EmbeddingSpace
 import com.sekb.shared.rag.KnowledgeIndex
 import com.sekb.shared.rag.Retriever
+import com.sekb.shared.rag.VectorStore
 
 /**
  * 文档页/来源列表需要的**全部**状态（一个对象，避免界面拿多个全局各读一半）。
@@ -45,12 +46,17 @@ import com.sekb.shared.rag.Retriever
  */
 private class LocalDocSession(
     val embed: MindSporeBgeEmbedding,
-    val store: RdbVectorStore,
+    /** 通用端口类型：**RDB 与文件型实现可以互换**（见 FileVectorStore.kt 头部说明）。 */
+    val store: VectorStore,
     val index: KnowledgeIndex,
     val spaceId: String,
     val dim: Int,
     /** 这个句柄用的是哪个库（自检会临时换隔离库，界面必须能区分） */
     val dbName: String,
+    /** 只有 RDB 实现有事务诊断；文件型没有事务，恒为空串。 */
+    val lastTx: String = "",
+    /** 当前用的是哪种存储（自检/设置页要如实显示：`rdb` 还是 `file`）。 */
+    val backend: String = "rdb",
 ) {
     fun retriever(minScore: Double) = Retriever(embed, store, minScore = minScore)
 }
@@ -120,7 +126,22 @@ object SekbApp {
      *
      * @return `{"ok":true|false,"reason":"...","space":"...","dim":N,"millis":N,"db":"sekb_docs.db"}`
      */
-    fun open(mp: String, vocab: String, dbDir: String, dbName: String = DOC_DB): String {
+    fun open(
+        mp: String,
+        vocab: String,
+        dbDir: String,
+        dbName: String = DOC_DB,
+        /**
+         * 应用私有 `filesDir`（ArkTS 侧 `ctx.filesDir`）。
+         *
+         * **为什么需要它**：鸿蒙 RDB 的 NDK C 路径被实测证明**读一致性不可靠**
+         * （同一进程同一句柄相邻调用互相矛盾；事务/游标/列名/多句柄/聚合都已逐一排除），
+         * 而**文件 I/O 已验证可靠**（聊天历史就是文件+rename，跨重装能恢复）。
+         * 向量索引是可重建的派生数据，不需要数据库能力 → 默认改用文件型存储。
+         * 非空时走 `FileVectorStore`；为空时退回 RDB（保留旧路径，便于对照/回归）。
+         */
+        filesDir: String = "",
+    ): String {
         // ⚠️ **空库名必须归一成默认库**（2026-10-26 主线定位的真缺陷）：
         //    ArkTS 侧 `openRag()` 传的是 `''`（"用默认库"的约定），而这里原来直接用空串当 `storeName`
         //    → `OH_Rdb_GetOrOpen(storeName="")` 建出一个**没有名字的库**，写入落在 A 处、读取查 B 处，
@@ -135,7 +156,11 @@ object SekbApp {
             if (session != null && activeDb == wantDb) return okJson()
             // 换库（自检用隔离库）→ 先关掉旧句柄，避免两个句柄同时持锁
             if (session != null) {
-                runCatching { session?.store?.close() }
+                // 只有 RDB 实现需要显式关句柄；文件型没有句柄（数据已落盘）。
+                runCatching {
+                    val st = session?.store
+                    if (st is RdbVectorStore) st.close()
+                }
                 session = null
             }
             activeDb = wantDb
@@ -143,15 +168,27 @@ object SekbApp {
             try {
                 val emb = MindSporeBgeEmbedding(mp, vocab)
                 emb.open()
-                // **每个库只开一个句柄**：这里开的这个交给 RdbVectorStore 注入使用
-                // （见 RdbVectorStore 构造函数的注释——多句柄会互相看不到写入，是自伤级缺陷）。
-                val (handle, herr) = RdbStore.open(dbDir, wantDb)
-                if (handle == null) error("打开 RDB 失败：errCode=$herr dir=$dbDir name=$wantDb")
-                val store = RdbVectorStore(dbDir, emb.space, wantDb, injected = handle)
-                session = LocalDocSession(
-                    embed = emb, store = store, index = KnowledgeIndex(emb, store, registry = store),
-                    spaceId = emb.space.id, dim = emb.space.dim, dbName = wantDb,
-                )
+                // 默认走**文件型**（理由见 `open` 的 `filesDir` 参数注释）；没有 filesDir 时退回 RDB。
+                val useFile = filesDir.isNotEmpty()
+                if (useFile) {
+                    val vs = FileVectorStore("$filesDir/sekb_docs.index", emb.space)
+                    session = LocalDocSession(
+                        embed = emb, store = vs, index = KnowledgeIndex(emb, vs, registry = vs),
+                        spaceId = emb.space.id, dim = emb.space.dim, dbName = "sekb_docs.index",
+                        lastTx = "", backend = "file",
+                    )
+                } else {
+                    // **每个库只开一个句柄**：这里开的这个交给 RdbVectorStore 注入使用
+                    // （见 RdbVectorStore 构造函数的注释——多句柄会互相看不到写入，是自伤级缺陷）。
+                    val (handle, herr) = RdbStore.open(dbDir, wantDb)
+                    if (handle == null) error("打开 RDB 失败：errCode=$herr dir=$dbDir name=$wantDb")
+                    val store = RdbVectorStore(dbDir, emb.space, wantDb, injected = handle)
+                    session = LocalDocSession(
+                        embed = emb, store = store, index = KnowledgeIndex(emb, store, registry = store),
+                        spaceId = emb.space.id, dim = emb.space.dim, dbName = wantDb,
+                        lastTx = store.lastTx, backend = "rdb",
+                    )
+                }
                 openMs = com.sekb.shared.core.nowMillis() - t0
                 openError = ""
                 return okJson()
@@ -264,7 +301,8 @@ object SekbApp {
                     o.put("allErr", "${t::class.simpleName}: ${t.message}")
                 }
                 o.put("allRows", allRows)
-                o.put("tx", s.store.lastTx)   // 事务诊断：begin/before/inTx/commit/after
+                o.put("tx", s.lastTx)   // 事务诊断（文件型后端恒为空串）
+                o.put("backend", s.backend)
                 // ⚠️ **文档登记也要回读**（2026-10-26 主线加）：切片表读回来对了，
                 //    但 `documents()` 仍报"0 篇"（自检 rag_ingest 因此红过）——同一类"写后读不到"，
                 //    只是发生在登记表上。同样有界轮询，并把实测篇数/切片数带出去。
@@ -490,8 +528,13 @@ object SekbApp {
 
 /** 打开文档库（模型 + RDB 索引）。**失败不抛**，返回 `{"ok":false,"reason":".."}`。 */
 @CName("sekb_rag_open")
-fun sekbRagOpen(modelPath: String, vocabText: String, dbDir: String, dbName: String): String =
-    SekbApp.open(modelPath, vocabText, dbDir, dbName.ifEmpty { "sekb_docs.db" })
+fun sekbRagOpen(
+    modelPath: String,
+    vocabText: String,
+    dbDir: String,
+    dbName: String,
+    filesDir: String,
+): String = SekbApp.open(modelPath, vocabText, dbDir, dbName.ifEmpty { "sekb_docs.db" }, filesDir)
 
 /** 当前状态（设置页显示"已持久化 / 未持久化 + 原因"）。 */
 @CName("sekb_rag_status")
