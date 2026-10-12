@@ -25,7 +25,7 @@
 | **设置** | 设备 enroll（`SekbApi` 语义 + Keychain）、连接状态与高级地址、**检索阈值调节（默认 0.40）**、端侧嵌入状态（模型/空间戳/维度/是否本机）、隐私与权限审计、**自检入口（可重跑 + 明细）**、策略/版本 | 分组顺序与文案照 `ui/SettingsScreen.kt`；阈值默认值差异见下文（**不是各端一个口味**） |
 
 **一份源码两端跑**：`apps/ios/App/*.swift` 同时编 iOS 与 macOS（`apps/mac/README.md` 记录了与 iOS 的**有意差异**）。
-当前规模 <!-- fact:ios_app_files=25 -->**25 个文件** / <!-- fact:ios_app_lines=5401 -->**5,401 行**
+当前规模 <!-- fact:ios_app_files=25 -->**25 个文件** / <!-- fact:ios_app_lines=5356 -->**5,356 行**
 （`scripts/check_edge_facts.py` 会按实测校验这两个数；改代码后若不一致，`doc_guard.sh` 第 7 项会红）。
 `#if os(...)` 只出现在两处：自检横幅前缀/`RootView` 的最小窗口尺寸，以及 Keychain 的 macOS 语义差异。
 
@@ -115,33 +115,42 @@ macOS 侧另有一套 `apps/mac/docs/screenshots/*.png`（同一份源码、同�
 | `ui_data_dir_writable` | 数据目录**真的写进去一个文件**（不是"存在就算"；受限沙箱里 Application Support 是被拒的） |
 | `ui_conversation_roundtrip` | 会话 save→load 往返（含 plane/reason/sources），**坏文件被跳过**且列表仍可打开 |
 | `ui_doc_delete_isolated` | 删 A 不影响 B：切片与元信息一起删、**重开索引后 B 仍在**（"删一篇清空全库"是曾经的真缺陷） |
-| `bridge_parse_enroll_response` / `bridge_login_token` / `bridge_sse_events` / `bridge_route_event_body` / `bridge_http_error_is_swift_error` | 云端桥的字段名与 SSE 装配（用协议文档里的样例报文），以及 **401 变成 Swift 错误而不是 abort** |
+| `shared_login_token_fields` / `shared_enroll_credentials` / `shared_sse_events` / `shared_route_event_reported` / `shared_http_error_is_catchable` | **共享层 `SekbApi` 在 Apple 侧真的能跑通**：字段名解析、SSE 装配（正文/思考/执行位置/会话 id）、请求体由共享层生成、**401 变成可捕获的错误而不是 abort** |
 
-### ⚠️ 共享层缺口：`SekbApi` 缺 `@Throws`（Apple 侧不能直接用）
+### ✅ 曾经的共享层缺口已闭合：`SekbApi` 的 `@Throws`（2026-10-26）
 
-`SekbApi` 的 `login/enroll/refresh/chatStream/reportRouteEvent` 在 Kotlin 里是 **throwing** 的，
-但**没有标 `@Throws`**。Kotlin/Native 的规则是：未标 `@Throws` 的函数把异常抛到 Objective-C/Swift 时
-**直接终止进程**。本机实测（macOS 框架，`SekbApi.login` 收到 HTTP 500）：
+**这一段留着，因为它解释了"为什么曾经有一份 248 行的 Swift 重复实现"，也留下了判据。**
+
+历史事实（本机实测，macOS 框架，`SekbApi.login` 收到 HTTP 500）：
 
 ```
 Function doesn't have or inherit @Throws annotation and thus exception isn't propagated
-from Kotlin to Objective-C/Swift as NSError. It is considered unexpected and unhandled
-instead. Program will be terminated.
+from Kotlin to Objective-C/Swift as NSError ... Program will be terminated.
 Uncaught Kotlin exception: com.sekb.shared.net.SekbApiException: SEKB 500: probe-500
 Abort trap: 6
 ```
 
-也就是说：**只要服务端返回非 2xx（token 过期 401 就很常见）或 SSE 里出现 `error` 事件，
-Apple 侧会当场 abort**——而不是"显示接入失败"。
+即：**只要服务端返回非 2xx（token 过期 401 很常见）或 SSE 出现 `error` 事件，Apple 侧当场 abort**。
+当时为了不崩，Apple 侧抄了一份客户端（`SekbApiBridge.swift`，248 行）——
+协议语义仍是共享的（SSE 解析/凭证/JSON 都走共享层），但**HTTP、状态码与字段名成了第二处维护点**。
 
-- **正确修法**（属于共享层改动，按协作约定由主线统一做）：
-  给这些方法加 `@Throws(SekbApiException::class)`（或 `@Throws(Throwable::class)`），
-  Swift 侧就会看到 `throws`，可以 `do/catch`。
-- **本期的替代方案**：`apps/ios/App/SekbApiBridge.swift`。
-  协议语义**没有第二份**——SSE 行解析走共享层 `SseParser`、凭证构造走 `DeviceCredentials.fromTtl`、
-  JSON 解析/生成走 `JsonX` / `JsonObject`；这里只重写"HTTP + 状态码 + 少数几个字段名"，
-  并用 5 条自检（上表）钉住字段名与错误路径。
-- **主线补上 `@Throws` 之后，`SekbApiBridge.swift` 应整体删除**，容器改回用 `SekbApi`。
+主线已给 `SekbApi` 的 8 个公开方法补 `@Throws(SekbApiException::class)`，生成的 ObjC 头可以逐条验证：
+
+```objc
+- (NSString * _Nullable)loginEmail:... error:(NSError **)error
+    __attribute__((swift_name("login(email:password:)")));
+// @note This method converts instances of SekbApiException to errors.
+```
+
+于是：
+- **`SekbApiBridge.swift` 已删除**；`SekbContainer` 改用 `SekbApiShim`——
+  它只做 `throws → Result` 的转换，**不含任何协议知识**（判据：里面一旦出现 `/api/v1/` 或字段名字符串，
+  就说明又长回第二套事实了）。
+- 自检项改为直接打共享层（上表 5 条），其中 `shared_http_error_is_catchable` 就是"`@Throws` 被去掉就会红"的守卫
+  （去掉后会退化成 `Abort trap: 6`，进程直接死，自检汇总行根本不会打印）。
+- 两处**顺手发现的真问题**（都已修）：Kotlin 的**默认参数不跨语言**（`SekbApi(transport:baseUrl:now:)`
+  三个都必须显式给，`now` 要 `KotlinLong(longLong:)`）；以及**截断取样当断言**会产生假失败
+  （路由事件请求体截到 80 字符时，`escalated`/`input_tokens` 落在后面 → 误判 FAIL）。
 
 ### 与 Android 的**有意**差异（不是遗漏）
 

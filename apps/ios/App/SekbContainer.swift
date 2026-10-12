@@ -78,17 +78,17 @@ final class SekbPermissionChecker: NSObject, PermissionChecker {
     func has(permission: String) -> Bool { false }
 }
 
-/// 云端聊天端口（共享层 `CloudChat`）→ 走 [SekbApiBridge]。
+/// 云端聊天端口（共享层 `CloudChat`）→ 走 [SekbApiShim]（共享层 `SekbApi` 的薄适配）。
 ///
 /// 失败时**不抛异常**（Swift 侧接口本来也不能抛）：把错误交给编排器的 `error` 字段，
-/// 由界面如实显示。抛出去只会让 App abort（原因见 `SekbApiBridge` 的说明）。
+/// 由界面如实显示（`SekbApiShim` 已经把 `SekbApiException` 收敛成 `Result`）。
 final class SekbCloudChat: NSObject, CloudChat {
 
-    private let bridge: SekbApiBridge
+    private let api: SekbApiShim
     private let deviceToken: String
 
-    init(bridge: SekbApiBridge, deviceToken: String) {
-        self.bridge = bridge
+    init(api: SekbApiShim, deviceToken: String) {
+        self.api = api
         self.deviceToken = deviceToken
         super.init()
     }
@@ -96,7 +96,7 @@ final class SekbCloudChat: NSObject, CloudChat {
     func stream(message: String, conversationId: String?,
                 onToken: @escaping (String) -> Void,
                 onThinking: @escaping (String) -> Void) -> CloudReply {
-        let result = bridge.chatStream(deviceToken: deviceToken, message: message,
+        let result = api.chatStream(deviceToken: deviceToken, message: message,
                                        conversationId: conversationId,
                                        onToken: onToken, onThinking: onThinking)
         switch result {
@@ -179,7 +179,7 @@ final class SekbContainer {
     /// 当前阈值是"用户设的"还是"策略下发的"（设置页要如实显示，不能让用户以为改生效了）。
     private(set) var thresholdSource: String
 
-    var bridge: SekbApiBridge { SekbApiBridge(transport: transport, baseUrl: config.sekbBaseUrl) }
+    var bridge: SekbApiShim { SekbApiShim(transport: transport, baseUrl: config.sekbBaseUrl) }
 
     /// 已接入设备的 id（没有凭证时为空串）。
     ///
@@ -380,7 +380,7 @@ final class SekbContainer {
         let edge = OpenAiCompatibleEdgeLlm(transport: transport, baseUrl: cfg.edgeBaseUrl,
                                            apiKey: "ollama", config: cfg,
                                            now: { KotlinLong(longLong: TimeFmt.nowMillis()) })
-        let cloud = SekbCloudChat(bridge: SekbApiBridge(transport: transport, baseUrl: cfg.sekbBaseUrl),
+        let cloud = SekbCloudChat(api: SekbApiShim(transport: transport, baseUrl: cfg.sekbBaseUrl),
                                   deviceToken: deviceToken)
         return ChatOrchestrator(config: cfg, router: PlaneRouter(config: cfg), edgeLlm: edge,
                                 cloud: cloud, tools: tools,

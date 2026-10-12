@@ -57,7 +57,11 @@ CLIENT_EXTS = (".kt", ".ets", ".ts", ".swift")
 #: 守卫的假设已失效（这时**必须失败**，让维护者来改守卫，而不是让它继续假绿）。
 REQUIRED_CLIENT_ROOTS = [CLIENT_ROOTS[0], CLIENT_ROOTS[1]]
 
-PATH_RE = re.compile(r"/api/v1/[A-Za-z0-9_\-/{}]*")
+# ⚠️ 必须要求前缀后有**至少一个字符**（`+` 而不是 `*`）：写成 `*` 时，文档/注释里
+# 单纯提到接口前缀的句子（如"这里出现 `/api/v1/` 就说明退化了"）会被当成一个"客户端调用的端点"，
+# 报出 `/api/v1` 不存在——**守卫自己的假阳性**（2026-10-26 实测踩到）。
+# 只收"前缀 + 实际路径"，裸前缀不算调用。
+PATH_RE = re.compile(r"/api/v1/[A-Za-z0-9_\-/{}]+")
 PREFIX_RE = re.compile(r'APIRouter\(\s*prefix="([^"]+)"')
 ENDPOINT_RE = re.compile(r'@router\.(?:get|post|put|patch|delete)\(\s*"([^"]*)"')
 

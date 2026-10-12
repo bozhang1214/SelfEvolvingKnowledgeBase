@@ -46,19 +46,38 @@ func runAndReportSelfTest() -> [CheckResult] {
 }
 
 /// **自检专用的假传输**：把云端请求换成写死的响应，用来在没有网络/后端的情况下
-/// 端到端验证 `SekbApiBridge`（登录 → enroll → SSE 聊天 → 路由事件上报 → 错误路径）。
+/// 端到端验证共享层 `SekbApi`（登录 → enroll → SSE 聊天 → 路由事件上报 → 错误路径）。
 ///
-/// 为什么值得单独造它：Apple 侧因为共享层缺 `@Throws` 而**不能用 `SekbApi`**
-/// （见 `SekbApiBridge` 的说明），桥是替代方案，就必须有证据表明它真的能跑通、
-/// 且**错误路径不会终止进程**。假传输是这份证据里唯一不依赖外部环境的部分。
+/// 为什么值得单独造它：这几条断言是"**共享层的 `@Throws` 契约在 Apple 侧真的成立**"的唯一
+/// 不依赖外部环境的证据——尤其 `shared_http_error_is_catchable`：如果哪天 `@Throws` 被去掉，
+/// 非 2xx 会变成 abort（历史上实测过 `Abort trap: 6`），而这条会当场变红。
 final class SelfTestTransport: NSObject, HttpTransport {
 
     /// 全部返回 401（验证"HTTP 错误 → Swift 错误"而不是崩溃）
     let alwaysUnauthorized: Bool
 
-    init(alwaysUnauthorized: Bool = false) {
+    /// 登录响应的覆盖值（默认用协议文档里的 `token` 形态；传另一个可验历史字段 `access_token`）
+    let loginBody: String?
+
+    /// 最后一次 `postJson` 的请求体（用于断言"请求体由**共享层**生成"）
+    private var lastJsonBody = ""
+
+    init(alwaysUnauthorized: Bool = false, loginBody: String? = nil) {
         self.alwaysUnauthorized = alwaysUnauthorized
+        self.loginBody = loginBody
         super.init()
+    }
+
+    func lastBody() -> String { lastJsonBody }
+
+    /// 共享层 `SekbApi` 的唯一构造入口。
+    ///
+    /// 存在的理由：Kotlin 的**默认参数不跨语言**，`SekbApi(transport:baseUrl:now:)` 三参都必须给；
+    /// 每个断言各写一遍三个参数既啰嗦又容易漏（漏了就是编译错误）。
+    /// 这里把口径固定成"墙上时钟毫秒"，与共享层 `nowMillis()` / `TimeFmt.nowMillis()` 一致。
+    static func makeApi(_ transport: HttpTransport) -> SekbApi {
+        SekbApi(transport: transport, baseUrl: "http://selftest.local",
+                now: { KotlinLong(longLong: TimeFmt.nowMillis()) })
     }
 
     /// 协议文档 §2 的 enroll 响应样例（字段名以文档为准）
@@ -88,11 +107,13 @@ final class SelfTestTransport: NSObject, HttpTransport {
     }
 
     func postJson(url: String, headers: [String: String], body: String, timeoutSeconds: Int64) -> HttpResponse {
+        lastJsonBody = body
         if alwaysUnauthorized {
             return HttpResponse(code: 401, body: "{\"detail\":\"unauthorized\"}")
         }
         if url.hasSuffix("/auth/login") {
-            return HttpResponse(code: 200, body: "{\"user\":{\"id\":1},\"token\":\"tok-selftest\"}")
+            return HttpResponse(code: 200,
+                                body: loginBody ?? "{\"user\":{\"id\":1},\"token\":\"tok-selftest\"}")
         }
         if url.hasSuffix("/device/enroll") || url.hasSuffix("/device/refresh") {
             return HttpResponse(code: 200, body: SelfTestTransport.enrollFixture)
@@ -708,65 +729,103 @@ func runSharedSelfTest() -> [CheckResult] {
                         + " 重开=\(kbReopened.size()) 剩余文档=\(kbReopened.list().map { $0.id }.joined(separator: ","))"))
     try? FileManager.default.removeItem(at: tmpKBDir)
 
-    // 10.10 云端桥（`SekbApiBridge`）：字段名 + SSE 装配 + **错误路径不终止进程**
-    //       为什么必须测：共享层 `SekbApi` 未标 `@Throws`，Apple 侧直接调它会在非 2xx 时
-    //       abort（本机实测 Abort trap: 6）；桥是替代方案，这些断言就是它的证据。
+    // 10.10 云端客户端：**直接测共享层 `SekbApi`**（2026-10-26 起不再有 Swift 侧的重复实现）
+    //
+    // 历史：这里原本测的是 `SekbApiBridge`（248 行，自己拼 URL/解析字段/驱动 SSE）——
+    // 它存在的原因是共享层 `SekbApi` 当时**没标 `@Throws`**，异常抛到 Swift 会 abort（实测 Abort trap: 6）。
+    // 主线补上 `@Throws` 后，Apple 侧可以直接 `try` 共享实现，于是那份重复实现被删除。
+    // 这几条断言随之改成"**共享层真的能在 Apple 侧跑通**"，而不是"桥能跑通"：
+    // 协议路径/请求体/SSE 解析现在只有一份（共享层 Kotlin），字段名漂移不会再有两处维护。
     let fixtureTransport = SelfTestTransport()
-    let fixtureBridge = SekbApiBridge(transport: fixtureTransport, baseUrl: "http://selftest.local")
-    let fixtureCreds = SekbApiBridge.parseCredentials(SelfTestTransport.enrollFixture,
-                                                      nowMillis: t0)
-    out.append(.init(name: "bridge_parse_enroll_response",
-                     ok: fixtureCreds?.deviceId == "9f3c1a2b7d4e5f60"
-                        && fixtureCreds?.issuedAtMillis == t0
-                        && fixtureCreds?.expiresAtMillis == t0 + 720 * 3600 * 1000,
-                     detail: "id=\(fixtureCreds?.deviceId ?? "-") ttl小时=720"))
-    let loginToken = SekbApiBridge.parseLoginToken("{\"user\":{\"id\":1},\"token\":\"tok-1\"}")
-    let legacyToken = SekbApiBridge.parseLoginToken("{\"access_token\":\"tok-2\"}")
-    out.append(.init(name: "bridge_login_token",
-                     ok: loginToken == "tok-1" && legacyToken == "tok-2",
-                     detail: "token=\(loginToken ?? "-") access_token=\(legacyToken ?? "-")"))
+    let fixtureApi = SelfTestTransport.makeApi(fixtureTransport)
 
+    // (a) 登录：`token` 与历史字段 `access_token` 都要能取到（字段名以服务端响应为准）
+    let loginOK: Bool
+    let loginDetail: String
+    if let a = try? SelfTestTransport.makeApi(SelfTestTransport(loginBody: "{\"user\":{\"id\":1},\"token\":\"tok-1\"}"))
+                            .login(email: "a@b.c", password: "x"),
+       let b = try? SelfTestTransport.makeApi(SelfTestTransport(loginBody: "{\"access_token\":\"tok-2\"}"))
+                            .login(email: "a@b.c", password: "x") {
+        loginOK = (a == "tok-1" && b == "tok-2")
+        loginDetail = "token=\(a) access_token=\(b)"
+    } else {
+        loginOK = false
+        loginDetail = "登录解析失败（共享层 SekbApi.login 抛了错）"
+    }
+    out.append(.init(name: "shared_login_token_fields", ok: loginOK, detail: loginDetail))
+
+    // (b) enroll：凭证 TTL → 毫秒时间戳（`DeviceCredentials.fromTtl` 在共享层，Apple 侧不该再算一遍）
+    var enrollOK = false
+    var enrollDetail = "-"
+    do {
+        let creds = try fixtureApi.enroll(userToken: "ut", name: "iPhone", platform: "ios",
+                                          appVersion: "selftest", embeddingSpace: "stub-hash@256")
+        enrollOK = creds.deviceId == "9f3c1a2b7d4e5f60"
+            && creds.expiresAtMillis > creds.issuedAtMillis
+        enrollDetail = "id=\(creds.deviceId) ttl小时=\((creds.expiresAtMillis - creds.issuedAtMillis) / 3_600_000)"
+    } catch {
+        enrollDetail = "enroll 抛错：\(error)"
+    }
+    out.append(.init(name: "shared_enroll_credentials", ok: enrollOK, detail: enrollDetail))
+
+    // (c) SSE：正文/思考/执行位置/会话 id 四项都要对（解析全在共享层 `SseParser`）
     var streamedText = ""
     var streamedThinking = ""
-    let streamed = fixtureBridge.chatStream(deviceToken: "tok", message: "本机资料里有什么？",
-                                           conversationId: nil,
-                                           onToken: { streamedText += $0 },
-                                           onThinking: { streamedThinking += $0 })
     var streamedPlane = "-"
     var streamedConv = "-"
-    if case let .success(r) = streamed {
+    var streamOK = false
+    do {
+        let r = try fixtureApi.chatStream(deviceToken: "tok", message: "本机资料里有什么？",
+                                          conversationId: nil as String?,
+                                          onToken: { streamedText += $0 },
+                                          onThinking: { streamedThinking += $0 })
         streamedPlane = r.execution?.primaryPlane ?? "-"
         streamedConv = r.conversationId ?? "-"
+        streamOK = (streamedText == "端侧检索" && !streamedThinking.isEmpty
+                    && streamedPlane == "edge" && streamedConv == "c-1")
+    } catch {
+        streamedPlane = "抛错：\(error)"
     }
-    out.append(.init(name: "bridge_sse_events",
-                     ok: streamedText == "端侧检索" && !streamedThinking.isEmpty
-                        && streamedPlane == "edge" && streamedConv == "c-1",
+    out.append(.init(name: "shared_sse_events",
+                     ok: streamOK,
                      detail: "正文=\(streamedText) 思考=\(streamedThinking) 平面=\(streamedPlane) 会话=\(streamedConv)"))
 
+    // (d) 路由事件上报：成功返回 true（请求体由共享层 `SekbApi` 生成，Apple 侧不再自己拼 JSON）
     let routeEvent = RouteEventPayload(eventId: "e-selftest", role: "chat", plane: "edge",
                                        reason: "edge_preferred", model: "qwen3.5-2b", tier: "default",
                                        inputTokens: 3, outputTokens: 5, latencyMs: 1.5,
                                        escalated: true, escalateReason: "degenerate",
                                        signals: ["degenerate"], versions: ["tier": "default"])
-    let routeBody = SekbApiBridge.routeEventBody(routeEvent)
-    out.append(.init(name: "bridge_route_event_body",
-                     ok: routeBody.contains("\"escalated\":true")
-                        && routeBody.contains("\"signals\":[\"degenerate\"]")
+    // 共享层 `reportRouteEvent` 也标了 `@Throws`，Swift 侧必须 `try`（这正是"契约生效"的体现）
+    var reported = false
+    do { reported = try fixtureApi.reportRouteEvent(deviceToken: "tok", event: routeEvent) }
+    catch { reported = false }
+    // ⚠️ 断言用**整个请求体**而不是 `prefix(80)`：第一次写这条时截断到 80 字符，
+    //    而 `escalated`/`input_tokens` 在更靠后的位置 → **假失败**（本轮实测）。
+    //    教训：截断取样当断言，会把"字段顺序"变成隐含契约。
+    let routeBody = fixtureTransport.lastBody()
+    out.append(.init(name: "shared_route_event_reported",
+                     ok: reported && routeBody.contains("\"escalated\":true")
                         && routeBody.contains("\"input_tokens\":3")
-                        && routeBody.contains("\"versions\":{\"tier\":\"default\"}"),
-                     detail: String(routeBody.prefix(150))))
+                        && routeBody.contains("\"signals\":[\"degenerate\"]"),
+                     detail: "reportRouteEvent=\(reported) 请求体=\(routeBody.prefix(160))"))
 
-    let unauthorizedBridge = SekbApiBridge(transport: SelfTestTransport(alwaysUnauthorized: true),
-                                           baseUrl: "http://selftest.local")
+    // (e) **最重要的一条**：非 2xx 必须变成可捕获的错误，而不是 abort
+    //     （这正是当初写那份 248 行桥的原因；现在必须由共享层的 `@Throws` 承担）
     var failedCode: Int32 = 0
-    switch unauthorizedBridge.login(email: "a@b.c", password: "x") {
-    case let .success(token): failedCode = -1; _ = token
-    case let .failure(err): failedCode = err.code
+    var failedDomain = "-"
+    do {
+        _ = try SelfTestTransport.makeApi(SelfTestTransport(alwaysUnauthorized: true))
+                        .login(email: "a@b.c", password: "x")
+        failedCode = -1
+    } catch {
+        let e = SekbApiShim.asError(error)
+        failedCode = e.code
+        failedDomain = (error as NSError).domain
     }
-    // 这一条是整组里最重要的：**401 必须变成 Swift 错误而不是 abort**
-    out.append(.init(name: "bridge_http_error_is_swift_error",
+    out.append(.init(name: "shared_http_error_is_catchable",
                      ok: failedCode == 401,
-                     detail: "401 → Swift 错误码=\(failedCode)（进程存活，说明桥的替代方案有效）"))
+                     detail: "401 → 捕获到的 code=\(failedCode) domain=\(failedDomain)（进程存活 = @Throws 生效）"))
 
     return out
 }

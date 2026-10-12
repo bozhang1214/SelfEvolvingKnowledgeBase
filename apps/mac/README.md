@@ -106,12 +106,15 @@ could not create image from display
 其它任何失败仍然记 FAIL，这条 SKIP 不会掩盖真正的实现缺陷。
 要真验需要：真实签名身份（Apple Developer team）+ 真机，或 Xcode 工程里的 Keychain Sharing capability。
 
-## 共享层缺口（与 iOS 同一条）
+## 共享层缺口（与 iOS 同一条）：✅ 已闭合（2026-10-26）
 
-`SekbApi` 的 throwing 方法**没有标 `@Throws`**，Kotlin/Native 会把异常直接终止进程
-（实测 `Abort trap: 6`），所以 Apple 侧用 `SekbApiBridge.swift` 顶上。
-详情、证据与"主线补上 `@Throws` 后应删除该文件"的说明见
-[`apps/ios/README.md`](../ios/README.md) 的「共享层缺口」一节。
+`SekbApi` 的 throwing 方法曾经**没有标 `@Throws`**，Kotlin/Native 会把异常直接终止进程
+（实测 `Abort trap: 6`），所以 Apple 侧当时用 `SekbApiBridge.swift` 顶上。
+
+主线补上 `@Throws` 后，那份 248 行的 Swift 重复实现**已删除**，两端改走 `SekbApiShim`
+（只做 `throws → Result` 转换，不含协议知识）。细节、ObjC 头证据与新的 5 条自检见
+[`apps/ios/README.md`](../ios/README.md) 的「曾经的共享层缺口已闭合」一节。
+macOS 侧本轮复跑：**`SEKB_MAC_SELFTEST PASS=42 FAIL=0 SKIP=1`**。
 
 ## 未验清单（如实列）
 
