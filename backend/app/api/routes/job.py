@@ -296,18 +296,19 @@ async def list_searches(user_id: str = Depends(get_current_user)):
 
     每条包含：``search_id / keyword / city / min_salary_k / count / ts / expired``
     以及报告状态 ``has_report`` / ``report_matched``（报告职位集合是否与职位列表一致）。
-    过期条目会**清空职位列表**并**删除其报告**，但条目保留（打「已过期」角标）。
+
+    过期语义（2026-10-12 调整）：
+    - **职位列表**过期后清空 ``jobs`` 释放空间，但条目保留（打「已过期」角标）；
+    - **报告不再随之删除**——历史上这里会对每个过期 search_id 调
+      ``delete_report_by_search_id``，导致用户看到 ``has_report=false``、回到批量分析
+      tab 被迫重跑分析。历史报告是交付物，不应被搜索过期连带清掉，故移除该清理。
+      报告现在的删除路径只有：用户显式 DELETE，或对同一 search_id 强制重跑覆盖。
     """
     _require_job_agent()
     from app.agents.job import job_cache as jc
-    from app.agents.job.market import delete_report_by_search_id, get_cached_report
+    from app.agents.job.market import get_cached_report
 
     searches = jc.list_searches(user_id)
-
-    # 惰性清理：过期条目的报告一并删除
-    for sid in jc.expired_search_ids(user_id):
-        delete_report_by_search_id(sid)
-
     by_id = {s["search_id"]: s for s in searches}
     for sid in by_id:
         report = get_cached_report(user_id, sid)

@@ -223,7 +223,7 @@ class TestExpiredSearchIds:
         k2 = job_cache.cache_key("u1", "新", "北京", 0)
         job_cache.save_cached_jobs(k1, [_job("A")])
         job_cache.save_cached_jobs(k2, [_job("B")])
-        # 直接把 k1 的 ts 改老（超过 14 天 TTL）
+        # 直接把 k1 的 ts 改老（超过 15 天 TTL）
         data = job_cache._load()
         data[k1]["ts"] = time.time() - 30 * 24 * 3600
         job_cache._save(data)

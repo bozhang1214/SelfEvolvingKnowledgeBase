@@ -2,9 +2,9 @@
 
 覆盖：
 - save / get（按 search_id）/ 取最新一份
-- TTL 过期
+- **报告不随时间过期**（2026-10-12 起：历史报告是交付物，不被搜索过期连带清掉）
 - v1 旧格式（{user_id: report}）兼容读取
-- 删除（单个 search_id / 整个用户）/ 按 search_id 删除（过期清理用）
+- 删除（单个 search_id / 整个用户）/ 按 search_id 删除（仅供用户显式删除路径）
 """
 from __future__ import annotations
 
@@ -55,12 +55,24 @@ class TestSaveAndGet:
         assert market.get_cached_report("u1")["keyword"] == "新"  # 不传 search_id → 最新
         assert market.get_cached_report("u1", "sid-old")["keyword"] == "旧"  # 指定 → 精确
 
-    def test_expired_report_invisible(self):
+    def test_old_report_still_visible(self):
+        """报告**不再随时间过期**：30 天前的报告仍可读。
+
+        回归背景（2026-10-12）：原先报告缓存与搜索共用 14 天 TTL，且 `/searches` 还会对
+        过期 search_id 主动删报告 —— 用户看到 has_report=false、回到批量分析被迫重跑。
+        历史报告是交付物，改为只有「显式删除」与「同 search_id 重跑覆盖」两条消失路径。
+        """
         market.save_report_cache(
             "u1", "sid-a", "Agent", "北京", 0, _report(ts=time.time() - 30 * 24 * 3600)
         )
-        assert market.get_cached_report("u1", "sid-a") is None
-        assert market.get_cached_report("u1") is None
+        assert market.get_cached_report("u1", "sid-a") is not None
+        assert market.get_cached_report("u1") is not None
+        assert market.get_cached_report("u1", "sid-a")["keyword"] == "Agent"
+
+    def test_unanalyzed_entry_is_not_usable(self):
+        """没有 analyzed_at_ts 的条目视为不可用（_fresh 的最低要求）。"""
+        market.save_report_cache("u1", "sid-b", "Agent", "北京", 0, _report(ts=0))
+        assert market.get_cached_report("u1", "sid-b") is None
 
 
 class TestLegacyCompat:

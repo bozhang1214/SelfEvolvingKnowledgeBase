@@ -97,6 +97,7 @@ class AppContext:
     news_agent: Any = None
     # 科技资讯定时调度器（Phase 5，可选）
     news_scheduler: Any = None
+    job_scheduler: Any = None  # 四层职位搜索+分析的定时刷新（job.schedule）
     # 招聘分析 Agent 实例（Phase 2，可选）
     job_agent: Any = None
     # L2 中期记忆（Redis，可选）：仅当 memory.l2_session.enabled=True 且连接可用时装配

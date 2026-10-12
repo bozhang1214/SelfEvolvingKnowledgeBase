@@ -1,7 +1,7 @@
-"""职位采集结果缓存（JSON，14 天，最多 1000 条）。
+"""职位采集结果缓存（JSON，15 天，最多 1000 条）。
 
 按「用户 + 关键词 + 城市 + 薪资」为 key 缓存采集到的职位列表：
-- 14 天内再次用相同条件采集时直接返回缓存，避免重复抓取；
+- 15 天内再次用相同条件采集时直接返回缓存，避免重复抓取；
 - 刷新/删除单个职位时前端调用 ``/job/cache/save`` 同步覆盖缓存。
 
 「搜索历史」相关（2026-09-15 新增）：
@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 _FILE = Path("data/job_cache.json")
-_TTL_SECONDS = 14 * 24 * 3600  # 14 天
+_TTL_SECONDS = 15 * 24 * 3600  # 15 天（2026-10-12：14 → 15）
 _MAX_JOBS = 1000  # 单 key 最多缓存 1000 条
 _MAX_ENTRIES = 200  # 最多缓存 200 个 key（按 ts 淘汰最旧），防止缓存文件无限增长
 
@@ -89,7 +89,7 @@ def _save(data: dict[str, Any]) -> None:
 
 
 def is_expired(entry: dict[str, Any], now: float | None = None) -> bool:
-    """条目是否超过 TTL（14 天）。"""
+    """条目是否超过 TTL（15 天）。"""
     now = now if now is not None else time.time()
     return (now - (entry.get("ts", 0) or 0)) > _TTL_SECONDS
 

@@ -445,6 +445,42 @@ job:
   default_min_salary_k: 50              # 最低月薪（K），即 50K×14
   # 猎聘/BOSS 排除的大厂（已有独立渠道，聚焦大厂之外的创业公司）
   exclude_companies: [字节, 阿里, 淘宝, 天猫, 蚂蚁, 腾讯, 百度, 小米, 京东, 大疆, 小红书, 深度求索, DeepSeek, ByteDance, Alibaba, Tencent, Baidu, Xiaomi]
+  # ============ 定时刷新：四层职位搜索 + 批量分析 ============
+  # 隔周周一 06:00 自动执行（cron 每周一触发，再由 ISO 周奇偶校验决定是否真跑）。
+  # 每层分开配 label（合成标签，决定 search_id，勿改）与 keywords（真实搜索词）。
+  # 关键词与筛选规则于 2026-10-12 由现有列表反推得出，可按需调整。
+  schedule:
+    enabled: true
+    cron: "0 6 * * 1"                   # 每周一 06:00
+    biweekly: true                      # true=隔周（本文件设定：2026-10-12 执行，下次 10-26）
+    timezone: Asia/Shanghai
+    anchor_date: "2026-10-12"           # 隔周锚点
+    user_id: user_20260821022945296206  # 目标用户
+    force_analyze: true                 # 刷新后强制重跑分析（否则会拿到「新列表 + 旧报告」）
+    layers:
+      - label: 第一层·解决方案售前
+        keywords: [解决方案架构师, 售前解决方案, AI解决方案, 大模型解决方案, 产品解决方案架构师, 解决方案专家]
+        city: 北京
+        include_any: [解决方案, 售前, 方案架构]
+        exclude: [实习, 校招, 应届, 管培]
+      - label: 第二层·技术产品+座舱
+        keywords: [AI产品经理, 大模型产品经理, 智能座舱, Agent产品经理, 技术产品经理, 座舱产品]
+        city: 北京
+        include_any: [产品经理, 产品专家, 座舱]
+        exclude: [实习, 校招, 应届, 管培, 运营]
+      - label: 第三层·Agent平台开发
+        keywords: [Agent架构师, AI Agent, Agent开发工程师, 大模型应用开发, Agent Infra, Harness]
+        city: 北京
+        include_any: [Agent, 智能体, 大模型, Infra, Harness]
+        require_ai: true
+        exclude: [产品经理, 售前, 实习, 校招, 应届]
+      - label: 第四层·企业级AI Agent交付(FDE)
+        keywords: [FDE, 前沿部署, 前向部署, Forward Deployed, 大模型交付, AI交付, 智能体交付, 交付工程师]
+        city: 北京
+        include_any: [FDE, 前沿部署, 前向部署, 前置部署, Forward Deployed, 交付, 实施, 部署, 现场, 前线, 客户成功]
+        require_ai: true
+        exclude: [算法工程师, 算法专家, 算法应用, 算法模型, 模型训练, 微调, 推理, 算子, CUDA, NPU, TensorRT, vLLM, 加速, 芯片, 嵌入式, 部署优化, 端侧AI部署, 产品经理, 产品专家, 售前, 销售, 商务, 渠道, 拓展, 实习, 校招, 应届, 讲师, 培训, 数据交付, 数据运营, 标注, 测试工程师, 运维工程师, 系统安全, 自动驾驶, 智驾, 具身, 机器人, IDC, 算力基础设施, 数据库, 物流, 广告, 媒介, CDN, 地图, 游戏, 总经理, 大区, 主管, 分析师, 运营总监]
+        salary_floor_k: 25
   # 分析链路传输方式（P4）：mcp=走 jobcopilot-mcp 子进程（推荐）；direct=进程内直接调用（回滚开关）
   transport: mcp
   mcp_command: jobcopilot-mcp

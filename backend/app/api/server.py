@@ -139,6 +139,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _context.news_scheduler = NewsScheduler(_context.config.news, _context.news_agent)
         _context.news_scheduler.start()
 
+    # 启动四层职位「搜索 + 批量分析」定时刷新（若启用）
+    from app.scheduler.job_scheduler import JobSearchScheduler
+
+    _context.job_scheduler = JobSearchScheduler(_context.config.job.schedule, _context)
+    _context.job_scheduler.start()
+
     logger.info(
         "FastAPI 应用启动完成",
         app=_context.config.app.name,
@@ -154,6 +160,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if _context is not None:
             if _context.news_scheduler is not None:
                 _context.news_scheduler.shutdown()
+            if getattr(_context, "job_scheduler", None) is not None:
+                _context.job_scheduler.shutdown()
             # 关闭常驻的内核 MCP 子进程（P4：分析链路走 jobcopilot-mcp）
             try:
                 from app.agents.job.mcp_client import close_shared_kernel

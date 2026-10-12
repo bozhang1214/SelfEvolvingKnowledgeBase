@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +26,11 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 _CACHE_FILE = Path("data/job_market_report.json")
-_CACHE_TTL_SECONDS = 14 * 24 * 3600  # 14 天
+# 报告缓存**不再按时间过期**（2026-10-12）。
+# 为什么：历史报告是交付物，不能被「搜索过期」连带清掉——用户在 /searches 里看到
+# has_report 变 false、回到批量分析 tab 被迫重跑（花钱花时间），是很差的体验。
+# 现在的删除路径只有两条：① 用户显式 DELETE /reports/{id}；② 对同一 search_id 强制重跑覆盖。
+# 注意：搜索（职位）本身仍有 15 天 TTL（job_cache._TTL_SECONDS），两者**故意解耦**。
 _CACHE_VERSION = 2
 
 __all__ = [
@@ -87,12 +90,16 @@ def _save_cache(store: dict[str, Any]) -> None:
 
 
 def _fresh(report: dict[str, Any]) -> bool:
-    """报告是否在 TTL 内。"""
-    return time.time() - (report.get("analyzed_at_ts", 0) or 0) <= _CACHE_TTL_SECONDS
+    """报告是否仍可用。
+
+    **不再按时间判定过期**（见 `save_report_cache` 上方关于「报告与搜索过期解耦」的说明）：只要确实分析过
+    （有 ``analyzed_at_ts``）就继续可用，直到被显式删除或被同 search_id 的重跑覆盖。
+    """
+    return bool(report.get("analyzed_at_ts"))
 
 
 def get_cached_report(user_id: str, search_id: str | None = None) -> dict[str, Any] | None:
-    """取缓存报告（14 天内）。
+    """取缓存报告（**不按时间过期**，见 `_fresh`）。
 
     - 传 ``search_id``：返回**该次搜索**对应的报告；不存在或过期返回 None；
     - 不传：返回该用户**最新一份**（v2 按 analyzed_at_ts 取最大，无则回退 v1 旧条目）。

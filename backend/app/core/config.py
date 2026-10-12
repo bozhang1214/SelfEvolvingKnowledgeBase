@@ -433,6 +433,42 @@ class NewsConfig(BaseModel):
     timezone: str = "Asia/Shanghai"       # 定时任务时区（容器默认 UTC，需显式指定北京时间）
 
 
+class JobLayerConfig(BaseModel):
+    """一层职位搜索的配置（供定时刷新用）。
+
+    **``label`` 与 ``keywords`` 必须分开**：``label`` 是前端展示用的合成标签
+    （如「第四层·企业级AI Agent交付(FDE)」），它参与 ``cache_key`` 从而**决定 search_id**，
+    必须保持稳定；而 ``label`` 本身拿去采集是搜不到东西的。真实搜索词放 ``keywords``。
+    """
+
+    label: str = ""                        # 合成标签（= 缓存键中的 keyword，决定 search_id）
+    keywords: list[str] = []               # 真实搜索词（多词会串行采集后合并去重）
+    city: str = "北京"
+    min_salary_k: int = 0                  # 采集侧薪资下限（0=不限；筛选交给 salary_floor_k）
+    # ---- 筛选规则（2026-10-12：裸采噪声极大，必须筛）----
+    include_any: list[str] = []            # 标题命中任一才保留（空=不限制）
+    require_ai: bool = False               # 还要求标题或 JD 含 AI 信号
+    exclude: list[str] = []                # 标题命中任一即剔除
+    salary_floor_k: int = 0                # 薪资区间上限低于此值则剔除（0=不限）
+
+
+class JobScheduleConfig(BaseModel):
+    """四层职位「搜索 + 批量分析」的定时刷新配置。
+
+    隔周语义靠 **cron 每周一触发 + ISO 周奇偶校验**（见 ``job_schedule_service.is_run_week``）：
+    cron 表达式无法表达「隔周」，而 IntervalTrigger 会在容器重启后把周期重算导致漂移。
+    """
+
+    enabled: bool = False
+    cron: str = "0 6 * * 1"                # 每周一 06:00（再由隔周校验决定是否真跑）
+    biweekly: bool = True                  # True=隔周；False=每周都跑
+    timezone: str = "Asia/Shanghai"
+    anchor_date: str = "2026-10-12"        # 隔周锚点：该周起，每隔一周的周一执行
+    user_id: str = ""                      # 目标用户（空则不调度）
+    force_analyze: bool = True             # 刷新后是否强制重跑分析（应保持 True）
+    layers: list[JobLayerConfig] = []
+
+
 class JobConfig(BaseModel):
     """招聘分析 Agent 配置（Phase 2）"""
     enabled: bool = False                 # 是否启用
@@ -448,6 +484,8 @@ class JobConfig(BaseModel):
         "大疆", "小红书", "深度求索", "DeepSeek", "ByteDance", "Alibaba",
         "Tencent", "Baidu", "Xiaomi",
     ]
+    # ---- 定时刷新（四层搜索 + 批量分析）----
+    schedule: JobScheduleConfig = JobScheduleConfig()
     # ---- 分析链路传输方式（P4：SEKB 切到 MCP）----
     # "mcp"    走 jobcopilot-mcp 子进程（stdio）——解耦内核，SEKB 不再直接 import
     # "direct" 进程内直接调用 jobcopilot 包（旧路径，保留作紧急回滚开关）
