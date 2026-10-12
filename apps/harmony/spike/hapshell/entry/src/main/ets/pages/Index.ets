@@ -12,12 +12,25 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
+import { probeBuffered, probeStream } from '../model/NativeHttpBridge';
 
 const TAG: string = 'SEKB_KN_SPIKE';
 const MODEL_RAWFILE: string = 'bge-small-fixed512.ms';
 // H2：契约夹具在 HAP 里的位置（由 scripts/harmony_spike.sh build_hap 拷进来，
 // 源头是仓库的 apps/contract/*.json —— 不新增夹具，只分发同一份）
 const CONTRACT_DIR: string = 'contract/';
+/**
+ * H3：候选 base URL。
+ *
+ * 为什么是**两个候选逐个实测**而不是写死一个：宿主 Ollama 有两条常见通路
+ * （`hdc rport tcp:11434 tcp:11434` → 设备侧 `127.0.0.1:11434`；
+ * QEMU 网关别名 → `10.0.2.2:11434`），不同模拟器配置下哪条通不一样。
+ * 判据是"至少有一条给出 code=200"，而不是"我以为的那条通"。
+ */
+const OLLAMA_CANDIDATES: string[] = ['http://127.0.0.1:11434', 'http://10.0.2.2:11434'];
+/** 反向验证用：本机 9 号端口（discard）**没有监听**，不可能给出 200。 */
+const BAD_URL: string = 'http://127.0.0.1:9/api/tags';
+const NET_TIMEOUT_S: number = 20;
 
 /**
  * 只取报告首行（`EMBED PASS 7/8` / `CONTRACT PASS 128/128` / `SMOKE PASS 11/11`）。
@@ -44,6 +57,11 @@ struct Index {
   @State contract: string = '（未调用）';
   @State libProbe: string = '（未调用）';
   @State embed: string = '（未调用）';
+  @State net: string = '（未调用）';
+  @State cred: string = '（未调用）';
+  // H5（工作流 F）：RDB 探针 + RAG 自检/检索评测（走共享层）
+  @State rdb: string = '（未调用）';
+  @State rag: string = '（未调用）';
 
   /**
    * ⚠️ **串行**跑所有探针（不是各自 fire-and-forget）。
@@ -67,8 +85,185 @@ struct Index {
     this.runContract();
     this.runLibProbe();
     this.runKn();
+    await this.runH3Net();        // H3：网络端口（不碰模型）
+    await this.runH4Cred();       // H4：凭证端口（不碰模型，HUKS）
     await this.runModel();        // 第 1 个模型会话：MindSpore 探针
     await this.runEmbedSanity();  // 第 2 个（串行）：真实嵌入验收
+    this.runRdbProbe();           // H5：RDB NDK C API 探针（不碰模型）
+    await this.runRag();          // H5/H6：RAG 自检 + 检索评测（用同一个模型会话，串行）
+  }
+
+  /**
+   * H5（工作流 F）①：RDB NDK C API 探针（HR2："最小验证先于完整实现"）。
+   *
+   * 只传 `databaseDir`——**路径由平台给**，Kotlin 侧不做推断（App 沙箱路径与
+   * bundle/模块名相关，自己拼必然错）。四件事各有独立判据：
+   * 能打开 / 能建表 / 能插入（含 BLOB）并查回来 / **关闭重开数据还在**。
+   */
+  runRdbProbe(): void {
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      // 两条独立判据，**故意都跑**：
+      //   ① `rdbLinkProbe` —— C++ dlopen+dlsym（不依赖链接期）→ 证明"库可用 + 签名/结构体布局成立"；
+      //   ② `rdbProbe`     —— Kotlin/Native 平台 klib（**链接期**依赖）→ 证明生产路径的绑定可用。
+      // 两者结论一致才叫"两个独立判据互相印证"；只有 ② 的话，一旦 ② 失败，
+      // 分不清是"库/签名问题"还是"我的链接配置问题"。
+      // ⚠️ **两次调用各自 try**：Kotlin 侧入口是 undefined 符号，若 libkn.so 是旧产物
+      //（没带新入口），调用会抛——那不能把 dlopen 那条判据也一起吞掉，
+      // 否则"库里到底有没有 RDB"这个结论就永远拿不到（本轮真的遇到了这个情形）。
+      let linkPart: string = '';
+      let ktPart: string = '';
+      try {
+        linkPart = knspike.rdbLinkProbe(ctx.databaseDir);
+      } catch (e1) {
+        linkPart = `RDB-DLOPEN FAIL — rdbLinkProbe 调用失败（libknspike.so 是旧产物？）：${e1}`;
+      }
+      try {
+        ktPart = knspike.rdbProbe(ctx.databaseDir);
+      } catch (e2) {
+        ktPart = `RDB-PROBE FAIL — rdbProbe 调用失败（libkn.so 是旧产物，缺 sekb_spike_rdb_probe？）：${e2}`;
+      }
+      this.rdb = this.emit(linkPart + '\n---- Kotlin/Native 平台 klib 侧 ----\n' + ktPart);
+    } catch (e) {
+      this.rdb = `❌ ${e}`;
+      hilog.error(0x0000, TAG, 'RDB-PROBE FAIL — threw: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /**
+   * H5（工作流 F）②：RAG 自检 + 检索评测同表。
+   *
+   * 与 Android `SelfTest.kt` 的 `rag_*` 项同名同口径；索引是 **RDB 持久化实现**，
+   * 检索逻辑**全部来自共享层**（`KnowledgeIndex`/`Retriever`/`RetrievalEvalRunner`）——
+   * 鸿蒙侧没有第二套检索逻辑。
+   *
+   * ⚠️ 必须串在 `runEmbedSanity()` **之后**：两者都要模型，而并发跑模型会崩
+   * （见 `aboutToAppear` 里那条 cppcrash 栈）。
+   */
+  async runRag(): Promise<void> {
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      const path: string = await this.ensureModelFile(ctx);
+      const vocab: string = await this.readRawText(ctx, 'vocab.txt');
+      this.rag = this.emit(knspike.ragSelfTest(path, vocab, ctx.databaseDir));
+    } catch (e) {
+      this.rag = `❌ ${e}`;
+      hilog.error(0x0000, TAG, 'RAG FAIL — rag self-test threw: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** 逐行打 hilog（脚本从这里取证据）；界面只显示首行（见 `firstLine` 的崩溃教训）。 */
+  private emit(report: string): string {
+    for (const line of report.split('\n')) {
+      if (line.length > 0) {
+        hilog.info(0x0000, TAG, '%{public}s', line);
+      }
+    }
+    return report;
+  }
+
+  /** H3：把响应体按共享层口径粗查（只用于挑候选/判字段，**不下结论**，结论在 Kotlin 侧）。 */
+  private h3FieldsOk(body: string): boolean {
+    return body.indexOf('"models"') >= 0 || body.indexOf('device_id') >= 0;
+  }
+
+  /**
+   * H3 · 网络端口（`@ohos.net.http`）。
+   *
+   * 形状与其它探针不同：**ArkTS 主动把已观测事实交给 Kotlin**（不是 Kotlin 发起请求），
+   * 因为共享层的 `HttpTransport` 是同步接口、而 ArkTS 的 HTTP 是异步的——
+   * Kotlin 若在 NAPI 调用里等 ArkTS 的 `await`，回调排不进被卡住的那条线程（死锁）。
+   * 理由与取舍见 `knspike/.../NetPort.kt` 与 `model/NativeHttpBridge.ets` 的文件头。
+   *
+   * 四条探针里有**两条是反向验证**（期望非 2xx），这是"判据不是摆设"的直接证据：
+   *   · `transport_refuses_bad_endpoint`   —— 指向没人监听的端口（连不上）
+   *   · `transport_refuses_404`            —— 指向**能连上**但路径不存在的端点（期望 404）
+   */
+  async runH3Net(): Promise<void> {
+    let acc: string = '';
+    let base: string = '';
+    const tried: string[] = [];
+    try {
+      // ① 候选 base URL 逐个实测（不假设是哪条通）
+      for (const cand of OLLAMA_CANDIDATES) {
+        const u: string = `${cand}/api/tags`;
+        const f: string = await probeBuffered(u, NET_TIMEOUT_S);
+        const parts: string[] = f.split('\n');
+        const head: string = parts.length > 0 ? parts[0] : '';
+        const body: string = parts.length > 1 ? parts.slice(1).join('\n') : '';
+        const code: string = head.split(' ')[1] !== undefined ? head.split(' ')[1] : '-1';
+        tried.push(`${u}:code=${code}:bodyChars=${body.length}`);
+        if (code === '200') {
+          base = cand;
+          const bytes: string = head.indexOf('bodyUTF8=') >= 0
+            ? head.substring(head.indexOf('bodyUTF8=') + 9).split(' ')[0] : '-1';
+          acc += this.emit(knspike.h3Probe(
+            'transport_get_host_ollama', u, '200', code, bytes, `${body.length}`,
+            this.h3FieldsOk(body) ? '1' : '0')) + '\n';
+          break;
+        }
+      }
+      if (base.length === 0) {
+        acc += 'FAIL transport_get_host_ollama — 没有一条候选给出 200：' + tried.join(' | ') + '\n';
+        hilog.error(0x0000, TAG, 'FAIL transport_get_host_ollama — %{public}s', tried.join(' | '));
+      } else {
+        acc += this.emit(`H3-CANDIDATES 通的是 ${base}（逐个实测：${tried.join(' | ')}）`) + '\n';
+      }
+
+      // ② 反向验证 A：没人监听的端口（连不上）
+      const badFrame: string = await probeBuffered(BAD_URL, 8);
+      const badHead: string = badFrame.split('\n')[0];
+      const badCode: string = badHead.split(' ')[1] !== undefined ? badHead.split(' ')[1] : '-1';
+      acc += this.emit(knspike.h3Probe(
+        'transport_refuses_bad_endpoint', BAD_URL, '-1', badCode, '-1', '-1', '0')) + '\n';
+
+      // ③ 反向验证 B：能连上但路径不存在（期望 404 —— 证明"非 200 不会被当成成功"）
+      const streamBase: string = base.length > 0 ? base : OLLAMA_CANDIDATES[0];
+      const missUrl: string = `${streamBase}/api/does-not-exist`;
+      const missFrame: string = await probeBuffered(missUrl, NET_TIMEOUT_S);
+      const missHead: string = missFrame.split('\n')[0];
+      const missCode: string = missHead.split(' ')[1] !== undefined ? missHead.split(' ')[1] : '-1';
+      acc += this.emit(knspike.h3Probe(
+        'transport_refuses_404', missUrl, '404', missCode, '-1', '-1', '0')) + '\n';
+
+      // ④ 流式：宿主 Ollama 的 /api/chat（NDJSON，按行流式输出）
+      const streamUrl: string = `${streamBase}/api/chat`;
+      knspike.h3StreamBegin();
+      const streamFrame: string = await probeStream(
+        streamUrl,
+        '{"model":"qwen2.5:7b","messages":[{"role":"user","content":"用两个字回答"}],"stream":true}',
+        NET_TIMEOUT_S * 4,
+      );
+      const sParts: string[] = streamFrame.split('\n');
+      const sHead: string = sParts.length > 0 ? sParts[0] : '';
+      const sCode: string = sHead.split(' ')[1] !== undefined ? sHead.split(' ')[1] : '-1';
+      const sLines: string = sHead.indexOf('lines=') >= 0
+        ? sHead.substring(sHead.indexOf('lines=') + 6).split(' ')[0] : '0';
+      // Kotlin 侧实际收到的行数由 **Kotlin** 给出（判据是"行真的跨 NAPI 到了 Kotlin"）
+      const knLines: string = knspike.h3PumpLines();
+      acc += this.emit(knspike.h3Stream(streamUrl, sCode, sLines, knLines)) + '\n';
+    } catch (e) {
+      acc += `❌ ${e}\n`;
+      hilog.error(0x0000, TAG, 'H3 FAIL — network port threw: %{public}s', JSON.stringify(e));
+    }
+    this.net = acc;
+  }
+
+  /**
+   * H4 · 凭证端口（HUKS，纯 Kotlin/Native cinterop/dlopen；**不依赖网络**）。
+   *
+   * `reset='0'`：保留上一轮写入的凭证，于是 `credential_restart` 判据才是在验
+   * "重启后仍有效"（脚本会再 force-stop 起一次，对比两轮的 device_id 指纹）。
+   */
+  async runH4Cred(): Promise<void> {
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      const report: string = knspike.credSelfTest(ctx.filesDir, '0', `${Date.now()}`);
+      this.cred = this.emit(report);
+    } catch (e) {
+      this.cred = `❌ ${e}`;
+      hilog.error(0x0000, TAG, 'H4 FAIL — credential port threw: %{public}s', JSON.stringify(e));
+    }
   }
 
   /**
@@ -251,6 +446,17 @@ struct Index {
       Divider()
       Text('H6 · 端侧嵌入验收（余弦/L2/确定性/降级）').fontSize(17).fontWeight(FontWeight.Bold)
       Text(firstLine(this.embed)).fontSize(12).maxLines(3)
+      Divider()
+      Text('H3 · 网络端口（@ohos.net.http + 共享层解析）').fontSize(17).fontWeight(FontWeight.Bold)
+      Text(firstLine(this.net)).fontSize(12).maxLines(3)
+      Divider()
+      Text('H4 · 凭证端口（HUKS 加解密 + 重启后仍有效）').fontSize(17).fontWeight(FontWeight.Bold)
+      Text(firstLine(this.cred)).fontSize(12).maxLines(3)
+      Divider()
+      Divider()
+      Text('H5 · RAG（共享层 + RDB NDK C API）').fontSize(17).fontWeight(FontWeight.Bold)
+      Text(firstLine(this.rdb)).fontSize(12).maxLines(2)
+      Text(firstLine(this.rag)).fontSize(12).maxLines(2)
       Divider()
       Text('MindSpore Lite 端侧嵌入').fontSize(17).fontWeight(FontWeight.Bold)
       Text(`模型: ${this.modelPath}`).fontSize(11).fontColor(Color.Gray).maxLines(2)

@@ -168,16 +168,22 @@ verify_link() {
         [ -f "$spike_so" ] || { echo "❌ $abi: 缺 libknspike.so" >&2; ok=1; continue; }
         [ -f "$kn_so" ]    || { echo "❌ $abi: HAP 里没有 libkn.so（KMP 产物没进包）" >&2; ok=1; continue; }
         local undef
-        # 现在 HAP 侧用到 **8 个** KMP 入口：ping / echo_len（链路探针）、
-        # mindspore_selftest / mindspore_first_float（真机日入口）、smoke（H1 共享层冒烟）、
-        # contract / contract_pair（H2 契约夹具）、embed_sanity（H6 嵌入验收）。
+        # 现在 HAP 侧用到 **17 个** KMP 入口（= 各 .kt 里 `@CName("sekb_spike_*")` 的去重个数）：
+        #   ping / echo_len（链路探针）、mindspore_selftest / mindspore_first_float（真机日入口）、
+        #   smoke（H1 共享层冒烟）、contract / contract_pair（H2 契约夹具）、
+        #   embed_sanity（H6 嵌入验收）、
+        #   h3_probe / h3_stream / h3_stream_line / h3_stream_begin / h3_pump_lines
+        #     （H3 网络端口，工作流 E′：ArkTS 把**已观测事实**交给 Kotlin 判定，无反向回调）、
+        #   cred_selftest / huks_roundtrip（H4 凭证，工作流 E′）、
+        #   rdb_probe / rag_selftest（H5 RAG，工作流 F）。
         # ⚠️ 每新增一个 @CName 入口都要同步改这里：**校验比真实依赖弱**时，将来漏接一个符号也发现不了
-        # （这个数字就漏过一次：加了 contract/contract_pair 仍写着 4）。
-        undef="$("$nm" -D --undefined-only "$spike_so" 2>/dev/null | grep -cE 'sekb_spike_(ping|echo_len|mindspore_selftest|mindspore_first_float|smoke|contract|contract_pair|embed_sanity)')"
-        if [ "$undef" = "8" ]; then
-            echo "   ✅ $abi: libknspike.so 引用 8 个 KMP 入口（undefined，由同包 libkn.so 解析）"
+        # （这个数字漏过两次：加了 contract/contract_pair 仍写着 4；加了 h3/h4 仍写着 8）。
+        # 复核命令：`grep -rho '@CName("[^"]*")' apps/harmony/spike/knspike/src/ohosMain/kotlin | sort -u | wc -l`
+        undef="$("$nm" -D --undefined-only "$spike_so" 2>/dev/null | grep -cE 'sekb_spike_(ping|echo_len|mindspore_selftest|mindspore_first_float|smoke|contract|contract_pair|embed_sanity|h3_probe|h3_stream|h3_stream_line|h3_stream_begin|h3_pump_lines|cred_selftest|huks_roundtrip|rdb_probe|rag_selftest)')"
+        if [ "$undef" = "17" ]; then
+            echo "   ✅ $abi: libknspike.so 引用 17 个 KMP 入口（undefined，由同包 libkn.so 解析）"
         else
-            echo "   ❌ $abi: 只找到 $undef/8 个 KMP 符号引用" >&2; ok=1
+            echo "   ❌ $abi: 只找到 $undef/17 个 KMP 符号引用" >&2; ok=1
         fi
     done
     if unzip -l "$hap" 2>/dev/null | grep -q 'rawfile/bge-small-fixed512.ms'; then

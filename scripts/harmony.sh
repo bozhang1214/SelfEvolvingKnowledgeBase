@@ -15,6 +15,11 @@
 #   bash scripts/harmony.sh contract-red [秒]  # H2：端到端反证——改**包内**夹具期望值必须变红
 #   bash scripts/harmony.sh probe [秒数]       # H3/HR9：平台库 dlopen 探针（libcurl 三探针的判定依据）
 #   bash scripts/harmony.sh embed [秒数]       # H6：端侧嵌入验收（余弦 0.244 / L2 1.0000 / 确定性 / 降级）
+#   bash scripts/harmony.sh net [秒数]         # H3（网络端口）+ H4（HUKS 凭证端口）自检，**两轮**取证：
+#                                              #   第 1 轮 = 首跑（写凭证）；第 2 轮 = force-stop 后重启（验「重启后仍有效」）
+#   bash scripts/harmony.sh sync-huks-headers  # 把 sysroot 里的 HUKS 头同步到仓库内（H4 cinterop 用）
+#   bash scripts/harmony.sh rdbprobe [秒数]    # H5-F：RDB NDK C API 探针（建表/往返/关闭重开）
+#   bash scripts/harmony.sh rag [秒数]         # H5-F：RAG 自检（含反向验证）+ 检索评测同表（5 档阈值）
 #   bash scripts/harmony.sh log                # 只抓最近的 hilog（按 TAG 过滤）
 #   bash scripts/harmony.sh crash [--save]     # 列 faultlogger；--save 把最新一条拉回 docs/tmp/
 #   bash scripts/harmony.sh all                # build + install + selftest
@@ -382,6 +387,32 @@ PY
     fi
 }
 
+# ── H4：把 HUKS 头文件从 OHOS sysroot 同步进仓库 ─────────────────────────────
+# **为什么需要这一步**（实测，不是洁癖）：H4 的 cinterop 不能直接 include sysroot 里的头——
+# 实测把 `-I<sysroot>/usr/include` 写进 `.def` 的 compilerOpts 时，本 fork 的 cinterop
+# 会**静默产出空包**（exit 0、klib 的 `package huks {}` 是空的），Kotlin 侧报的是
+# `Unresolved reference: huks`，离根因十万八千里。对照实验：同一份头从**仓库内普通目录**
+# include 时正常生成 45 条声明。所以头文件逐字节复制进仓库
+# `knspike/src/nativeInterop/include/`，本动作负责重新同步 + 打印哈希供复核。
+sync_huks_headers() {
+    local sr
+    sr="$(find "$ROOT/.tooling/konan/dependencies" -maxdepth 1 -name 'sysroot-ohos-aarch64-*' | sort | tail -1)"
+    [ -d "$sr" ] || die "找不到 OHOS sysroot（$ROOT/.tooling/konan/dependencies/sysroot-ohos-aarch64-*）"
+    local inc="$ROOT/apps/harmony/spike/knspike/src/nativeInterop/include"
+    mkdir -p "$inc/huks" "$inc/info"
+    local f
+    for f in huks/native_huks_api.h huks/native_huks_param.h huks/native_huks_type.h; do
+        cp "$sr/usr/include/$f" "$inc/$f" || die "复制失败：$sr/usr/include/$f"
+    done
+    cp "$sr/usr/include/info/application_target_sdk_version.h" "$inc/info/" \
+        || die "复制失败：application_target_sdk_version.h"
+    echo "── HUKS 头已同步（来源 ${sr#$ROOT/}）──"
+    for f in huks/native_huks_api.h huks/native_huks_param.h huks/native_huks_type.h \
+             info/application_target_sdk_version.h; do
+        printf '   %s  %s\n' "$(shasum -a 256 "$inc/$f" | cut -c1-16)" "$f"
+    done
+}
+
 # ── H3/HR9：平台库探针（dlopen，运行期权威判据）─────────────────────────────
 # 为什么必须先做这个、而不是直接写 `HttpTransport`：
 #   ① C2 定了"网络统一 libcurl"，但 **OHOS sysroot 里既没有 curl 头也没有 curl 库**
@@ -494,6 +525,196 @@ embed() {
     echo "   明细 FAIL=0"
 }
 
+# ── H5（工作流 F）①：RDB NDK C API 探针（HR2 要求"最小验证先于完整实现"）─────
+# 一次回答四件事：**能打开库 / 能建表 / 能插入（含 BLOB）并查回来 / 关闭重开数据还在**。
+# 为什么必须先做这个：HR2 的原话是"relationalStore 在模拟器上的可得性未知 →
+# 先写一个最小验证，不通过就换方案"。H3 的 dlopen 探针已经证明 libnative_rdb_ndk.z.so
+# **可加载**，但"能加载"与"能当索引使"是两件事（后者的硬判据是**重开后仍可读**）。
+rdb_probe() {
+    local wait_s="${1:-20}"
+    echo "── 1/3 构建（KMP 产物 + HAP）──"
+    bash "$ROOT/scripts/harmony_spike.sh" all || die "构建失败（先看输出里的第一处 error，别用窄 grep 过滤）"
+
+    echo
+    echo "── 2/3 安装并启动（等待 ${wait_s}s 抓 hilog TAG=${TAG}）──"
+    "$HDC" shell "aa force-stop $BUNDLE" >/dev/null 2>&1 || true
+    "$HDC" shell "hilog -r" >/dev/null 2>&1 || true
+    install
+    start
+    sleep "${wait_s}"
+
+    echo
+    echo "── 3/3 RDB 探针结果（原始 hilog）──"
+    local heads detail
+    heads="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'RDB-PROBE' | tail -5 || true)"
+    detail="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a -E 'rdb' | tail -30 || true)"
+    echo "${heads}"
+    echo "── 明细 ──"
+    echo "${detail}"
+    [ -n "${heads}" ] || die "没抓到 RDB-PROBE 行——检查 ${wait_s}s 够不够，或先跑 bash scripts/harmony.sh log"
+    if echo "${heads}" | grep -aq 'RDB-PROBE PASS'; then
+        echo
+        echo "✅ RDB NDK C API 可用：$(echo "${heads}" | sed 's/.*SEKB_KN_SPIKE: //' | tail -1)"
+    else
+        die "❌ RDB 探针未通过（明细见上）——H5 需要改方案（例如退 ArkTS relationalStore 薄桥）"
+    fi
+}
+
+# ── H5（工作流 F）②：RAG 自检 + 检索评测（H5 + H6 的另一半）────────────────
+# 与 Android `SelfTest.kt` 的 rag_* 项**同名同口径**，并且评测**复用共享层**的
+# `RetrievalEvalSet`/`RetrievalEvalRunner`（不另写一套），只是把索引换成 RDB 持久化实现。
+#
+# ⚠️ 口径（照 HR8，别退化成"看起来绿"）：
+#   ① 首行必须是 `RAG PASS`；② 明细里 `FAIL ` 行数必须 == 0；
+#   ③ 检索评测表（5 档阈值）必须打出来，且 0.40 档要与 Android 逐项相同
+#      （26/30、30/30、0.928、0/3）——这一条由 Kotlin 侧的
+#      `rag_eval_threshold_0_40_matches_android` 断言，脚本只负责把表打全。
+rag() {
+    local wait_s="${1:-90}"
+    echo "── 1/3 构建（KMP 产物 + HAP；含 vocab.txt 与 94MB 模型）──"
+    bash "$ROOT/scripts/harmony_spike.sh" all || die "构建失败（先看输出里的第一处 error，别用窄 grep 过滤）"
+
+    echo
+    echo "── 2/3 安装并启动（等待 ${wait_s}s；首启要复制 94MB 模型 + 跑 12 篇/33 问评测）──"
+    "$HDC" shell "aa force-stop $BUNDLE" >/dev/null 2>&1 || true
+    "$HDC" shell "hilog -r" >/dev/null 2>&1 || true
+    install
+    start
+
+    echo
+    echo "── 3/3 RAG 结果（原始 hilog）──"
+    # ⚠️ 这里**不再**边等边 `hdc shell hilog` 轮询：实测每调一次 hdc 要 1–2s，
+    #    在模型复制 + 12 篇/33 问 ×5 档阈值的窗口里轮询几十次，纯属浪费，
+    #    而且 `hilog -r` 已经清过缓冲，不存在"用旧结果冒充新结果"的风险。
+    #    所以：一次 sleep 到位，然后分两次抓（一次 `tail -N` 会把首行挤出窗口）。
+    sleep "${wait_s}"
+    local heads
+    heads="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'RAG PASS\|RAG FAIL' | tail -3 || true)"
+    local detail evalrows
+    detail="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a -E 'rag_|EVAL|NOTE' | tail -60 || true)"
+    evalrows="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'EVAL-TABLE' | tail -10 || true)"
+    echo "── 头部 ──"
+    echo "${heads}"
+    echo "── 明细（截尾 60 行）──"
+    echo "${detail}"
+    [ -n "${heads}" ] || die "没抓到 RAG 行——检查 ${wait_s}s 够不够（冷启动要复制 94MB 模型），或先跑 bash scripts/harmony.sh log"
+    echo
+    echo "── 检索评测表（阈值 → Hit@1 / Hit@3 / MRR / 误召回）──"
+    echo "${evalrows}"
+
+    if ! echo "${heads}" | grep -aq 'RAG PASS'; then
+        die "❌ RAG 自检未通过（明细见上）"
+    fi
+    local nfail
+    nfail="$(echo "${detail}" | grep -ac 'FAIL ' || true)"
+    [ "${nfail}" = "0" ] || die "❌ 明细里有 ${nfail} 个 FAIL 项"
+    echo
+    echo "✅ RAG 自检通过：$(echo "${heads}" | sed 's/.*SEKB_KN_SPIKE: //' | tail -1)  明细 FAIL=0"
+    [ -n "${evalrows}" ] || echo "⚠️ 没抓到 EVAL-TABLE 行（评测可能未跑完，检查 wait_s）"
+}
+
+# ── H3（网络端口）+ H4（HUKS 凭证端口）自检 ─────────────────────────────────
+# 一条命令跑**两轮**，因为 H4 的"重启后仍有效"只能靠两轮对比证明：
+#   第 1 轮：新装后首跑 → HUKS 生成/复用密钥、凭证写盘；`credential_restart` 记首轮状态
+#   第 2 轮：`aa force-stop` 后**不重装**再起 → `load()` 必须读回上一轮写的 device_id
+# 每一轮的判据都要求：首行 `H3 PASS n/n` / `CRED PASS n/n`，且明细里 **FAIL 行数 = 0**。
+#
+# ⚠️ 网络的两条**反向验证**写在应用内（不是脚本侧）：
+#   `transport_refuses_bad_endpoint`（没人监听的端口）与 `transport_refuses_404`
+#   （能连上但路径不存在）—— 期望都是**非 2xx**。它们若变绿说明判据是摆设。
+#   为什么不做"脚本把 URL 改坏再跑一遍"：应用沙箱是 `/data/app/el2/100/base/<bundle>/...`，
+#   `hdc shell` 是 shell 用户（uid=2000），**写不进去**（实测 `Permission denied`），
+#   而 `param set` 也被拒（errNum 1001）；所以反向验证留在应用内，用真实坏端点取证。
+net() {
+    local wait_s="${1:-20}"
+
+    echo "── 0/4 HUKS 头同步（H4 cinterop 的编译输入，逐字节来自 sysroot）──"
+    sync_huks_headers >/dev/null || die "HUKS 头同步失败"
+    echo "   ✅ 4 个头文件已就位（详见 bash scripts/harmony.sh sync-huks-headers）"
+
+    echo
+    echo "── 1/4 构建（KMP 产物 + HAP）──"
+    bash "$ROOT/scripts/harmony_spike.sh" all || die "构建失败（先看输出里的第一处 error，别用窄 grep 过滤）"
+
+    local port_pid=""
+    ollama_forward() {
+        local host="${SEKB_OLLAMA_HOST:-127.0.0.1}"
+        local port="${SEKB_OLLAMA_PORT:-11434}"
+        if curl -s -m 3 -o /dev/null "http://${host}:${port}/api/tags"; then
+            "$HDC" rport "tcp:${port}" "tcp:${port}" >/dev/null 2>&1 \
+                && echo "   ✅ 宿主 Ollama（${host}:${port}）已 rport 到设备同端口" \
+                || echo "   ⚠️ hdc rport 失败（设备侧将依赖 10.0.2.2 网关别名）"
+        else
+            echo "   ⚠️ 宿主 ${host}:${port} 上没有 Ollama —— H3 的 transport_* 会 FAIL（不是 SKIP：这是环境缺失，脚本会如实报红）"
+        fi
+    }
+
+    round() {
+        local round_no="$1" label="$2"
+        echo
+        echo "── ${round_no}/4 ${label} ──"
+        "$HDC" shell "aa force-stop $BUNDLE" >/dev/null 2>&1 || true
+        "$HDC" shell "hilog -r" >/dev/null 2>&1 || true
+        if [ "${round_no}" = "2" ]; then
+            # 不重装：验"进程重启后凭证仍有效"
+            start
+        else
+            install
+            start
+        fi
+        sleep "${wait_s}"
+        # ⚠️ 轮询等两行头部（实测踩过：H3 先出、CRED 是一百多毫秒之后才打完，
+        #    单次抓取会抓到空的 CRED 行 —— 那是**抓取竞态**，不是自检失败）。
+        local h3 cred tries
+        h3=""; cred=""
+        for tries in 1 2 3 4 5 6 7 8; do
+            h3="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'H3 ' | tail -1 || true)"
+            cred="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'CRED ' | tail -1 || true)"
+            if [ -n "${h3}" ] && [ -n "${cred}" ]; then break; fi
+            sleep 2
+        done
+        echo "   H3:   ${h3##*SEKB_KN_SPIKE: }"
+        echo "   CRED: ${cred##*SEKB_KN_SPIKE: }"
+        local d3 dc nfail
+        d3="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a -E 'PASS (transport_|huks_|credential_|layout_)' | tail -30 || true)"
+        echo "   ── 明细 ──"
+        echo "${d3}" | sed 's/^/   /'
+        nfail="$(echo "${d3}" | grep -ac 'FAIL ' || true)"
+        LAST_H3="${h3}"; LAST_CRED="${cred}"; LAST_NFAIL="${nfail}"
+    }
+
+    ollama_forward
+    LAST_NFAIL=0
+    LAST_H3=""; LAST_CRED=""
+    round 1 "第 1 轮：首跑（HUKS 生成/复用密钥 + 凭证写盘）"
+    local r1_h3="${LAST_H3}" r1_cred="${LAST_CRED}"
+    round 2 '第 2 轮：force-stop 后重启、**不重装**（验「重启后仍有效」）'
+    local r2_h3="${LAST_H3}" r2_cred="${LAST_CRED}" nfail="${LAST_NFAIL}"
+
+    echo
+    echo "── 判定 ──"
+    local bad=0
+    if echo "${r1_h3}" | grep -aq 'H3 PASS'; then
+        echo "   ✅ H3 首轮：$(echo "${r1_h3}" | sed 's/.*SEKB_KN_SPIKE: //')"
+    else
+        echo "   ❌ H3 首轮没有 PASS 行（行='${r1_h3}'）"; bad=1
+    fi
+    if echo "${r2_h3}" | grep -aq 'H3 PASS'; then
+        echo "   ✅ H3 次轮：$(echo "${r2_h3}" | sed 's/.*SEKB_KN_SPIKE: //')"
+    else
+        echo "   ❌ H3 次轮没有 PASS 行（行='${r2_h3}'）"; bad=1
+    fi
+    if echo "${r2_cred}" | grep -aq 'CRED PASS'; then
+        echo "   ✅ H4：$(echo "${r2_cred}" | sed 's/.*SEKB_KN_SPIKE: //')"
+    else
+        echo "   ❌ H4 没有 PASS 行（行='${r2_cred}'）"; bad=1
+    fi
+    [ "${nfail}" = "0" ] || { echo "   ❌ 明细里有 ${nfail} 个 FAIL 项（见上）"; bad=1; }
+    [ "${bad}" = "0" ] || die "❌ H3/H4 自检未通过（原始输出见上；**不要**把 FAIL 当 SKIP 放过）"
+    echo
+    echo "✅ H3（网络端口）+ H4（HUKS 凭证端口）自检通过（明细 FAIL=0）"
+}
+
 require_hdc
 case "${1:-}" in
     build)    build ;;
@@ -505,11 +726,16 @@ case "${1:-}" in
     contract-red) require_target; contract_red_fixture "${2:-}" ;;
     probe)    require_target; probe "${2:-}" ;;
     embed)    require_target; embed "${2:-}" ;;
+    net)      require_target; net "${2:-}" ;;
+    sync-huks-headers) sync_huks_headers ;;
+    # H5（工作流 F）：RDB 探针 / RAG 自检 + 检索评测
+    rdbprobe) require_target; rdb_probe "${2:-}" ;;
+    rag)      require_target; rag "${2:-}" ;;
     log)      require_target; log ;;
     crash)    require_target; crash "${2:-}" ;;
     all)      require_target; build && install && selftest "${2:-}" ;;
     # 校验 target 的动作都要联网检查，所以放在 case 内做
-    *) echo "用法：bash scripts/harmony.sh [build|install|start|selftest|smoke|contract|contract-red|probe|embed|log|crash|all]" >&2; exit 2 ;;
+    *) echo "用法：bash scripts/harmony.sh [build|install|start|selftest|smoke|contract|contract-red|probe|embed|rdbprobe|rag|log|crash|all]" >&2; exit 2 ;;
 esac
 
 # 说明：这里**不做** `require_target` 的统一前置检查，因为 `build` 是纯本机构建、
