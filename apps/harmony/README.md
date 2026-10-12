@@ -1785,6 +1785,17 @@ bash scripts/harmony.sh h8shots            # 四页截图（用 SEKB_PAGE_* 动�
  PASS=26 FAIL=3 SKIP=3
 ```
 
+**⚠️ 这张表有**两种**实测形状，取决于"RDB 库这次有没有打开成功"**（同一份代码、同一台设备，
+连跑三次的结果不是同一个；调用链与判定都没变）：
+
+| 形状 | 汇总 | 明细 |
+|---|---|---|
+| A（库打开成功） | `PASS=26 FAIL=3 SKIP=3` | `rag_ingest` / `rag_retrieve` / `rag_delete` 三项 FAIL（见 §6.1） |
+| B（库没打开） | `PASS=22 FAIL=1 SKIP=7` | `rag_store_open` FAIL（`errCode=14800037`，见 §6.2），依赖它的 4 项按原因 SKIP |
+
+**两种形状都不算"通过"**，如实记录在这里：RDB 文档链路现在**不可稳定使用**，
+而这正是一条"FAIL 必须 0"的硬指标**没达成**的地方——根因不在 UI，见 §6。
+
 **项名与 Android `SelfTest.kt` 的对照**（能同名的都同名）：`edge_reachable` / `edge_stream` / `edge_models` /
 `router_decision` / `privacy_device_only_local_gate` / `rag_ingest` / `rag_retrieve` / `rag_space_guard` /
 `rag_embed_sanity` / `embedding_space` / `credential_store_restart` / `cloud_enroll` / `cloud_login` / `cloud_chat`；
