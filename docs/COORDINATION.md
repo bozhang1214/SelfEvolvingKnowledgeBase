@@ -7,13 +7,14 @@
 
 | 工作流 | 负责人 | 涉及文件（重点） | 开始时间 |
 |---|---|---|---|
-| **C · 鸿蒙端**（H1→H8：KMP ohos 目标 + 五端口 + libcurl + ArkUI 四页 UI + 自检） | DSH Agent（子代理 C） | `apps/shared/**`（**只加 `ohosArm64`/`ohosMain`，不改 android/apple 配置**）、`apps/harmony/**`、`scripts/harmony.sh`、`apps/contract/**` | 2026-10-25 |
-| **B · iOS + Mac UI**（四页 SwiftUI 对齐 Android：聊天/历史/文档/设置） | DSH Agent（子代理 B） | `apps/ios/**`、`apps/mac/**`、`scripts/ios_app.sh`、`scripts/mac_app.sh`（**一份源码两端跑**） | 2026-10-25 |
+| **D · `.ms` 掩码保真**（H6 关键路径：让转换产物真的使用 `sekb_additive_mask_zero`，使鸿蒙嵌入与 Android 同空间 0.244） | DSH Agent（子代理 D） | `scripts/model_to_ms_maskfree.py`、`scripts/model_to_ms.sh`、`scripts/check_maskfree_padding_gap.py`、`apps/shared-core/src/ohosMain/**`、`apps/harmony/spike/knspike/src/ohosMain/**`、`scripts/harmony.sh`（`embed` 动作）、`apps/harmony/README.md` | 2026-10-25 |
 | **A · 共享层公共设施**（契约路径 N 方守卫、facts/状态文档同步、四端同表汇总） | DSH Agent（主线） | `scripts/check_protocol_paths.py`、`docs/多端跨端-*.md`、`docs/RFC-多端跨端方案.md`、`apps/README.md`、`docs/changelog.d/**` | 2026-10-25 |
+| ~~**B · iOS + Mac UI**~~ ✅ 已收工（`8f5ca75`，自检 42 PASS / 0 FAIL / 1 SKIP，截图已复核） | — | — | — |
+| ~~**C · 鸿蒙 H1→H6 半程**~~ 已收工（`f993d38`/`7d38264`/`6b4dd5d`/`d367d02`）：H1/H2 ✅、H3 改判（`7a25d7e`）、H4–H8 待续 | — | — | — |
 
-> **并行边界（防静默覆盖，开工前必读）**：B 与 C **都不改对方目录**；
-> 双方**都必须先申请、由主线统一改** `apps/shared/build.gradle.kts` 与 `apps/contract/**`
->（C 的 H1 需要给共享层加 `ohosArm64` 目标，属于**新增**，已在本表登记）。
+> **并行边界（防静默覆盖，开工前必读）**：
+> **D 只碰上表列出的文件**；`apps/shared/src/commonMain/**`（共享层公共逻辑）与 `apps/ios/**`、`apps/mac/**` 归主线，
+> D 若确需改动**先在报告里说明**，不要自行改动（共享层逻辑已有 295 用例与守卫兜着）。
 > `docs/CHANGELOG.md` 一律走 `docs/changelog.d/` 碎片（每个工作流用**各自的**碎片文件，不共用）。
 
 > 端云协同 M0–M3（`docs/RFC-端云协同与端侧Agent.md` / 实施记录）已于 2026-09-20 暂停存档，
