@@ -71,6 +71,10 @@ export class RagOpResult {
   dbChunks: number = -1;
   /** `all()` 回读条数（同上，用于区分"表里没有"与"读法不对"）。 */
   allRows: number = -1;
+  /** `size()` 失败原因（有值说明读取路径抛了异常，别只看 -1）。 */
+  sizeErr: string = '';
+  /** `all()` 失败原因（同上）。 */
+  allErr: string = '';
 }
 
 /** `ragRetrieve` 的结果。 */

@@ -231,9 +231,20 @@ object SekbApp {
                 //      · dbChunks=0 → **写入/可见性**问题（事务未提交或句柄不同源）
                 //      · dbChunks≥1 → 写入没问题，问题在读取/检索那一侧
                 //    这一条把"写错还是读错"从推测变成可读的数字，别再靠猜。
-                val dbChunks = runCatching { s.store.size() }.getOrElse { -1 }
+                // ⚠️ 失败时**必须带上原因**（2026-10-26 主线补）：第一版只把异常吞成 -1，
+                //    结果只能知道"读不到"，不知道"为什么读不到"，白绕一轮。
+                var dbChunks = -1
+                try { dbChunks = s.store.size() } catch (t: Throwable) {
+                    dbChunks = -1
+                    o.put("sizeErr", "${t::class.simpleName}: ${t.message}")
+                }
                 o.put("dbChunks", dbChunks)
-                o.put("allRows", runCatching { s.store.all().size }.getOrElse { -1 })
+                var allRows = -1
+                try { allRows = s.store.all().size } catch (t: Throwable) {
+                    allRows = -1
+                    o.put("allErr", "${t::class.simpleName}: ${t.message}")
+                }
+                o.put("allRows", allRows)
                 o.toString()
             } catch (e: Throwable) {
                 errJson("ingest", "${e::class.simpleName}: ${e.message}")

@@ -400,7 +400,7 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
   //    `dbChunks≥1` 说明写入没问题、问题在读取或检索那一侧 —— 一句话把"写错还是读错"定下来。
   a.check('rag_ingest_bridge', ing1.ok && ing2.ok && ing1.chunks >= 1 && ing2.chunks >= 1,
     `两次 ingest 的返回：${srcId} chunks=${ing1.chunks} zeroFilled=${ing1.zeroFilled} ok=${ing1.ok}` +
-    ` dbChunks=${ing1.dbChunks} allRows=${ing1.allRows}` +
+    ` dbChunks=${ing1.dbChunks} allRows=${ing1.allRows} sizeErr=${ing1.sizeErr} allErr=${ing1.allErr}` +
     ` ｜ ${otherId} chunks=${ing2.chunks} ok=${ing2.ok} dbChunks=${ing2.dbChunks}` +
     `${ing1.ok ? '' : ` ｜ 失败原因：${ing1.reason}`}`);
 
