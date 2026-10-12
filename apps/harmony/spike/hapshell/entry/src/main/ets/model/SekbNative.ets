@@ -79,6 +79,12 @@ export class RagOpResult {
   rawJson: string = '';
   /** 事务诊断：`begin=? before=? inTx=? commit=? after=?`（一眼判定事务是否生效）。 */
   tx: string = '';
+  /** 写后回读轮询了几次（`1` = 一次就读到；`4` = 四次都没读到，说明可见性/写入确有问题）。 */
+  pollRounds: number = 0;
+  /** 文档登记表的回读结果（与切片表分开：两者可能一个对一个错）。 */
+  docsCount: number = -1;
+  docsChunks: number = -1;
+  docRounds: number = 0;
 }
 
 /** `ragRetrieve` 的结果。 */
@@ -180,6 +186,10 @@ export function ragIngest(sourceId: string, name: string, text: string, sizeByte
     r.sizeErr = o.sizeErr !== undefined ? o.sizeErr : '';
     r.allErr = o.allErr !== undefined ? o.allErr : '';
     r.tx = o.tx !== undefined ? o.tx : '';
+    r.pollRounds = o.pollRounds !== undefined ? o.pollRounds : 0;
+    r.docsCount = o.docsCount !== undefined ? o.docsCount : -1;
+    r.docsChunks = o.docsChunks !== undefined ? o.docsChunks : -1;
+    r.docRounds = o.docRounds !== undefined ? o.docRounds : 0;
   } catch (e) {
     r.ok = false;
     r.reason = `桥不可用：${e}`;

@@ -234,9 +234,19 @@ class RdbVectorStore(
 
     /** 按导入时间倒序（最近导入的在最前）——**在 SQL 里排**，与 Android 的 `ORDER BY added_at DESC` 一致。 */
     override fun list(): List<DocumentInfo> {
+        // ⚠️ **切片数从 `chunks` 表算，而不是信 `documents.chunks` 列**（2026-10-26 主线实测后改）：
+        //    设备上出现"文档登记成功（列表里能看到这一篇）但 `chunks` 列恒为 0"，
+        //    且**轮询 4 次读回来仍是 0**（`docs=1篇/0段(轮4)`）——而同一时刻 `chunks` 表里确实有切片。
+        //    切片表才是**事实来源**（检索/删除都按它走），`documents.chunks` 只是冗余缓存；
+        //    顺着事实来源算，既修好这个显示，也避免两处计数长期不一致。
+        //    `LEFT JOIN` + `COUNT` 保证"没有切片的文档"仍会出现（计数 0），不会因为 INNER JOIN 丢行。
         val cur = store.query(
-            "SELECT id, name, size_bytes, chunks, added_at, device_only FROM documents " +
-                "ORDER BY added_at DESC",
+            "SELECT d.id AS id, d.name AS name, d.size_bytes AS size_bytes, " +
+                "d.added_at AS added_at, d.device_only AS device_only, " +
+                "COUNT(c.id) AS chunks FROM documents d " +
+                "LEFT JOIN chunks c ON c.source_id = d.id " +
+                "GROUP BY d.id, d.name, d.size_bytes, d.added_at, d.device_only " +
+                "ORDER BY d.added_at DESC",
         ) ?: return emptyList()
         val out = mutableListOf<DocumentInfo>()
         while (cursorNext(cur) == 0) {

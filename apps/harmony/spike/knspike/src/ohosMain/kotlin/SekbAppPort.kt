@@ -233,12 +233,27 @@ object SekbApp {
                 //    这一条把"写错还是读错"从推测变成可读的数字，别再靠猜。
                 // ⚠️ 失败时**必须带上原因**（2026-10-26 主线补）：第一版只把异常吞成 -1，
                 //    结果只能知道"读不到"，不知道"为什么读不到"，白绕一轮。
+                // ⚠️ **写后可见性有延迟**（2026-10-26 主线实测并据此改法）：
+                //    同一次调用里出现过 `size()`=0 而紧接着 `all()`=1 —— 两个读法对同一张表给出不同答案，
+                //    唯一自洽的解释是**写入在提交后还需要一点时间才对查询可见**。
+                //    所以这里改成**有界轮询**：最多 4 次、每次间隔 40ms，直到读回条数 ≥ 本次写入的切片数
+                //    （`rep.chunks`）；读到就停，读不到也如实返回（附 `pollRounds` 说明轮了几次）。
+                //    这不是"把失败掩盖成成功"：期望值是**本次应当写入的条数**，达不到仍会带出真实数字。
                 var dbChunks = -1
-                try { dbChunks = s.store.size() } catch (t: Throwable) {
+                var rounds = 0
+                try {
+                    for (k in 1..4) {
+                        rounds = k
+                        dbChunks = s.store.size()
+                        if (dbChunks >= rep.chunks && dbChunks > 0) break
+                        if (k < 4) platform.posix.usleep(40_000u)
+                    }
+                } catch (t: Throwable) {
                     dbChunks = -1
                     o.put("sizeErr", "${t::class.simpleName}: ${t.message}")
                 }
                 o.put("dbChunks", dbChunks)
+                o.put("pollRounds", rounds)
                 var allRows = -1
                 try { allRows = s.store.all().size } catch (t: Throwable) {
                     allRows = -1
@@ -246,6 +261,26 @@ object SekbApp {
                 }
                 o.put("allRows", allRows)
                 o.put("tx", s.store.lastTx)   // 事务诊断：begin/before/inTx/commit/after
+                // ⚠️ **文档登记也要回读**（2026-10-26 主线加）：切片表读回来对了，
+                //    但 `documents()` 仍报"0 篇"（自检 rag_ingest 因此红过）——同一类"写后读不到"，
+                //    只是发生在登记表上。同样有界轮询，并把实测篇数/切片数带出去。
+                var docsCount = -1
+                var docsChunks = -1
+                var docRounds = 0
+                try {
+                    for (k in 1..4) {
+                        docRounds = k
+                        val dl = s.index.documents()
+                        docsCount = dl.size
+                        docsChunks = dl.sumOf { it.chunks }
+                        val mine = dl.firstOrNull { it.id == sourceId }
+                        if (mine != null && mine.chunks >= rep.chunks) break
+                        if (k < 4) platform.posix.usleep(40_000u)
+                    }
+                } catch (_: Throwable) { }
+                o.put("docsCount", docsCount)
+                o.put("docsChunks", docsChunks)
+                o.put("docRounds", docRounds)
                 o.toString()
             } catch (e: Throwable) {
                 errJson("ingest", "${e::class.simpleName}: ${e.message}")

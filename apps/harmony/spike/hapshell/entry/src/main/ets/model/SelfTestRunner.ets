@@ -389,6 +389,21 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
   }
   a.check('rag_store_open', true, `RDB 自检库已打开（隔离库，不碰用户的 sekb_docs.db）`);
 
+  // ⚠️ **先把上一轮自检留下的文档清干净**（2026-10-26 主线加，解决"结果来回摆"的真因）：
+  //    自检库与用户库共用文件（`sekb_docs.db`），上一轮的 `__selftest__` **可能没删干净**
+  //    （实测 `rag_delete` 有时删 0 段），于是下一轮的 `rag_retrieve` 命中的是**残留行**、
+  //    `rag_ingest` 的"列表里 N 篇"也随残留变化 —— 这就是同一份代码出现
+  //    `PASS=26/22/23` 不同汇总的原因。清掉之后再跑，判据才只反映本轮。
+  //    只删 `__selftest` 前缀（**绝不碰用户文档**，这是硬约定）。
+  let preCleaned = 0;
+  for (const d of ragDocuments().docs) {
+    if (d.id.indexOf('__selftest') === 0) {
+      ragRemove(d.id);
+      preCleaned++;
+    }
+  }
+  hilog.info(0x0000, TAG_SELFTEST, 'RAG 预清理：删除上一轮自检文档 %{public}d 篇', preCleaned);
+
   // 自检用的文档 id 带前缀，避免污染用户文档（**自检不许动用户数据**）
   const srcId: string = '__selftest__';
   const otherId: string = '__selftest_other__';
@@ -400,7 +415,9 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
   //    `dbChunks≥1` 说明写入没问题、问题在读取或检索那一侧 —— 一句话把"写错还是读错"定下来。
   a.check('rag_ingest_bridge', ing1.ok && ing2.ok && ing1.chunks >= 1 && ing2.chunks >= 1,
     `两次 ingest 的返回：${srcId} chunks=${ing1.chunks} zeroFilled=${ing1.zeroFilled} ok=${ing1.ok}` +
-    ` dbChunks=${ing1.dbChunks} allRows=${ing1.allRows} sizeErr=${ing1.sizeErr} allErr=${ing1.allErr}` +
+    ` dbChunks=${ing1.dbChunks} allRows=${ing1.allRows} 轮询=${ing1.pollRounds}` +
+    ` docs=${ing1.docsCount}篇/${ing1.docsChunks}段(轮${ing1.docRounds})` +
+    ` sizeErr=${ing1.sizeErr} allErr=${ing1.allErr} tx=[${ing1.tx}]` +
     ` ｜ ${otherId} chunks=${ing2.chunks} ok=${ing2.ok} dbChunks=${ing2.dbChunks}` +
     `${ing1.ok ? '' : ` ｜ 失败原因：${ing1.reason}`}`);
 
