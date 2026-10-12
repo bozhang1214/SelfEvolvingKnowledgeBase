@@ -127,7 +127,16 @@ struct Index {
       } catch (e2) {
         ktPart = `RDB-PROBE FAIL — rdbProbe 调用失败（libkn.so 是旧产物，缺 sekb_spike_rdb_probe？）：${e2}`;
       }
-      this.rdb = this.emit(linkPart + '\n---- Kotlin/Native 平台 klib 侧 ----\n' + ktPart);
+      // 主线取证（2026-10-26）：`source_id` 到底有没有落对。H8 自检出现过
+      // "向量能检索到分（0.696）但 sourceId 读回空串、deleteBySource 删 0 行"的矛盾证据，
+      // 两条不可能同时为真 → 用最小用例把"写"与"读"分开判定（见 RdbIdProbe.kt 头部）。
+      let idPart: string = '';
+      try {
+        idPart = knspike.rdbIdProbe(ctx.databaseDir, `${Date.now()}`);
+      } catch (e3) {
+        idPart = `RDBID FAIL — rdbIdProbe 调用失败（libkn.so 是旧产物，缺 sekb_spike_rdb_id_probe？）：${e3}`;
+      }
+      this.rdb = this.emit(linkPart + '\n---- Kotlin/Native 平台 klib 侧 ----\n' + ktPart + '\n---- source_id 往返取证 ----\n' + idPart);
     } catch (e) {
       this.rdb = `❌ ${e}`;
       hilog.error(0x0000, TAG, 'RDB-PROBE FAIL — threw: %{public}s', JSON.stringify(e));

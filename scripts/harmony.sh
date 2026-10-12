@@ -563,6 +563,36 @@ rdb_probe() {
     fi
 }
 
+rdb_id_probe() {
+    local wait_s="${1:-20}"
+    echo "── 1/3 构建（KMP 产物 + HAP）──"
+    bash "$ROOT/scripts/harmony_spike.sh" all || die "构建失败（先看输出里的第一处 error，别用窄 grep 过滤）"
+
+    echo
+    echo "── 2/3 安装并启动（等待 ${wait_s}s 抓 hilog TAG=${TAG}）──"
+    "$HDC" shell "aa force-stop $BUNDLE" >/dev/null 2>&1 || true
+    "$HDC" shell "hilog -r" >/dev/null 2>&1 || true
+    install
+    start
+    sleep "${wait_s}"
+
+    echo
+    echo "── 3/3 RDB 探针结果（原始 hilog）──"
+    local heads detail
+    heads="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'RDBID' | tail -5 || true)"
+    detail="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a -E 'RDBID|source_id|NOTE' | tail -30 || true)"
+    echo "${heads}"
+    echo "── 明细 ──"
+    echo "${detail}"
+    [ -n "${heads}" ] || die "没抓到 RDBID 行——检查 ${wait_s}s 够不够，或先跑 bash scripts/harmony.sh log"
+    if echo "${heads}" | grep -aq 'RDBID PASS'; then
+        echo
+        echo "✅ RDB NDK C API 可用：$(echo "${heads}" | sed 's/.*SEKB_KN_SPIKE: //' | tail -1)"
+    else
+        die "❌ RDB 探针未通过（明细见上）——H5 需要改方案（例如退 ArkTS relationalStore 薄桥）"
+    fi
+}
+
 # ── H5（工作流 F）②：RAG 自检 + 检索评测（H5 + H6 的另一半）────────────────
 # 与 Android `SelfTest.kt` 的 rag_* 项**同名同口径**，并且评测**复用共享层**的
 # `RetrievalEvalSet`/`RetrievalEvalRunner`（不另写一套），只是把索引换成 RDB 持久化实现。
@@ -813,6 +843,7 @@ case "${1:-}" in
     sync-huks-headers) sync_huks_headers ;;
     # H5（工作流 F）：RDB 探针 / RAG 自检 + 检索评测
     rdbprobe) require_target; rdb_probe "${2:-}" ;;
+    rdbid)    require_target; rdb_id_probe "${2:-}" ;;
     # H8（工作流 G）：四页 UI 的自检表（TAG=SEKB_HARMONY_SELFTEST）+ 反证 + 截图
     h8selftest)     h8_selftest "${2:-}" ;;
     h8selftest-red) h8_selftest "${2:-}" red ;;

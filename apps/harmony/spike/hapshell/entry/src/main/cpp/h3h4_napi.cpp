@@ -44,6 +44,8 @@ extern "C" const char* sekb_spike_h3_pump_lines();
 // H4 凭证（HUKS，cinterop 直调 libhuks_ndk.z.so；不经 ArkTS 桥）
 extern "C" const char* sekb_spike_cred_selftest(const char* files_dir, const char* reset, const char* run_tag);
 extern "C" const char* sekb_spike_huks_roundtrip(const char* payload);
+// H5 取证（主线）：RDB 里 `source_id` 到底有没有落对（H8 自检出现"能检索到分、但 source 为空"的矛盾证据）
+extern "C" const char* sekb_spike_rdb_id_probe(const char* database_dir, const char* run_tag);
 
 namespace h3h4_napi {
 
@@ -133,6 +135,13 @@ static napi_value HuksRoundtrip(napi_env env, napi_callback_info info) {
  */
 void RegisterSekbChat(napi_env env, napi_value exports);
 
+/** 主线取证入口：RDB 的 source_id 往返（2 个字符串参数：databaseDir / runTag）。 */
+napi_value RdbIdProbe(napi_env env, napi_callback_info info) {
+    const std::string dir = h3h4_napi::argAt(env, info, 2, 0);
+    const std::string tag = h3h4_napi::argAt(env, info, 2, 1);
+    return h3h4_napi::returnString(env, sekb_spike_rdb_id_probe(dir.c_str(), tag.c_str()));
+}
+
 /**
  * 把 H3/H4 的入口挂到主模块的 exports 上（由 `napi_init.cpp` 的 `Init()` 调用）。
  *
@@ -149,6 +158,8 @@ void RegisterSekbH3H4(napi_env env, napi_value exports) {
         // H4（凭证端口）：HUKS 自检（纯 Kotlin/Native，cinterop 直链）
         {"credSelfTest", nullptr, CredSelfTest, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"huksRoundtrip", nullptr, HuksRoundtrip, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // H5 取证（主线独占 napi_init.cpp，故由本文件代挂；见 RdbIdProbe.kt 头部说明）
+        {"rdbIdProbe", nullptr, RdbIdProbe, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     // H8：一行代挂（见上方 RegisterSekbChat 的说明）
