@@ -263,19 +263,27 @@ class RdbVectorStore(
 
     /** 按导入时间倒序（最近导入的在最前）——**在 SQL 里排**，与 Android 的 `ORDER BY added_at DESC` 一致。 */
     override fun list(): List<DocumentInfo> {
-        // ⚠️ **切片数从 `chunks` 表算，而不是信 `documents.chunks` 列**（2026-10-26 主线实测后改）：
-        //    设备上出现"文档登记成功（列表里能看到这一篇）但 `chunks` 列恒为 0"，
-        //    且**轮询 4 次读回来仍是 0**（`docs=1篇/0段(轮4)`）——而同一时刻 `chunks` 表里确实有切片。
-        //    切片表才是**事实来源**（检索/删除都按它走），`documents.chunks` 只是冗余缓存；
-        //    顺着事实来源算，既修好这个显示，也避免两处计数长期不一致。
-        //    `LEFT JOIN` + `COUNT` 保证"没有切片的文档"仍会出现（计数 0），不会因为 INNER JOIN 丢行。
+        // ⚠️ **切片数用 Kotlin 自己数，不交给 SQL 聚合**（2026-10-26 主线改，第三次迭代）：
+        //    历程：① 原来直接读 `documents.chunks` 列 → 设备上恒为 0（轮询 4 次仍 0）；
+        //    ② 改成 `LEFT JOIN chunks ... COUNT(c.id) ... GROUP BY` → **同一条查询里**
+        //       一篇算出 1、另一篇算出 0（两行都在 `chunks` 表里），聚合结果不自洽；
+        //    ③ 现在：先读 `chunks` 表的 `source_id` 列表（**不带任何聚合、不带 JOIN**），
+        //       在 Kotlin 里 `groupingBy{}.eachCount()` 数出来。
+        //    理由：这个平台上的 C 绑定在"多表 + 聚合"这类查询上给过多次不自洽的结果，
+        //    而**逐行读单列**是它最稳的用法（`all()`/`size()` 已验证可靠）。
+        //    代价是多一次查询，但文档列表本来就不在热路径上（打开文档页才读一次）。
+        val counts = HashMap<String, Int>()
+        run {
+            val c = store.query("SELECT source_id FROM chunks") ?: return@run
+            while (cursorNext(c) == 0) {
+                val sid = cursorText(c, "source_id") ?: continue
+                counts[sid] = (counts[sid] ?: 0) + 1
+            }
+            cursorDestroy(c)
+        }
         val cur = store.query(
-            "SELECT d.id AS id, d.name AS name, d.size_bytes AS size_bytes, " +
-                "d.added_at AS added_at, d.device_only AS device_only, " +
-                "COUNT(c.id) AS chunks FROM documents d " +
-                "LEFT JOIN chunks c ON c.source_id = d.id " +
-                "GROUP BY d.id, d.name, d.size_bytes, d.added_at, d.device_only " +
-                "ORDER BY d.added_at DESC",
+            "SELECT id, name, size_bytes, added_at, device_only FROM documents " +
+                "ORDER BY added_at DESC",
         ) ?: return emptyList()
         val out = mutableListOf<DocumentInfo>()
         while (cursorNext(cur) == 0) {
@@ -284,7 +292,8 @@ class RdbVectorStore(
                 id = id,
                 name = cursorText(cur, "name") ?: id,
                 sizeBytes = cursorInt64(cur, "size_bytes") ?: 0L,
-                chunks = (cursorInt64(cur, "chunks") ?: 0L).toInt(),
+                // 切片数取 Kotlin 数出来的值；`documents.chunks` 列不再作为来源（它不可信）
+                chunks = counts[id] ?: 0,
                 addedAtMillis = cursorInt64(cur, "added_at") ?: 0L,
                 deviceOnly = (cursorInt64(cur, "device_only") ?: 1L) == 1L,
             )
