@@ -28,6 +28,7 @@
 // 详见 `knspike/src/ohosMain/kotlin/NetPort.kt` 与 `H3NetSelfTest.kt` 的文件头。
 // ═══════════════════════════════════════════════════════════════════════════
 #include <napi/native_api.h>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,10 @@ extern "C" const char* sekb_spike_cred_selftest(const char* files_dir, const cha
 extern "C" const char* sekb_spike_huks_roundtrip(const char* payload);
 // H5 取证（主线）：RDB 里 `source_id` 到底有没有落对（H8 自检出现"能检索到分、但 source 为空"的矛盾证据）
 extern "C" const char* sekb_spike_rdb_id_probe(const char* database_dir, const char* run_tag);
+// H5 分步检索评测（主线 2026-10-26 接出）：原来 `sekb_spike_rag_step` 只有 Kotlin 侧实现、
+// **没有 NAPI 入口**，所以"分步跑评测"这条设计好的路一直没被用上（整段同步跑会撞 THREAD_BLOCK_6S）。
+extern "C" const char* sekb_spike_rag_step(int step, const char* model_path, const char* vocab_text,
+                                           const char* database_dir, const char* files_dir);
 
 namespace h3h4_napi {
 
@@ -135,6 +140,24 @@ static napi_value HuksRoundtrip(napi_env env, napi_callback_info info) {
  */
 void RegisterSekbChat(napi_env env, napi_value exports);
 
+/**
+ * H5 分步检索评测入口：`ragStep(step, modelPath, vocabText, databaseDir, filesDir)`。
+ *
+ * `step` 是数字，NAPI 侧`argAt` 只取字符串，所以这里用一个取数字的小包装。
+ * 步进语义（Kotlin 侧定义）：0=建库+导入 1=检索与闸门 2=落盘/删除复核 3=评测 4=收尾。
+ * 每步之间由 ArkTS `await` 让出主线程，避免 `THREAD_BLOCK_6S`。
+ */
+napi_value RagStep(napi_env env, napi_callback_info info) {
+    const std::string stepS = h3h4_napi::argAt(env, info, 5, 0);
+    const std::string model = h3h4_napi::argAt(env, info, 5, 1);
+    const std::string vocab = h3h4_napi::argAt(env, info, 5, 2);
+    const std::string dir = h3h4_napi::argAt(env, info, 5, 3);
+    const std::string files = h3h4_napi::argAt(env, info, 5, 4);
+    const int step = stepS.empty() ? 0 : std::atoi(stepS.c_str());
+    return h3h4_napi::returnString(env,
+        sekb_spike_rag_step(step, model.c_str(), vocab.c_str(), dir.c_str(), files.c_str()));
+}
+
 /** 主线取证入口：RDB 的 source_id 往返（2 个字符串参数：databaseDir / runTag）。 */
 napi_value RdbIdProbe(napi_env env, napi_callback_info info) {
     const std::string dir = h3h4_napi::argAt(env, info, 2, 0);
@@ -160,6 +183,8 @@ void RegisterSekbH3H4(napi_env env, napi_value exports) {
         {"huksRoundtrip", nullptr, HuksRoundtrip, nullptr, nullptr, nullptr, napi_default, nullptr},
         // H5 取证（主线独占 napi_init.cpp，故由本文件代挂；见 RdbIdProbe.kt 头部说明）
         {"rdbIdProbe", nullptr, RdbIdProbe, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // H5 分步检索评测（主线接出；见 RagStep 的说明——原来只有 Kotlin 实现没有 NAPI 入口）
+        {"ragStep", nullptr, RagStep, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     // H8：一行代挂（见上方 RegisterSekbChat 的说明）

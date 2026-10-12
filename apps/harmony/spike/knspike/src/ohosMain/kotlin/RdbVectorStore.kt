@@ -40,6 +40,7 @@ import com.sekb.shared.rag.DocumentInfo
 import com.sekb.shared.rag.DocumentRegistry
 import com.sekb.shared.rag.VectorHit
 import com.sekb.shared.rag.VectorMath
+import com.sekb.shared.rag.VectorAndDocumentStore
 import com.sekb.shared.rag.VectorRecord
 import com.sekb.shared.rag.VectorStore
 
@@ -71,12 +72,12 @@ class RdbVectorStore(
      * 所以正确做法是**全进程每个库只持有一个句柄**并把它注入进来；不传时才自己开（兼容旧调用）。
      */
     injected: RdbStore? = null,
-) : VectorStore, DocumentRegistry {
+) : VectorAndDocumentStore {
 
     private val store: RdbStore
 
     /** 打开时发生了什么（自检要报出来：是不是新建、有没有空间戳冲突）。 */
-    val openDiagnostics: String
+    override val openDiagnostics: String
 
     init {
         val (s, err) = if (injected != null) injected to RdbCode.OK
@@ -330,7 +331,7 @@ class RdbVectorStore(
      * 与 Android 的 `openOrReembed(probe, ...)` 两段式形态不一致。给个库名，
      * 自检自己再 `RdbVectorStore(dir, space, dbNamePublic)` 一次即可。
      */
-    val dbNamePublic: String get() = dbName
+    override val dbNamePublic: String get() = dbName
 
     private companion object {
         const val DDL_META = "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)"

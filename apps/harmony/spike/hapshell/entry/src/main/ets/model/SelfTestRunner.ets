@@ -520,6 +520,45 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
     .filter((d: DocInfo) => d.id.indexOf('__selftest') >= 0).length;
   a.check('rag_selftest_cleanup', leftovers === 0,
     `自检文档残留=${leftovers}（期望 0；非 0 说明清理没做干净，用户库被污染）`);
+
+  // ── H5：**分步检索评测**（12 篇语料 + 33 问 × 5 档阈值）─────────────────────
+  // 为什么分步：整段是 90s 级**连续同步**工作，会撞 OHOS 的 `THREAD_BLOCK_6S` 看门狗，
+  // 表现是"整段结果都拿不到"（进程被看门狗处理掉）。所以每步之间 `await` 让出主线程。
+  // 判据全在 Kotlin 侧（`RagSelfTest.kt` 的 `RagAcc`），ArkTS 只负责"什么时候继续"。
+  await stepEvalReport(a, ctx, ui);
+}
+
+/**
+ * H5 分步检索评测：跑 0→4 步，每步之间 `await` 一次让出主线程。
+ *
+ * 步进语义见 `RagSelfTest.kt`；这里只负责驱动，并把**最后一步**（出表那步）的结果
+ * 逐项记进自检表。任一步抛错都如实记 FAIL（不吞）。
+ */
+async function stepEvalReport(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promise<void> {
+  const mp: string = await ctx.modelPath(ui);
+  const vocab: string = await ctx.rawText(ui, 'vocab.txt');
+  let last: string = '';
+  for (let step = 0; step <= 4; step++) {
+    try {
+      last = knspike.ragStep(`${step}`, mp, vocab, ctx.databaseDir, ctx.filesDir);
+    } catch (e) {
+      a.check('rag_eval_step' + step, false, `第 ${step} 步抛错：${e}`);
+      return;
+    }
+    // 让出主线程：Kotlin 侧那一步是同步重活，这里必须给系统一次喘息机会（THREAD_BLOCK_6S）
+    await Promise.resolve();
+  }
+  for (const line of last.split('\n')) {
+    if (line.length === 0) continue;
+    hilog.info(0x0000, TAG_SELFTEST, 'RAG-EVAL %{public}s', line);
+    const m = line.match(/^(PASS|FAIL|SKIP)\s+(\S+)\s+—\s+(.*)$/);
+    if (m !== null) {
+      const name: string = `rag_eval_${m[2]}`;
+      if (m[1] === 'PASS') a.check(name, true, m[3]);
+      else if (m[1] === 'FAIL') a.check(name, false, m[3]);
+      else a.skip(name, m[3]);
+    }
+  }
 }
 
 /**

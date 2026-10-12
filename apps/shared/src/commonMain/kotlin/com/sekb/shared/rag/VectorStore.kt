@@ -88,3 +88,20 @@ class InMemoryVectorStore(override val space: EmbeddingSpace) : VectorStore {
 
     override fun all(): List<VectorRecord> = records.values.toList()
 }
+
+/**
+ * **既是向量库、又是文档登记簿**的存储（端侧两个生产实现都满足它）。
+ *
+ * 为什么需要这个组合接口：`KnowledgeIndex` 只要求 `VectorStore`，但"文档页"与 RAG 自检
+ * 同时需要"切片存取"与"文档登记"两类能力。若变量只声明成 `VectorStore`，
+ * 就看不到 `list()`/`upsert(DocumentInfo)`（编译期就报"类型不符"）。
+ * 声明成这个组合类型后，调用方**不必在"文件型 / RDB"之间分支**——
+ * 两个实现类各自 `: VectorStore, DocumentRegistry`，天然满足。
+ */
+interface VectorAndDocumentStore : VectorStore, DocumentRegistry {
+    /** 打开时发生了什么（自检要如实报出来：新建 / 复用 / 空间戳冲突）。 */
+    val openDiagnostics: String
+
+    /** 逻辑"库名"（RDB 是库名，文件型是文件路径）——自检与设置页展示用。 */
+    val dbNamePublic: String
+}

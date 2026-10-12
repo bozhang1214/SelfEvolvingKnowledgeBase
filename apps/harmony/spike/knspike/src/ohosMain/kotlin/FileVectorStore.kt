@@ -36,6 +36,7 @@ package com.sekb.ohos.spike
 import com.sekb.shared.embed.EmbeddingSpace
 import com.sekb.shared.rag.DocumentInfo
 import com.sekb.shared.rag.DocumentRegistry
+import com.sekb.shared.rag.VectorAndDocumentStore
 import com.sekb.shared.rag.VectorHit
 import com.sekb.shared.rag.VectorMath
 import com.sekb.shared.rag.VectorRecord
@@ -88,13 +89,19 @@ private fun hexToBytes(s: String): ByteArray {
 class FileVectorStore(
     private val filePath: String,
     override val space: EmbeddingSpace,
-) : VectorStore, DocumentRegistry {
+) : VectorAndDocumentStore {
 
     private val chunks = LinkedHashMap<String, VectorRecord>()
     private val docs = LinkedHashMap<String, DocumentInfo>()
 
     /** 打开时发生了什么（与 `RdbVectorStore.openDiagnostics` 同格式，自检要报出来）。 */
-    val openDiagnostics: String
+    override val openDiagnostics: String
+
+    /** 逻辑"库名"（= 文件名）——自检里与 RDB 实现同口径地报出来。 */
+    override val dbNamePublic: String = filePath
+
+    /** 文件型没有句柄可关（数据已落盘）；保留方法是为了与 RDB 实现可互换调用。 */
+    fun close(): Int = 0
 
     init {
         var loaded = 0
@@ -204,6 +211,10 @@ class FileVectorStore(
 
     private var dirty = false
 
+    /** 最近一次落盘的诊断（自检要报出来：路径 + 字符数）。 */
+    var lastSaveInfo: String = "（尚未落盘）"
+        private set
+
     /** 整库重写（先 `.tmp` 再 rename：中途崩溃不会留下半个库）。 */
     private fun save() {
         if (!dirty) return
@@ -220,15 +231,23 @@ class FileVectorStore(
         }
         val tmp = "$filePath.tmp"
         writeText(tmp, sb.toString())
-        // rename 覆盖（同目录，POSIX rename 是原子的）
-        platform.posix.rename(tmp, filePath)
+        // rename 覆盖（同目录，POSIX rename 是原子的）。
+        // ⚠️ **rename 的返回值必须检查**（2026-10-26 主线修）：此前不检查，导致
+        //    "size=3 关闭重开 size=0"——数据没落到目标文件，而调用方看不到任何异常。
+        val rc = platform.posix.rename(tmp, filePath)
+        if (rc != 0) error("rename $tmp -> $filePath 失败（rc=$rc errno=${platform.posix.errno}）")
         dirty = false
+        lastSaveInfo = "已写 " + sb.length + " 字符 -> " + filePath
     }
 
     private fun writeText(path: String, text: String) {
         val bytes = text.encodeToByteArray()
-        val fd = platform.posix.open(path, platform.posix.O_WRONLY or platform.posix.O_CREAT or platform.posix.O_TRUNC, 0x1A4u)
-        if (fd < 0) error("无法写入 $path（open 返回 $fd）")
+        val fd = platform.posix.open(
+            path,
+            platform.posix.O_WRONLY or platform.posix.O_CREAT or platform.posix.O_TRUNC,
+            0x1A4u,
+        )
+        if (fd < 0) error("无法写入 $path（open 返回 $fd errno=${platform.posix.errno}）")
         try {
             bytes.usePinned { pinned ->
                 var off = 0

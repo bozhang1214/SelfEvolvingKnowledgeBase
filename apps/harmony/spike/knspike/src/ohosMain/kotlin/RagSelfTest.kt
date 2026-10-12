@@ -49,8 +49,13 @@ import com.sekb.shared.rag.VectorRecord
  * 让主线程有喘息机会。判据与逻辑**都在 Kotlin 侧**，ArkTS 只负责"什么时候继续"。
  */
 @CName("sekb_spike_rag_step")
-fun sekbSpikeRagStep(step: Int, modelPath: String, vocabText: String, databaseDir: String): String =
-    RagSession.step(step, modelPath, vocabText, databaseDir)
+fun sekbSpikeRagStep(
+    step: Int,
+    modelPath: String,
+    vocabText: String,
+    databaseDir: String,
+    filesDir: String,
+): String = RagSession.step(step, modelPath, vocabText, databaseDir, filesDir)
 
 /** 分步自检的会话状态（进程内单例：模型会话本来就只该有一个，见 MsSessionCache）。 */
 object RagSession {
@@ -60,21 +65,65 @@ object RagSession {
         acc = null
     }
 
-    fun step(step: Int, modelPath: String, vocabText: String, databaseDir: String): String {
-        val a = acc ?: RagAcc(modelPath, vocabText, databaseDir).also { acc = it }
+    fun step(
+        step: Int,
+        modelPath: String,
+        vocabText: String,
+        databaseDir: String,
+        filesDir: String = "",
+    ): String {
+        val a = acc ?: RagAcc(modelPath, vocabText, databaseDir, filesDir).also { acc = it }
         return a.run(step)
     }
 }
+
+/**
+ * 按"有没有 filesDir"选存储实现：**非空走文件型**，空则退回 RDB。
+ *
+ * 提成顶层函数是因为**两个入口都要用**：分步版（`RagAcc`）与整段版（`sekbSpikeRagSelfTest`）。
+ * 之前这里是 `RagAcc` 的私有方法，于是整段版里那两处构造仍然硬编码 `RdbVectorStore`——
+ * 换实现时漏改就是"测的不是新实现"的隐蔽假失败（本轮真踩过）。
+ */
+private fun newStoreFor(
+    filesDir: String,
+    databaseDir: String,
+    name: String,
+    space: com.sekb.shared.embed.EmbeddingSpace,
+): com.sekb.shared.rag.VectorAndDocumentStore =
+    if (filesDir.isNotEmpty()) {
+        // ⚠️ **`name` 可能是绝对路径**（`dbNamePublic` 返回的就是文件全路径，见
+        //    `FileVectorStore.dbNamePublic`）。无条件拼 `"$filesDir/$name"` 会得到
+        //    `…/files//data/storage/…/files/x.db` 这种**双前缀路径**——文件"存在= true"
+        //    （在真正的路径上），而重开时读到的是那个不存在的双前缀路径 → size=0 的假"没落盘"。
+        //    本轮实测就是这个（`重开diag=新建（文件不存在）…/files//data/…`）。判据：以 `/` 开头就当全路径。
+        val path = if (name.startsWith("/")) name else "$filesDir/$name"
+        FileVectorStore(path, space)
+    } else RdbVectorStore(databaseDir, space, name)
 
 private class RagAcc(
     private val modelPath: String,
     private val vocabText: String,
     private val databaseDir: String,
+    /**
+     * 应用私有 filesDir。非空时**整条评估链路走 `FileVectorStore`**
+     * （RDB 的 NDK C 路径读一致性不可靠，见 FileVectorStore.kt 头部；2026-10-26 主线）。
+     */
+    private val filesDir: String = "",
 ) {
+    /** 按 filesDir 是否给出，构造对应的存储实现（端口可互换，调用处无分支）。 */
+    /** 关掉一个存储实现（文件型无句柄，`close()` 是空操作；见 FileVectorStore）。 */
+    private fun closeStore(s: com.sekb.shared.rag.VectorAndDocumentStore) {
+        if (s is RdbVectorStore) s.close()
+    }
+
+    private fun newStore(name: String, space: com.sekb.shared.embed.EmbeddingSpace):
+        com.sekb.shared.rag.VectorAndDocumentStore = newStoreFor(filesDir, databaseDir, name, space)
     private val r = RagReport()
     private var emb: MindSporeBgeEmbedding? = null
-    private var store: RdbVectorStore? = null
-    private var reopened: RdbVectorStore? = null
+    // 类型用**端口接口**（文件型与 RDB 可互换）；`close`/`dbNamePublic`/`openDiagnostics`
+    // 两个实现都提供了，所以调用处不需要分支（见 FileVectorStore.kt）。
+    private var store: com.sekb.shared.rag.VectorAndDocumentStore? = null
+    private var reopened: com.sekb.shared.rag.VectorAndDocumentStore? = null
     private var index: KnowledgeIndex? = null
     private var reports: List<KnowledgeIndex.IngestReport> = emptyList()
     private var sizeBefore = 0
@@ -114,7 +163,7 @@ private class RagAcc(
         r.note("自检库=$dbName（每轮唯一；后缀末 6 位=库名过长会 errCode=14800037）")
         RdbStore.delete(databaseDir, dbName)
         val st = try {
-            RdbVectorStore(databaseDir, e.space, dbName)
+            newStore(dbName, e.space)
         } catch (t: Throwable) {
             r.check("rag_store_open", false, "打开 RDB 索引失败：${t::class.simpleName}: ${t.message}")
             done = true
@@ -205,13 +254,15 @@ private class RagAcc(
         val st = store ?: run { done = true; return }
         val ix = index ?: run { done = true; return }
         sizeBefore = st.size()
-        st.close()
-        val re = RdbVectorStore(databaseDir, st.space, st.dbNamePublic)
+        closeStore(st)
+        val re = newStore(st.dbNamePublic, st.space)
         reopened = re
         r.check(
             "rag_persist_across_reopen",
             re.size() == sizeBefore && sizeBefore > 0,
-            "关闭前 size=$sizeBefore 重开后 size=${re.size()}（0 说明没落盘）",
+            "关闭前 size=$sizeBefore 重开后 size=${re.size()}（0 说明没落盘）" +
+                " 库=${st.dbNamePublic} 文件存在=${platform.posix.access(st.dbNamePublic, 0) == 0}" +
+                " 重开diag=${re.openDiagnostics}",
         )
         val reIndex = KnowledgeIndex(emb!!, re, registry = re)
         val doomed = reports.first { it.sourceId == "doc-weather" }.chunks
@@ -259,7 +310,7 @@ private class RagAcc(
             val t0 = com.sekb.shared.core.nowMillis()
             val evalDb = "sekb_reval_${t0 % 1000000}.db"
             RdbStore.delete(databaseDir, evalDb)
-            val es = RdbVectorStore(databaseDir, e.space, evalDb)
+            val es = newStore(evalDb, e.space)
             val eix = KnowledgeIndex(e, es)
             val errs = mutableListOf<String>()
             val b0 = com.sekb.shared.core.nowMillis()
@@ -291,8 +342,11 @@ private class RagAcc(
             }
             evalMs = com.sekb.shared.core.nowMillis() - t1
             evalRows = rows
-            es.close()
-            return  // 评测是最后一段：下一轮调用再出表
+            closeStore(es)
+            // ⚠️ 这里原来写 `return`（"下一轮调用再出表"）。分步驱动确实会再调一次，
+            //    但**表是在下一次调用的报告里才拼出来的**，而驱动只保留最后一份报告 →
+            //    `EVAL-TABLE` 五档表从来没被打出来过（18/18 里就没有它）。
+            //    改成**不早退**：只跳过"重建索引"，直接落到下面的出表逻辑。
         }
         // 第二段：出表 + 断言
         val rows = evalRows!!
@@ -397,9 +451,12 @@ fun sekbSpikeRagSelfTest(modelPath: String, vocabText: String, databaseDir: Stri
     RdbStore.delete(databaseDir, dbName)
 
     // 需要"进程重启后索引仍在"的证据 → 先关掉，从头打开
-    var store: RdbVectorStore
+    // ⚠️ 整段版（同步跑 ~90s，会撞 THREAD_BLOCK_6S）**没有 filesDir 参数**，
+    //    因此这里仍是 RDB；H5 的正式入口是**分步版** `rag_step`（它接收 filesDir 并可走文件型）。
+    //    保留整段版是为了"对照/历史命令可重放"。
+    var store: com.sekb.shared.rag.VectorAndDocumentStore
     try {
-        store = RdbVectorStore(databaseDir, emb.space, dbName)
+        store = newStoreFor("", databaseDir, dbName, emb.space)
     } catch (e: Throwable) {
         r.check("rag_store_open", false, "打开 RDB 索引失败：${e::class.simpleName}: ${e.message}")
         return r.render()
@@ -502,12 +559,16 @@ fun sekbSpikeRagSelfTest(modelPath: String, vocabText: String, databaseDir: Stri
 
     // ── 6. 持久化：**关闭 → 重新打开**（新句柄）→ 数据仍在 ──────────────────
     val sizeBefore = store.size()
-    store.close()
-    val reopened = RdbVectorStore(databaseDir, emb.space, dbName)
+    if (store is RdbVectorStore) store.close()
+    // ⚠️ 必须走 `newStore`：这里原来**硬编码 `RdbVectorStore`**，于是"持久化"这项
+    //    在文件型后端下测的其实是 RDB（构造出来的新库当然是空的 → 报"没落盘"的假失败）。
+    //    这类"测试自己没跟着实现切换"的缺陷很隐蔽——**换实现时要把所有构造点一起改**。
+    val reopened = newStoreFor("", databaseDir, dbName, emb.space)
     r.check(
         "rag_persist_across_reopen",
         reopened.size() == sizeBefore && sizeBefore > 0,
-        "关闭前 size=$sizeBefore 重开后 size=${reopened.size()}（0 说明没落盘）diag=${reopened.openDiagnostics}",
+        "关闭前 size=$sizeBefore 重开后 size=${reopened.size()}（0 说明没落盘）" +
+            "diag=${reopened.openDiagnostics}",
     )
     val reIndex = KnowledgeIndex(emb, reopened, registry = reopened)
     val reRetriever = Retriever(emb, reopened, minScore = 0.5)
@@ -564,7 +625,7 @@ fun sekbSpikeRagSelfTest(modelPath: String, vocabText: String, databaseDir: Stri
         //（本轮就踩到了：上一轮的 doc-weather 块留在库里，导致"3 块 1 个 source"这种自相矛盾的数）
         val evalDb = "sekb_rageval_${t0 % 1000000}.db"
         RdbStore.delete(databaseDir, evalDb)
-        val evalStore = RdbVectorStore(databaseDir, emb.space, evalDb)
+        val evalStore = newStoreFor("", databaseDir, evalDb, emb.space)
         val evalIndex = KnowledgeIndex(emb, evalStore)
         val buildT0 = com.sekb.shared.core.nowMillis()
         // ⚠️ 逐篇 ingest 并且**逐篇检查**：一条失败不能静默地让后面 11 篇全不进去
@@ -661,10 +722,10 @@ fun sekbSpikeRagSelfTest(modelPath: String, vocabText: String, databaseDir: Stri
                 "MRR=${Fmt.fixed(at40.mrr, 3)} 误召回=${at40.falsePositives}/${at40.unanswerable}" +
                 "（Android 基线 26/30、30/30、0.928、0/3）",
         )
-        evalStore.close()
+        if (evalStore is RdbVectorStore) evalStore.close()
     }
 
-    reopened.close()
+    if (reopened is RdbVectorStore) reopened.close()
     emb.close()
     r.note("总用时 ${com.sekb.shared.core.nowMillis() - t0}ms")
     return r.render()
