@@ -7,8 +7,8 @@
 
 | 工作流 | 负责人 | 涉及文件（重点） | 开始时间 |
 |---|---|---|---|
-| **E′ · 鸿蒙 H3 网络 + H4 凭证**（`@ohos.net.http` 实现 `HttpTransport` + 流式；HUKS 实现 `CredentialStore`，纯 Kotlin/Native cinterop） | DSH Agent（子代理 E′） | `apps/harmony/spike/knspike/src/ohosMain/kotlin/**`（优先新建）、`hapshell/entry/src/main/ets/**`、`entry/src/main/cpp/napi_init.cpp`、`entry/src/main/module.json5`、`scripts/harmony.sh`、`apps/harmony/README.md` | 2026-10-26 |
-| **F · 鸿蒙 H5 RAG + 检索同表**（RDB NDK C API 实现 `VectorStore`/`DocumentRegistry`；接共享层 `KnowledgeIndex`/`Retriever`/评测） | DSH Agent（子代理 F） | 同上（**优先新建文件**；与 E′ 共用目录，改动只加自己的注册行） | 2026-10-26 |
+| **E′ · 鸿蒙 H3 网络 + H4 凭证**（✅ 已达成：`36e9ecf`，设备 `H3 PASS 3/3`×2 轮 + `CRED PASS 8/8`；仍未验：真机/HTTPS/真实 enroll-refresh）（`@ohos.net.http` 实现 `HttpTransport` + 流式；HUKS 实现 `CredentialStore`，纯 Kotlin/Native cinterop） | DSH Agent（子代理 E′） | `apps/harmony/spike/knspike/src/ohosMain/kotlin/**`（优先新建）、`hapshell/entry/src/main/ets/**`、`entry/src/main/cpp/napi_init.cpp`、`entry/src/main/module.json5`、`scripts/harmony.sh`、`apps/harmony/README.md` | 2026-10-26 |
+| **F · 鸿蒙 H5 RAG + 检索同表**（进行中：RDB 探针 PASS，`OH_Rdb_Insert` 的 Kotlin/C++ 差异正在定位）（RDB NDK C API 实现 `VectorStore`/`DocumentRegistry`；接共享层 `KnowledgeIndex`/`Retriever`/评测） | DSH Agent（子代理 F） | 同上（**优先新建文件**；与 E′ 共用目录，改动只加自己的注册行） | 2026-10-26 |
 | **A · 共享层公共设施**（契约路径 N 方守卫、facts/状态文档同步、四端同表汇总） | DSH Agent（主线） | `scripts/check_protocol_paths.py`、`docs/多端跨端-*.md`、`docs/RFC-多端跨端方案.md`、`apps/README.md`、`docs/changelog.d/**` | 2026-10-25 |
 | **H · 撤销 iOS 桥（逻辑一份）**（把 `SekbApiBridge.swift` 改回共享层 `SekbApi`，`@Throws` 已补齐） | DSH Agent（主线） | `apps/ios/App/**`、`scripts/ios_app.sh`、`apps/ios/README.md` | 2026-10-26 |
 | **E · 职位分析定时刷新**（四层搜索+分析隔周一周一 06:00；报告不再随搜索过期清除；搜索 TTL 15 天） | DSH Agent（招聘分析线） | `backend/app/agents/job/market.py`、`backend/app/agents/job/job_cache.py`、`backend/app/api/routes/job.py`、`backend/app/scheduler/**`、`backend/app/services/job_schedule_service.py`、`backend/app/core/config.py`、`backend/config*.yaml`、`docs/changelog.d/**` | 2026-10-12 |
@@ -20,6 +20,19 @@
 > **D 只碰上表列出的文件**；`apps/shared/src/commonMain/**`（共享层公共逻辑）与 `apps/ios/**`、`apps/mac/**` 归主线，
 > D 若确需改动**先在报告里说明**，不要自行改动（共享层逻辑已有 295 用例与守卫兜着）。
 > `docs/CHANGELOG.md` 一律走 `docs/changelog.d/` 碎片（每个工作流用**各自的**碎片文件，不共用）。
+>
+> ### ⚠️ 2026-10-26 事故后的**硬约定**：`napi_init.cpp` 归主线独占
+>
+> 事故经过与复盘见 `docs/changelog.d/20261012-122434-*.md`：两个工作流同时编辑
+> `apps/harmony/spike/hapshell/entry/src/main/cpp/napi_init.cpp`，后保存者静默覆盖前一个 →
+> 重复/截断的 `Ping`、helper 被整段删除、双方注册行各消失一次，**编译与链接都失败过**。
+>
+> 即日起：
+> 1. **`napi_init.cpp` 由主线独占**，其他工作流**不编辑它**；要加 NAPI 入口就把**名字 + 参数**发给主线，
+>    或者写成**独立 `.cpp` + 在 `CMakeLists.txt` 显式列出**（E′ 的 `h3h4_napi.cpp` 就是这个形态，效果好）；
+> 2. **改完就提交**（本轮全部损失都来自"未提交的改动被覆盖后没有副本"）；
+> 3. **构建前先体检**：`grep -c 'static napi_value Ping'`（应为 1）与 `{`/`}` 计数是否相等——
+>    被截断的文件在这两项上立刻现形。
 
 > 端云协同 M0–M3（`docs/RFC-端云协同与端侧Agent.md` / 实施记录）已于 2026-09-20 暂停存档，
 > 真机到货后从实施记录 §0 的恢复指引继续。
