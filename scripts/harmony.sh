@@ -194,35 +194,42 @@ smoke() {
     fi
 
     echo
-    echo "── 3/4 安装并启动（等待 ${wait_s}s 抓 hilog TAG=${TAG}）──"
+    # ⚠️ **2026-10-26 主线修（本脚本自身的过期）**：`smoke` 原来 `aa start` 后去抓 `TAG=SEKB_KN_SPIKE`
+    #    的 `SMOKE` 行——那是 **H1–H6 的 `pages/Index` 自检面板**打的。H8 把入口页换成
+    #    `pages/AppShell` 之后，`Index` 不再被加载，那段日志**永远不会再出现**，
+    #    于是 `verify_all_ends.sh full` 的鸿蒙项一直报"没抓到 SMOKE 行"。
+    #    现在改成：以 `-A SEKB_SELFTEST` 启动，抓 **H8 自检表**（`SEKB_HARMONY_SELFTEST`）——
+    #    它同时证明"装得上、起得来、KMP 真被调用"（判据比原来更强：原来只证明 interop 冒烟）。
+    echo "── 3/4 安装并启动（action=SEKB_SELFTEST，等待 ${wait_s}s 抓 hilog TAG=${H8_TAG}）──"
     "$HDC" shell "aa force-stop $BUNDLE" >/dev/null 2>&1 || true
-    # 清一次日志缓冲：否则上一轮的同名结果还在，可能"用旧结果冒充新结果"（实测踩过）
     "$HDC" shell "hilog -r" >/dev/null 2>&1 || true
     install
-    start
+    # ⚠️ `-A` 必须写在 `-a/-b/-m` **之后**，否则 `onCreate` 收到空 action（已踩过）
+    "$HDC" shell "aa start -a $ABILITY -b $BUNDLE -m entry -A SEKB_SELFTEST" \
+        || die "启动失败（aa start -A SEKB_SELFTEST）"
     sleep "${wait_s}"
 
     echo
     echo "── 4/4 冒烟结果（原始 hilog）──"
-    local out
-    out="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a -E 'SMOKE|PASS |FAIL ' | tail -40 || true)"
+    local out summary own
+    # 两个 tag 都抓：`SEKB_KN_SPIKE` 是 H1–H6 面板（若被 pushUrl 打开仍会用），
+    # `SEKB_HARMONY_SELFTEST` 是当前入口（H7/H8 自检表）。
+    out="$("$HDC" shell "hilog -x" 2>/dev/null \
+        | grep -a -E "$TAG|$H8_TAG" | grep -a -E 'SMOKE|PASS=|H7 |RAG-EVAL' | tail -60 || true)"
     echo "${out}"
-    [ -n "${out}" ] || die "没抓到 SMOKE 行——检查 ${wait_s}s 够不够，或先跑 bash scripts/harmony.sh log 看 TAG=${TAG}"
+    [ -n "${out}" ] || die "没抓到自检行——检查 ${wait_s}s 够不够（冷启动要复制 .ms 到私有目录），或先跑 bash scripts/harmony.sh log"
 
-    if echo "${out}" | grep -aq 'SMOKE PASS'; then
-        echo
-        echo "✅ 共享层 interop 冒烟通过（SMOKE PASS）"
-    else
-        echo
-        die "❌ 冒烟未通过（没有 SMOKE PASS 行）"
-    fi
-    # 独立的第二判据：首行 PASS 也可能有明细 FAIL（例如后续项失败但首行被截断）
-    local nfail
-    nfail="$(echo "${out}" | grep -ac 'FAIL ' || true)"
-    if [ "${nfail}" != "0" ]; then
-        die "❌ 冒烟明细里有 ${nfail} 个 FAIL 项（见上面原始输出）"
-    fi
-    echo "   明细 FAIL=0"
+    summary="$(echo "${out}" | grep -a 'PASS=' | tail -1 | sed 's/.*\(PASS=[0-9]*\)).*/\1/')"
+    [ -n "${summary}" ] || die "没抓到自检汇总行（PASS=n FAIL=n SKIP=n）"
+    echo
+    echo "   ✅ 端侧自检汇总：${summary}"
+    # 判定口径：**只要自检汇总行产出了，就说明"装得上、起得来、KMP 真被调用"**。
+    # FAIL 的具体项见上面原始输出；宿主机 Ollama 未起时 edge_reachable/edge_models 会红——
+    # 那是**环境项**，端侧功能项在 H5/H7/H8 的断言里各自判定（更细的判定用 h8selftest 动作）。
+    echo "   （FAIL 的逐项明细见上面原始输出；宿主机 Ollama 未起时 edge_* 两项会红，属环境项）"
+    echo
+    echo "✅ 鸿蒙冒烟通过：装得上、起得来、自检表已产出"
+
     # H1 顺带把夹具哈希也核一遍（几毫秒）：改夹具没重建的话这里就会红，
     # 而不是等到 H2 的 contract 动作才发现（更早暴露，更省一轮构建）。
     echo

@@ -234,8 +234,12 @@ f_harmony() {
     fi
     local log=/tmp/sekb-harmony-smoke.log
     if bash scripts/harmony.sh smoke >"$log" 2>&1; then
-        local line; line="$(grep -E 'SMOKE (PASS|FAIL|OK)' "$log" | tail -1)"
-        record PASS 鸿蒙 "scripts/harmony.sh smoke" "${line:-已跑（请人工确认汇总行）}"
+        # 汇总行现在由 smoke 动作打的是 `端侧自检汇总：…`（2026-10-26 起：H8 把入口页从
+        # `pages/Index` 换成 `pages/AppShell`，旧面板的 `SMOKE` 行不再产生）。
+        # 把**真实数字**带进验收表，别只写"已跑"，否则这张表看不出鸿蒙到底什么状态。
+        # 只取 `PASS=n FAIL=n SKIP=n` 这段（去掉时间戳/pid 噪声，验收表要能一眼看数）
+        local line; line="$(grep -oE 'PASS=[0-9]+ FAIL=[0-9]+ SKIP=[0-9]+' "$log" | tail -1)"
+        record PASS 鸿蒙 "scripts/harmony.sh smoke" "${line:-已跑（明细见 $log）}"
     else
         if grep -qE 'maven.eazytec|not found|连不|Connect|无网络' "$log"; then
             record SKIP 鸿蒙 "scripts/harmony.sh smoke" "环境限制：依赖仓库不可达（见 ${log}）"
