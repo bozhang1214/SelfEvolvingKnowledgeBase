@@ -412,7 +412,8 @@ async function stepRag(a: Acc, ctx: AppCtx, ui: common.UIAbilityContext): Promis
   a.check('rag_diag_fields_present', ing1.dbChunks !== -1 || ing1.sizeErr.length > 0,
     `Kotlin 侧回读诊断字段：dbChunks=${ing1.dbChunks} allRows=${ing1.allRows}` +
     ` sizeErr=${ing1.sizeErr} allErr=${ing1.allErr}` +
-    `（两个都是默认 -1 且无错误信息 ⇒ Kotlin 侧那段诊断根本没执行：先确认产物是否最新，别查业务）` +\n    ` ｜ 原始报文=${ing1.rawJson.substring(0, 220)}`);
+    `（两个都是默认 -1 且无错误信息 ⇒ Kotlin 侧那段诊断根本没执行：先确认产物是否最新，别查业务）` +
+    ` ｜ 原始报文=${ing1.rawJson.substring(0, 220)}`);
 
   const docs = ragDocuments();
   a.check('rag_ingest', docs.ok && docs.docs.filter((d: DocInfo) =>

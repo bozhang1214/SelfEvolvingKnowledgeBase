@@ -158,6 +158,14 @@ export function ragIngest(sourceId: string, name: string, text: string, sizeByte
     r.zeroFilled = o.zeroFilled !== undefined ? o.zeroFilled : 0;
     r.millis = o.millis !== undefined ? o.millis : 0;
     r.note = o.note !== undefined ? o.note : '';
+    // ⚠️ **这四个字段原来只加在类上、没在这里解析**（2026-10-26 主线自查到的真缺陷）：
+    //    于是它们恒为类默认值 -1/''，报告里看起来像"Kotlin 侧诊断没执行"，
+    //    害我把方向错判成"产物陈旧/打包不同源"。
+    //    这正是我自己加的那条断言 `rag_diag_fields_present` 抓出来的——断言写对了，问题在解析层。
+    r.dbChunks = o.dbChunks !== undefined ? o.dbChunks : -1;
+    r.allRows = o.allRows !== undefined ? o.allRows : -1;
+    r.sizeErr = o.sizeErr !== undefined ? o.sizeErr : '';
+    r.allErr = o.allErr !== undefined ? o.allErr : '';
   } catch (e) {
     r.ok = false;
     r.reason = `桥不可用：${e}`;
