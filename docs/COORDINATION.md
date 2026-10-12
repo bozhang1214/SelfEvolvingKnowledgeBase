@@ -7,8 +7,12 @@
 
 | 工作流 | 负责人 | 涉及文件（重点） | 开始时间 |
 |---|---|---|---|
-| **D · `.ms` 掩码保真**（H6 关键路径：让转换产物真的使用 `sekb_additive_mask_zero`，使鸿蒙嵌入与 Android 同空间 0.244） | DSH Agent（子代理 D） | `scripts/model_to_ms_maskfree.py`、`scripts/model_to_ms.sh`、`scripts/check_maskfree_padding_gap.py`、`apps/shared-core/src/ohosMain/**`、`apps/harmony/spike/knspike/src/ohosMain/**`、`scripts/harmony.sh`（`embed` 动作）、`apps/harmony/README.md` | 2026-10-25 |
+| **E′ · 鸿蒙 H3 网络 + H4 凭证**（`@ohos.net.http` 实现 `HttpTransport` + 流式；HUKS 实现 `CredentialStore`，纯 Kotlin/Native cinterop） | DSH Agent（子代理 E′） | `apps/harmony/spike/knspike/src/ohosMain/kotlin/**`（优先新建）、`hapshell/entry/src/main/ets/**`、`entry/src/main/cpp/napi_init.cpp`、`entry/src/main/module.json5`、`scripts/harmony.sh`、`apps/harmony/README.md` | 2026-10-26 |
+| **F · 鸿蒙 H5 RAG + 检索同表**（RDB NDK C API 实现 `VectorStore`/`DocumentRegistry`；接共享层 `KnowledgeIndex`/`Retriever`/评测） | DSH Agent（子代理 F） | 同上（**优先新建文件**；与 E′ 共用目录，改动只加自己的注册行） | 2026-10-26 |
 | **A · 共享层公共设施**（契约路径 N 方守卫、facts/状态文档同步、四端同表汇总） | DSH Agent（主线） | `scripts/check_protocol_paths.py`、`docs/多端跨端-*.md`、`docs/RFC-多端跨端方案.md`、`apps/README.md`、`docs/changelog.d/**` | 2026-10-25 |
+| **H · 撤销 iOS 桥（逻辑一份）**（把 `SekbApiBridge.swift` 改回共享层 `SekbApi`，`@Throws` 已补齐） | DSH Agent（主线） | `apps/ios/App/**`、`scripts/ios_app.sh`、`apps/ios/README.md` | 2026-10-26 |
+| **E · 职位分析定时刷新**（四层搜索+分析隔周一周一 06:00；报告不再随搜索过期清除；搜索 TTL 15 天） | DSH Agent（招聘分析线） | `backend/app/agents/job/market.py`、`backend/app/agents/job/job_cache.py`、`backend/app/api/routes/job.py`、`backend/app/scheduler/**`、`backend/app/services/job_schedule_service.py`、`backend/app/core/config.py`、`backend/config*.yaml`、`docs/changelog.d/**` | 2026-10-12 |
+| ~~**D · `.ms` 掩码保真**~~ ✅ 已收工（`9ee1679` 等 5 个提交）：真因是**设备侧把 int32 token 输入按 int64 写、越界 2048B**（不是转换器丢掩码），设备 `EMBED PASS 10/10`、cos=0.2439 | — | — | — |
 | ~~**B · iOS + Mac UI**~~ ✅ 已收工（`8f5ca75`，自检 42 PASS / 0 FAIL / 1 SKIP，截图已复核） | — | — | — |
 | ~~**C · 鸿蒙 H1→H6 半程**~~ 已收工（`f993d38`/`7d38264`/`6b4dd5d`/`d367d02`）：H1/H2 ✅、H3 改判（`7a25d7e`）、H4–H8 待续 | — | — | — |
 
