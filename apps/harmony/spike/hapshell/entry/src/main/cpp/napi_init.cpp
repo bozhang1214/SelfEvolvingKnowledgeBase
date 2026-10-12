@@ -67,6 +67,42 @@ extern "C" const char* sekb_spike_rdb_probe(const char* database_dir);
 //    返回多行报告，首行 `RAG PASS|FAIL n/N`。
 extern "C" const char* sekb_spike_rag_selftest(const char* model_path, const char* vocab_text,
                                                const char* database_dir);
+// ═══════════════════════════════════════════════════════════════════════════
+// NAPI 参数工具（`napi_args::`）
+//
+// ⚠️ 这十几行是 2026-10-26 那场"并发保存互相覆盖"事故后**重建**的：两个 Agent 同时编辑本文件，
+//    后保存的人静默覆盖前一个，`napi_args` 的两个 helper 一度只剩调用点（编译报
+//    `no member named 'argAt' in namespace 'napi_args'`）。调用点已统一到同一个 namespace，
+//    **别再在各自函数体里手写 `strAt` lambda**（那样每次合并都要重新对一遍）。
+//
+// `argAt` 显式传 `want`：`napi_get_cb_info` 需要已知长度的数组；参数不够时返回空串（不崩），
+// 于是"ArkTS 少传参数"表现为判据 FAIL 而不是 SIGSEGV。
+// ═══════════════════════════════════════════════════════════════════════════
+namespace napi_args {
+
+/** 取第 i 个字符串参数；缺失或非字符串 → 空串（**不崩**）。 */
+inline std::string argAt(napi_env env, napi_callback_info info, size_t want, size_t i) {
+    std::vector<napi_value> args(want, nullptr);
+    size_t argc = want;
+    napi_get_cb_info(env, info, &argc, args.data(), nullptr, nullptr);
+    if (i >= argc || args[i] == nullptr) return {};
+    size_t len = 0;
+    napi_get_value_string_utf8(env, args[i], nullptr, 0, &len);
+    std::string buf(len + 1, '\0');
+    napi_get_value_string_utf8(env, args[i], buf.data(), buf.size(), &len);
+    buf.resize(len);
+    return buf;
+}
+
+/** 把 C 字符串包成 NAPI 字符串；`nullptr` → 空串。 */
+inline napi_value returnString(napi_env env, const char* s) {
+    napi_value out = nullptr;
+    napi_create_string_utf8(env, s == nullptr ? "" : s, NAPI_AUTO_LENGTH, &out);
+    return out;
+}
+
+}  // namespace napi_args
+
 static napi_value Ping(napi_env env, napi_callback_info /*info*/) {
     napi_value out = nullptr;
     napi_create_int32(env, sekb_spike_ping(), &out);
