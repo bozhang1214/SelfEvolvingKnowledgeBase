@@ -77,11 +77,18 @@ class MindSporeBgeEmbedding(
     var roleSource: String? = null
         private set
 
-    /** 诊断串（自检打印：模型名、输入元素数、角色识别依据）——"模型在哪/怎么分辨输入"不靠猜。 */
+    /**
+     * 诊断串（自检打印：模型名、输入元素数/声明 dtype/缓冲字节数/实测每元素宽度）。
+     *
+     * ⚠️ 顺序很讲究：`输入布局` 放在**第一行**，因为脚本抓 hilog 时按 `embed_` 前缀 grep，
+     * 多行只显示第一行——而"每个输入缓冲多少字节"正是本轮缺陷（int64 写 int32 缓冲越界）
+     * 唯一直接的设备侧证据，必须出现在第一行里。上一版放在第二行，等于设备上根本看不到。
+     */
     val diagnostics: String
         get() {
             val s = session ?: return "未打开"
-            return "模型=${modelPath.substringAfterLast('/')} 输入=${s.inputs} 角色识别=${roleSource ?: "尚未推理"}"
+            return "模型=${modelPath.substringAfterLast('/')} 输入布局=${s.inputLayout} " +
+                "角色识别=${roleSource ?: "尚未推理"}"
         }
 
     /** 诊断用：把一段文本的 token id 暴露出来（"向量不对"时先分清是分词还是推理的锅）。 */
@@ -125,6 +132,30 @@ class MindSporeBgeEmbedding(
                 lastError = "${e::class.simpleName}: ${e.message}"
                 FloatArray(space.dim)
             }
+        }
+    }
+
+    /**
+     * 单条文本的嵌入（自检用入口）。
+     *
+     * ⚠️ 它是**必须存在**的：`EmbedSanity.kt` 一直在调用 `emb.embedOne(...)`，
+     * 而本类只定义了私有的 `embedOneText(s, text)` —— 也就是说**源码在检出状态下编不过**
+     * （`Unresolved reference: embedOne`）。设备上那个跑通的产物因此是**更早的构建缓存**，
+     * 而不是当前源码编出来的。这类"产物比源码新"的错位很危险：它让"设备上跑通了"
+     * 与"仓库里这份代码能编"变成两件事。这里把它补上，让 ① 源码能编、② 自检走同一条
+     * 失败即降级路径（不抛异常，失败记在 [lastError]）。
+     */
+    fun embedOne(text: String, fill: Float = maskFill): FloatArray {
+        val s = session
+        if (s == null) {
+            lastError = "会话未打开（先 open()）"
+            return FloatArray(space.dim)
+        }
+        return try {
+            embedOneText(s, text, fill).also { lastError = null }
+        } catch (e: Throwable) {
+            lastError = "${e::class.simpleName}: ${e.message}"
+            FloatArray(space.dim)
         }
     }
 

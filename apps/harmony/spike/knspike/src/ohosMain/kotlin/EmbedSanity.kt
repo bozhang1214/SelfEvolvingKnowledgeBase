@@ -138,25 +138,51 @@ fun sekbSpikeEmbedSanity(modelPath: String, vocabText: String): String {
     //    上一版把阈值放成 `< 0.95`，结果 cos=0.8154 也算 PASS —— 那是**假绿**：
     //    0.8154 说明两段无关文本在嵌入空间里高度相似，检索排序虽仍能跑，
     //    但"端侧与云端同空间"这条硬边界已经失效（换端索引不可复用、阈值全部失准）。
-    //    实测根因是 ids/token_type_ids 互换了位置（见 MindSporeBgeEmbedding 的说明）。
+    //    **本条的硬失败口径保留**（`|cos-0.244|<=0.02`），并且在下面 ①′ 补上
+    //    "掩码到底有没有被用"的直接判据 —— 上一轮就是缺了后者，才让缺陷活了下来。
     r.check(
         "embed_sanity_cosine",
         abs(cos - 0.244) <= 0.02,
-        "cos=${f4(cos)}（Android 基线 0.244，容差 ±0.02；明显偏大说明掩码约定或输入角色不对）",
+        "cos=${f4(cos)}（AWS/Android 基线 0.244，容差 ±0.02；明显偏大说明掩码没生效）",
     )
 
-    // ①′ **掩码取值扫描**：默认 `-inf` 在设备上给出 0.8008，而 host 用 `-inf` 是 0.2439
-    //     （且读回证明掩码写对了）→ 差异在 MindSpore 对 `-inf` 的处理上。
-    //     很多运行时的 attention 融合核要求**有限**掩码值，所以把候选值一次扫完，
-    //     让"正确约定"成为设备上的实测事实，而不是我的猜测。
+    // ①′ **掩码敏感性**：同一批 token id、只把 additive mask 改成"全零"（= 不掩任何位），
+    //     余弦必须**明显变大**。
+    //
+    //     为什么这条是"掩码真的生效"的判据（而不是"取值扫描碰巧接近 0.244"）：
+    //       · host ONNX 实测：正确掩码 0.2439 / 全零掩码 0.6319（同一张图、同一套 id）——
+    //         两者差 0.39，是数量级级别的差异，不是浮点噪声；
+    //       · 若运行时**忽略**掩码输入（常量折叠/没喂进去），两个 cos 会**逐位相同**，
+    //         这条立刻变红。本轮缺陷（写整数 id 越界 2048 B）正是被这条抓出来的。
+    val cosZero = try {
+        emb.debugPairCosine(textA, textB, 0.0f)
+    } catch (e: Throwable) {
+        Double.NaN
+    }
+    val maskEffect = if (cosZero.isNaN()) Double.NaN else abs(cosZero - cos)
+    r.check(
+        "embed_mask_effective",
+        maskEffect.isNaN().not() && maskEffect > 0.05,
+        "正确掩码 cos=${f4(cos)} vs 全零掩码 cos=${f4(cosZero)}：差=${f4(maskEffect)}（必须 > 0.05；" +
+            "≈0 说明 mask 输入被运行时忽略）",
+    )
+
+    // ①″ **掩码取值扫描**：默认 `-inf` 与有限大负数（-1e9 / -65504 / -1e4）都可接受。
+    //
+    //     这条现在**不再是"猜哪个值对"**（那已由 host 的 0.2439 与上面 ① 定死），
+    //     而是"换一个掩码约定也仍然与基线同空间"的鲁棒性判据。
+    //     ⚠️ 极差 ≈0 **不能**当作"掩码被忽略"的证据（我第一版就这么写错了）：
+    //     host ORT 实测 -1e9 / -65504 / -1e4 / -inf 四者 cos **完全相同**（极差 0.00e+00）——
+    //     因为这些大负数在 fp32 的 softmax 里**饱和度一致**。真正区分"用没用掩码"
+    //     的是上面 ①′（正确掩码 vs **全零**掩码，差 0.725）与 ①（0.2439 vs 0.9688）。
     val candidates = listOf(
         -1.0e9f to "-1e9",
         -65504.0f to "-65504(fp16 最小有限值)",
         -1.0e4f to "-1e4",
         Float.NEGATIVE_INFINITY to "-inf(默认)",
     )
-    var best: Pair<Float, Double>? = null
     val scan = StringBuilder()
+    val got = mutableListOf<Double>()
     for ((fill, label) in candidates) {
         val c = try {
             emb.debugPairCosine(textA, textB, fill)
@@ -164,19 +190,20 @@ fun sekbSpikeEmbedSanity(modelPath: String, vocabText: String): String {
             scan.append("$label=异常(${e::class.simpleName}) ")
             continue
         }
+        got += c
         scan.append("$label=${f4(c)} ")
-        if (best == null || abs(c - 0.244) < abs(best!!.second - 0.244)) best = fill to c
     }
-    val bestOk = best != null && abs(best!!.second - 0.244) <= 0.02
+    val spread = if (got.size >= 2) got.max() - got.min() else Double.NaN
     r.check(
         "embed_mask_value_scan",
-        bestOk,
-        "扫描：${scan.toString().trim()}｜最接近 0.244 的是 ${best?.first}（cos=${best?.second?.let { f4(it) }}）",
+        got.isNotEmpty() && got.all { abs(it - 0.244) <= 0.02 },
+        "扫描：${scan.toString().trim()}｜与基线 0.244 的最大偏差=" +
+            f4(got.maxOfOrNull { abs(it - 0.244) } ?: Double.NaN) +
+            "（全部须 ≤0.02）｜不同取值间极差=${f4(spread)}" +
+            "（≈0 是**正常**的：这些大负数在 softmax 里饱和度一致）",
     )
-    if (bestOk) {
-        // 让后续调用（含真实检索）用上刚测出来的正确约定
-        emb.maskFill = best!!.first
-    }
+    // 让后续调用（含真实检索）用回经 host 验证过的约定
+    emb.maskFill = Float.NEGATIVE_INFINITY
 
     // ② L2 范数
     val nA = l2(vA)
