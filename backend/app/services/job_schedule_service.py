@@ -118,6 +118,7 @@ def filter_layer_jobs(
     include_any = list(getattr(layer, "include_any", None) or [])
     exclude = list(getattr(layer, "exclude", None) or [])
     require_ai = bool(getattr(layer, "require_ai", False))
+    ai_exempt = list(getattr(layer, "ai_exempt_any", None) or [])
     floor_k = int(getattr(layer, "salary_floor_k", 0) or 0)
 
     kept: list[dict[str, Any]] = []
@@ -137,7 +138,9 @@ def filter_layer_jobs(
         if exclude and any(k in title for k in exclude):
             _drop("命中 exclude")
             continue
-        if require_ai:
+        if require_ai and not any(k in title for k in ai_exempt):
+            # 免除项（如 FDE / 前沿部署）本身就是目标信号，不再要求出现「AI」——
+            # 否则「FDE 工程师」这种最正的岗位会因为标题没写 AI 而被误杀。
             blob = title + " " + (j.get("jd_text") or "")[:_JD_SCAN_CHARS]
             if not _AI_RE.search(blob):
                 _drop("无 AI 信号")
@@ -171,9 +174,13 @@ async def refresh_one_layer(
     if not label or not keywords:
         return {"label": label, "ok": False, "error": "label 或 keywords 为空"}
 
+    saturate = bool(getattr(layer, "saturate", False))
+    sat_threshold = int(getattr(layer, "saturate_threshold", 35) or 35)
+
     collected = 0
     kept: list[dict[str, Any]] = []
     dropped: dict[str, int] = {}
+    pages = 0
     for kw in keywords:
         collector = JobCollector(
             city=city,
@@ -181,8 +188,22 @@ async def refresh_one_layer(
             exclude_companies=cfg.exclude_companies,
         )
         result = await collector.fetch_all(keyword=kw, page=0, limit=40)
-        collected += int(result.get("count") or 0)
-        part, d = filter_layer_jobs(result.get("jobs") or [], layer)
+        first = int(result.get("count") or 0)
+        collected += first
+        pages += 1
+        raw_jobs = list(result.get("jobs") or [])
+        # 饱和翻页：高产词补采第 2 页（采集已受 source_guard 节流，不会打爆站点）
+        if saturate and first >= sat_threshold:
+            try:
+                more = await collector.fetch_all(keyword=kw, page=1, limit=40)
+                extra = list(more.get("jobs") or [])
+                collected += int(more.get("count") or 0)
+                pages += 1
+                logger.info("饱和翻页：补采第 2 页", keyword=kw, first=first, extra=len(extra))
+                raw_jobs.extend(extra)
+            except Exception as e:  # noqa: BLE001 - 翻页失败不影响第 1 页结果
+                logger.warning("饱和翻页失败（忽略）", keyword=kw, error=str(e)[:120])
+        part, d = filter_layer_jobs(raw_jobs, layer)
         kept.extend(part)
         for k, v in d.items():
             dropped[k] = dropped.get(k, 0) + v
@@ -229,6 +250,7 @@ async def refresh_one_layer(
         "ok": True,
         "search_id": search_id,
         "keywords": len(keywords),
+        "pages": pages,
         "collected": collected,
         "kept": len(unique),
         "dropped": dropped,

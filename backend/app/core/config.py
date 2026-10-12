@@ -448,8 +448,15 @@ class JobLayerConfig(BaseModel):
     # ---- 筛选规则（2026-10-12：裸采噪声极大，必须筛）----
     include_any: list[str] = []            # 标题命中任一才保留（空=不限制）
     require_ai: bool = False               # 还要求标题或 JD 含 AI 信号
+    ai_exempt_any: list[str] = []          # 标题命中任一则**免除** require_ai（本身就是目标信号）
     exclude: list[str] = []                # 标题命中任一即剔除
     salary_floor_k: int = 0                # 薪资区间上限低于此值则剔除（0=不限）
+    # ---- 饱和翻页 ----
+    # 单关键词采集量达到 saturate_threshold 时，补采第 2 页。
+    # 依据：2026-09-23 的 FDE 全量扩搜中，这是"最大的解锁点"——
+    # `大模型交付` 一词实际有 165 条，只采第 1 页会拿不到（涨 70 条）。
+    saturate: bool = False
+    saturate_threshold: int = 35
 
 
 class JobScheduleConfig(BaseModel):

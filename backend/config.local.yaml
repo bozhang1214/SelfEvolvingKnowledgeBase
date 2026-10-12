@@ -471,22 +471,31 @@ job:
         city: 北京
         include_any: [解决方案, 售前, 方案架构]
         exclude: [实习, 校招, 应届, 管培]
+        saturate: true
       - label: 第二层·技术产品+座舱
         keywords: [AI产品经理, 大模型产品经理, 智能座舱, Agent产品经理, 技术产品经理, 座舱产品]
         city: 北京
         include_any: [产品经理, 产品专家, 座舱]
         exclude: [实习, 校招, 应届, 管培, 运营]
+        saturate: true
       - label: 第三层·Agent平台开发
         keywords: [Agent架构师, AI Agent, Agent开发工程师, 大模型应用开发, Agent Infra, Harness]
         city: 北京
         include_any: [Agent, 智能体, 大模型, Infra, Harness]
         require_ai: true
         exclude: [产品经理, 售前, 实习, 校招, 应届]
+        saturate: true
       - label: 第四层·企业级AI Agent交付(FDE)
-        keywords: [FDE, 前沿部署, 前向部署, Forward Deployed, 大模型交付, AI交付, 智能体交付, 交付工程师]
+        # 22 词取自 2026-09-23 全量扩搜（归档文档 §3.1）——只留 8 词会让覆盖腰斩
+        keywords: [FDE, 前沿部署, 前向部署, Forward Deployed, 部署工程师, 交付工程师, 大模型交付, AI交付,
+                   智能体交付, 交付专家, 交付架构师, 实施交付, 解决方案交付, 大模型实施, 智能体部署,
+                   大模型落地, AI落地, 现场工程师, 交付经理, 客户成功工程师, 解决方案工程师, 应用工程师]
         city: 北京
         include_any: [FDE, 前沿部署, 前向部署, 前置部署, Forward Deployed, 交付, 实施, 部署, 现场, 前线, 客户成功]
         require_ai: true
+        # 规则①：这些词本身即目标信号，免除 require_ai（否则「FDE 工程师」会被误杀）
+        ai_exempt_any: [FDE, 前沿部署, 前向部署, 前置部署, Forward Deployed]
+        saturate: true
         exclude: [算法工程师, 算法专家, 算法应用, 算法模型, 模型训练, 微调, 推理, 算子, CUDA, NPU, TensorRT, vLLM, 加速, 芯片, 嵌入式, 部署优化, 端侧AI部署, 产品经理, 产品专家, 售前, 销售, 商务, 渠道, 拓展, 实习, 校招, 应届, 讲师, 培训, 数据交付, 数据运营, 标注, 测试工程师, 运维工程师, 系统安全, 自动驾驶, 智驾, 具身, 机器人, IDC, 算力基础设施, 数据库, 物流, 广告, 媒介, CDN, 地图, 游戏, 总经理, 大区, 主管, 分析师, 运营总监]
         salary_floor_k: 25
   # 分析链路传输方式（P4）：mcp=走 jobcopilot-mcp 子进程（推荐）；direct=进程内直接调用（回滚开关）

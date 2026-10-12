@@ -104,6 +104,27 @@ class TestFilterLayerJobs:
         assert len(kept) == 2
         assert dropped == {"无 AI 信号": 1}
 
+    def test_ai_exempt_any_skips_ai_requirement(self):
+        """规则①：FDE / 前沿部署 这类词本身即目标信号，不应因为没有「AI」字样被误杀。
+
+        回归背景（2026-10-12）：一刀切 require_ai 会让标题为「FDE 工程师」、
+        JD 正文也没写 AI 的正确岗位被剔除 —— 而它恰恰是最正的 FDE 岗。
+        """
+        layer = _layer(
+            include_any=["FDE", "前沿部署", "交付"],
+            require_ai=True,
+            ai_exempt_any=["FDE", "前沿部署"],
+        )
+        jobs = [
+            {"title": "FDE 工程师", "jd_text": "负责客户现场交付"},          # 免除 → 保留
+            {"title": "前沿部署工程师", "jd_text": "驻场实施"},              # 免除 → 保留
+            {"title": "交付工程师", "jd_text": "传统 IT 交付"},              # 未免除且无 AI → 剔除
+            {"title": "交付工程师", "jd_text": "负责 Agent 落地"},           # 未免除但有 AI → 保留
+        ]
+        kept, dropped = svc.filter_layer_jobs(jobs, layer)
+        assert [j["title"] for j in kept] == ["FDE 工程师", "前沿部署工程师", "交付工程师"]
+        assert dropped == {"无 AI 信号": 1}
+
     def test_salary_floor_drops_low_and_keeps_negotiable(self):
         layer = _layer(salary_floor_k=25)
         jobs = [
@@ -184,6 +205,85 @@ class TestRefreshOneLayer:
         assert analyzed["keyword"] == "第四层·企业级AI Agent交付(FDE)"
         assert analyzed["search_id"] == out["search_id"]
         assert out["ok"] is True and out["job_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_saturate_fetches_second_page_for_high_yield_keyword(self, monkeypatch):
+        """高产词（≥阈值）补采第 2 页 —— 2026-09-23 扩搜里"最大的解锁点"。"""
+        calls: list[tuple[str, int]] = []
+
+        class _FakeCollector:
+            def __init__(self, **kw: Any) -> None:
+                pass
+
+            async def fetch_all(self, keyword: str, page: int = 0, limit: int = 40):
+                calls.append((keyword, page))
+                if page == 0:
+                    return {"count": 60, "jobs": [{"title": "FDE 岗A"}], "sources": {}}
+                return {"count": 25, "jobs": [{"title": "FDE 岗B"}], "sources": {}}
+
+        async def fake_analyze(**kw: Any) -> dict[str, Any]:
+            return {"cached": False, "search_id": kw["search_id"],
+                    "report": {"keyword": kw["keyword"], "job_count": len(kw["jobs"])}}
+
+        monkeypatch.setattr(svc, "JobCollector", _FakeCollector)
+        monkeypatch.setattr(svc, "save_cached_jobs", lambda k, j: None)
+        monkeypatch.setattr(svc, "load_user_profile", lambda uid: "p")
+        import app.agents.job.archive as archive
+        import app.agents.job.market as market
+        monkeypatch.setattr(market, "analyze_market", fake_analyze)
+        monkeypatch.setattr(market, "delete_report", lambda *a, **k: True)
+        monkeypatch.setattr(archive, "save_report", lambda *a, **k: None)
+
+        class _Ctx:
+            class config:  # noqa: N801
+                class job:  # noqa: N801
+                    default_city = "北京"
+                    exclude_companies: list[str] = []
+            llm_factory = object()
+
+        layer = _layer(keywords=["大模型交付"], include_any=["FDE"], saturate=True,
+                       saturate_threshold=35)
+        out = await svc.refresh_one_layer(_Ctx(), "u1", layer)
+
+        assert calls == [("大模型交付", 0), ("大模型交付", 1)]
+        assert out["pages"] == 2
+        assert out["collected"] == 85  # 60 + 25
+
+    @pytest.mark.asyncio
+    async def test_saturate_off_fetches_only_first_page(self, monkeypatch):
+        calls: list[int] = []
+
+        class _FakeCollector:
+            def __init__(self, **kw: Any) -> None:
+                pass
+
+            async def fetch_all(self, keyword: str, page: int = 0, limit: int = 40):
+                calls.append(page)
+                return {"count": 60, "jobs": [{"title": "FDE 岗A"}], "sources": {}}
+
+        async def fake_analyze(**kw: Any) -> dict[str, Any]:
+            return {"cached": False, "search_id": kw["search_id"],
+                    "report": {"keyword": kw["keyword"], "job_count": 1}}
+
+        monkeypatch.setattr(svc, "JobCollector", _FakeCollector)
+        monkeypatch.setattr(svc, "save_cached_jobs", lambda k, j: None)
+        monkeypatch.setattr(svc, "load_user_profile", lambda uid: "p")
+        import app.agents.job.archive as archive
+        import app.agents.job.market as market
+        monkeypatch.setattr(market, "analyze_market", fake_analyze)
+        monkeypatch.setattr(market, "delete_report", lambda *a, **k: True)
+        monkeypatch.setattr(archive, "save_report", lambda *a, **k: None)
+
+        class _Ctx:
+            class config:  # noqa: N801
+                class job:  # noqa: N801
+                    default_city = "北京"
+                    exclude_companies: list[str] = []
+            llm_factory = object()
+
+        layer = _layer(keywords=["大模型交付"], include_any=["FDE"], saturate=False)
+        out = await svc.refresh_one_layer(_Ctx(), "u1", layer)
+        assert calls == [0] and out["pages"] == 1
 
     @pytest.mark.asyncio
     async def test_missing_label_or_keywords_fails_fast(self):
