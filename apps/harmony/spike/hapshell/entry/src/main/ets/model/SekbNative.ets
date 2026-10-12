@@ -84,9 +84,20 @@ export class RagOpResult {
 /** `ragRetrieve` 的结果。 */
 /** 检索命中（NAPI 回来的形状：`{"source","score","snippet"}`）。 */
 interface RawHit {
-  sourceId: string;
+  /**
+   * ⚠️ **Kotlin 侧发的字段名是 `source`，不是 `sourceId`**（2026-10-26 主线查明的真缺陷）。
+   * 这里原来声明成 `sourceId` 并直接 `h.sourceId` 取用 → 永远 `undefined` → `Source.sourceId=''`，
+   * 于是**检索来源名在界面上恒为空**、自检里 `hits[0].sourceId === srcId` 永远不成立。
+   * 症状极具误导性：向量检索能给出合理分数，只有"来源"是空的，看起来像"检索没命中"。
+   * 两个字段都声明（`source` 为准，`sourceId` 兼容），取值时走 `??` 兜底。
+   */
+  source?: string;
+  sourceId?: string;
   score: number;
   snippet: string;
+  /** Kotlin 侧另发的命中行 id（`<sourceId>#<片号>`）与向量维度，用于诊断"命中哪一行、是否零向量"。 */
+  id?: string;
+  dim?: number;
 }
 
 export class RagHitsResult {
@@ -210,7 +221,14 @@ export function ragRetrieve(query: string, topK: number): RagHitsResult {
     const hits: Source[] = [];
     if (o.hits !== undefined && o.hits !== null) {
       for (const h of o.hits as RawHit[]) {
-        hits.push(new Source(h.sourceId, h.score, h.snippet));
+        // 取 `source`（Kotlin 侧真名），再退 `sourceId`（旧声明）；两者都没有才用空串
+        const src: string = h.source !== undefined && h.source !== null
+          ? h.source
+          : (h.sourceId !== undefined && h.sourceId !== null ? h.sourceId : '');
+        const hit = new Source(src, h.score, h.snippet);
+        hit.id = h.id !== undefined ? h.id : '';
+        hit.dim = h.dim !== undefined ? h.dim : -1;
+        hits.push(hit);
       }
     }
     r.hits = hits;

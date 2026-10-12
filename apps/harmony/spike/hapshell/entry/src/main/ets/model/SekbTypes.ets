@@ -22,6 +22,9 @@ export class Source {
   sourceId: string = '';
   score: number = 0;
   snippet: string = '';
+  /** 命中的切片 id（`<sourceId>#<片号>`）与向量维度——诊断用（2026-10-26 主线加）。 */
+  id: string = '';
+  dim: number = -1;
 
   constructor(sourceId: string = '', score: number = 0, snippet: string = '') {
     this.sourceId = sourceId;

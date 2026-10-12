@@ -298,6 +298,11 @@ object SekbApp {
                 for (h in out.hits) {
                     val e = JsonObject()
                     e.put("source", h.sourceId)
+                    // ⚠️ **带上命中的 id 与向量维度**（2026-10-26 主线加）：`source` 为空时，
+                    //    只靠它分不清是"命中了错误/遗留的行"还是"向量是零向量"。
+                    //    `id` 形如 `<sourceId>#<片号>`，一眼能看出命中的是哪篇文档的哪一片。
+                    e.put("id", h.id)
+                    e.put("dim", h.id.let { st -> s.store.all().firstOrNull { it.id == h.id }?.vector?.size ?: -1 })
                     e.put("score", h.score)
                     e.put("snippet", h.text.take(160))
                     arr.put(e)
