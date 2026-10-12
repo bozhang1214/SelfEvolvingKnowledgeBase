@@ -96,12 +96,18 @@ fun sekbSpikeH3Probe(
         if (want < 0) "GET ${url} → code=${got}（期望**非 2xx**；若变绿说明这条判据是摆设）"
         else "GET ${url} → code=${got}（期望 ${want}）",
     )
-    if (want >= 0) {
+    // ⚠️ `__body` / `__fields` **只对 2xx 期望值断言**。
+    //    第一版对"期望 404"的反向验证也加这两条 → `__fields` 必然 FAIL（404 的响应体里没有字段），
+    //    于是整段报 `H3 FAIL 2/3`。而当时的脚本判定只看 `tail -1` 的头部行，
+    //    把这段的 FAIL **藏起来了**（判据"看起来绿"）。修了两处：
+    //      ① 这里不再对非 2xx 期望值断言 body/fields（语义上本就不适用）；
+    //      ② `scripts/harmony.sh net` 改为取**全部** `H3 (PASS|FAIL) n/N` 头部行并显式拒绝任何 FAIL。
+    if (want in 200..299) {
         r.check(
             "${name}__body",
             bytes < 0 || (bytes > 0 && chars > 0),
             "响应体：ArkTS 声明 ${bytes}B、Kotlin 侧 ${chars} 字符" +
-                "（0 = 响应体丢了；响应体的**逐字节**完整性另由下面的 sse 行数判据钉住）",
+                "（0 = 响应体丢了；响应体的**逐字节**完整性另由 sse 行数判据钉住）",
         )
         r.check(
             "${name}__fields",

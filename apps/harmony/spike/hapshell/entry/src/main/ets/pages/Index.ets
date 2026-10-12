@@ -223,6 +223,7 @@ struct Index {
       const missFrame: string = await probeBuffered(missUrl, NET_TIMEOUT_S);
       const missHead: string = missFrame.split('\n')[0];
       const missCode: string = missHead.split(' ')[1] !== undefined ? missHead.split(' ')[1] : '-1';
+      // 404 是反向验证：只需断言状态码（非 2xx 期望值不再断言 body/fields，见 H3NetSelfTest.kt 注释）
       acc += this.emit(knspike.h3Probe(
         'transport_refuses_404', missUrl, '404', missCode, '-1', '-1', '0')) + '\n';
 

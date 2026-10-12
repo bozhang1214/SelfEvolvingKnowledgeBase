@@ -1478,40 +1478,56 @@ bash scripts/harmony.sh net 30
 
 ```
 ── 1/4 第 1 轮：首跑（HUKS 生成/复用密钥 + 凭证写盘） ──
-   H3:   H3 PASS 3/3
+   H3:   H3 PASS 1/1;H3 PASS 3/3;
+   CRED: CRED PASS 8/8;
    ── 明细 ──
 PASS transport_get_host_ollama — GET http://127.0.0.1:11434/api/tags → code=200（期望 200）
 PASS transport_get_host_ollama__body — 响应体：ArkTS 声明 3474B、Kotlin 侧 3474 字符
 PASS transport_get_host_ollama__fields — 共享层口径的字段解析出来=true（device_id/device_token/expires_in_hours）
-PASS transport_refuses_bad_endpoint — GET http://127.0.0.1:9/api/tags → code=-1（期望**非 2xx**）
+PASS transport_refuses_bad_endpoint — GET http://127.0.0.1:9/api/tags → code=-1（期望**非 2xx**；若变绿说明这条判据是摆设）
 PASS transport_refuses_404 — GET http://127.0.0.1:11434/api/does-not-exist → code=404（期望 404）
-PASS transport_stream_lines — http://127.0.0.1:11434/api/chat → code=200；ArkTS 切出 **3 行**、Kotlin 经 NAPI 收到 **3 行**
+PASS transport_stream_lines — http://127.0.0.1:11434/api/chat → code=200；ArkTS 切出 **4 行**、Kotlin 经 NAPI 收到 **4 行**（两者都必须 >0）
 PASS transport_sse_shared_parser — 共享层 SseParser 解析 9 行夹具 → 4 个事件：thinking/token/token/done
 PASS transport_sse_event_fields — done 事件字段：conversation_id=conv-h3、execution.primary_plane=cloud
 PASS huks_binding — cinterop 直链 libhuks_ndk.z.so（DT_NEEDED）
-PASS huks_key_ready — 本次在设备密钥库新建 AES-256-GCM 密钥（alias=sekb_ohos_credential_aes_gcm_v1）
+PASS huks_key_ready — 设备密钥库里已有密钥（跨进程存活=持久）
 PASS huks_encrypt_decrypt_roundtrip — 明文=47B → 密文容器=81B（nonce 12 + tag 16 + 密文 47） → 解回=47B，逐字节相同=true
-PASS huks_ciphertext_hides_plaintext — 密文容器前 8 字节=534b42310c10ae09；明文串不可见=true
+PASS huks_ciphertext_hides_plaintext — 密文容器前 8 字节=534b42310c102f77；明文串不可见=true
 PASS credential_codec_roundtrip — 共享层 CredentialCodec：encode=70 字符（3 个分隔符）→ decode 逐字段相同=true
-PASS credential_store_save_load — save → load：ohos-dev-1791778729456/tok=ohos-tok…(24)
-PASS credential_restart — 本轮 load() 读到了上一次进程写盘的凭证（首轮已写入，见下）
+PASS credential_store_save_load — save → load：ohos-dev-1791778729456/tok=ohos-tok…(24)（device_id/token 都非空=true）
+PASS credential_restart — **本轮 load() 读到了上一次进程写盘的凭证**：ohos-dev-1791778729456/…（HUKS 解密成功 ⇒ 密钥与密文都跨进程存活）
 PASS credential_store_persists — 本轮**未** clear（清掉就验不了「重启后仍有效」）
 
 ── 2/4 第 2 轮：force-stop 后重启、**不重装**（验「重启后仍有效」） ──
-   H3:   H3 PASS 3/3
-   CRED: CRED PASS 8/8
-PASS transport_stream_lines — http://127.0.0.1:11434/api/chat → code=200；ArkTS 切出 **4 行**、Kotlin 经 NAPI 收到 **4 行**
-PASS credential_restart — **本轮 load() 读到了上一次进程写盘的凭证**：
-     ohos-dev-1791778729456/tok=ohos-tok…(24)（HUKS 解密成功 ⇒ 密钥在设备密钥库、密文在私有目录，两者都跨进程存活）
+   H3:   H3 PASS 1/1;H3 PASS 3/3;
+   CRED: CRED PASS 8/8;
 
 ── 判定 ──
-   ✅ H3 首轮：H3 PASS 3/3
-   ✅ H3 次轮：H3 PASS 3/3
-   ✅ H4：CRED PASS 8/8
+   ✅ H3 首轮：H3 PASS 1/1;H3 PASS 3/3;
+   ✅ H3 次轮：H3 PASS 1/1;H3 PASS 3/3;
+   ✅ H4：CRED PASS 8/8;
 
 ✅ H3（网络端口）+ H4（HUKS 凭证端口）自检通过（明细 FAIL=0）
 ```
 
+> `H3 PASS 1/1;H3 PASS 3/3;` 是**四段** H3 报告里的两种形状（`sort -u` 去过重）：
+> ① `GET /api/tags` = 3 条断言（状态码 + 响应体 + 共享层字段）② 坏端点 = 1 条
+> ③ 404 = 1 条（非 2xx 期望值不再断言 body/fields，见下）④ 流式 = 3 条。**没有任何一段是 FAIL。**
+
+### ⚠️ 本轮最重要的一条：**判据被"最后一行的假绿"掩盖过**
+
+第一版 `scripts/harmony.sh net` 的判定写成 `grep -a 'H3 ' | head -1`（只看最后一段报告的首行），
+于是 `H3 FAIL 2/3` 与 `H3 PASS 3/3` **同时存在**时，脚本报的仍是"✅ H3 PASS"。
+真实缺陷是：`transport_refuses_404` 的期望码是 404（非 2xx），而 `h3Probe` **无差别**地
+对每个探针都断言 `__body` / `__fields` —— 404 的响应体里当然没有 `device_id`，
+于是 `__fields` 必然 FAIL。两处都修了：
+
+* `H3NetSelfTest.kt`：`__body`/`__fields` **只对 2xx 期望值断言**（非 2xx 期望值语义上不适用）；
+* `scripts/harmony.sh net`：判定改为取**全部** `H3 (PASS|FAIL) n/N` 头部行，
+  并**显式拒绝任何一段 FAIL**（不再只看最后一行）。
+
+> 这条与本仓库已有的两条教训同源（H6 的"`cos<0.95` 就算过"、H2 的"没断言也会全绿"）：
+> **判据本身的写法要被当成待测对象**。
 > 两轮的 `device_id` **逐字符相同**（`ohos-dev-1791778729456`）= 次轮读到的是首轮写下的凭证。
 > 前置条件：宿主 Ollama 在线且 `hdc rport tcp:11434 tcp:11434` 成功（`net` 动作会先探测并打印）。
 

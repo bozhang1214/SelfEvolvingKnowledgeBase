@@ -665,16 +665,25 @@ net() {
         sleep "${wait_s}"
         # ⚠️ 轮询等两行头部（实测踩过：H3 先出、CRED 是一百多毫秒之后才打完，
         #    单次抓取会抓到空的 CRED 行 —— 那是**抓取竞态**，不是自检失败）。
+        # 取**全部**头部行（不是 tail -1）：H3 有三段报告（GET / 坏端点 / 404 / 流式），
+        # 只看最后一行会把前面几段的状态藏起来——UI/凭证那轮就踩过"首行 PASS、后面有 FAIL"。
         local h3 cred tries
         h3=""; cred=""
         for tries in 1 2 3 4 5 6 7 8; do
-            h3="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'H3 ' | tail -1 || true)"
-            cred="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a 'CRED ' | tail -1 || true)"
+            h3="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -aoE 'H3 (PASS|FAIL) [0-9]+/[0-9]+' | sort -u | tr '\n' ';' || true)"
+            cred="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -aoE 'CRED (PASS|FAIL) [0-9]+/[0-9]+' | sort -u | tr '\n' ';' || true)"
             if [ -n "${h3}" ] && [ -n "${cred}" ]; then break; fi
             sleep 2
         done
-        echo "   H3:   ${h3##*SEKB_KN_SPIKE: }"
-        echo "   CRED: ${cred##*SEKB_KN_SPIKE: }"
+        # 明确的红：任何一段 H3/CRED 报 FAIL 都不放过（不是只看最后一行）
+        if echo "${h3}" | grep -aq 'H3 FAIL'; then
+            echo "   ❌ 有 H3 段报 FAIL：${h3}"; bad_h3=1
+        fi
+        if echo "${cred}" | grep -aq 'CRED FAIL'; then
+            echo "   ❌ 有 CRED 段报 FAIL：${cred}"; bad_h3=1
+        fi
+        echo "   H3:   ${h3}"
+        echo "   CRED: ${cred}"
         local d3 dc nfail
         d3="$("$HDC" shell "hilog -x" 2>/dev/null | grep -a "$TAG" | grep -a -E 'PASS (transport_|huks_|credential_|layout_)' | tail -30 || true)"
         echo "   ── 明细 ──"
@@ -685,6 +694,7 @@ net() {
 
     ollama_forward
     LAST_NFAIL=0
+    bad_h3=0
     LAST_H3=""; LAST_CRED=""
     round 1 "第 1 轮：首跑（HUKS 生成/复用密钥 + 凭证写盘）"
     local r1_h3="${LAST_H3}" r1_cred="${LAST_CRED}"
@@ -694,22 +704,23 @@ net() {
     echo
     echo "── 判定 ──"
     local bad=0
-    if echo "${r1_h3}" | grep -aq 'H3 PASS'; then
-        echo "   ✅ H3 首轮：$(echo "${r1_h3}" | sed 's/.*SEKB_KN_SPIKE: //')"
+    if [ -n "${r1_h3}" ] && ! echo "${r1_h3}" | grep -aq 'H3 FAIL'; then
+        echo "   ✅ H3 首轮：${r1_h3}"
     else
         echo "   ❌ H3 首轮没有 PASS 行（行='${r1_h3}'）"; bad=1
     fi
-    if echo "${r2_h3}" | grep -aq 'H3 PASS'; then
-        echo "   ✅ H3 次轮：$(echo "${r2_h3}" | sed 's/.*SEKB_KN_SPIKE: //')"
+    if [ -n "${r2_h3}" ] && ! echo "${r2_h3}" | grep -aq 'H3 FAIL'; then
+        echo "   ✅ H3 次轮：${r2_h3}"
     else
         echo "   ❌ H3 次轮没有 PASS 行（行='${r2_h3}'）"; bad=1
     fi
-    if echo "${r2_cred}" | grep -aq 'CRED PASS'; then
-        echo "   ✅ H4：$(echo "${r2_cred}" | sed 's/.*SEKB_KN_SPIKE: //')"
+    if [ -n "${r2_cred}" ] && ! echo "${r2_cred}" | grep -aq 'CRED FAIL'; then
+        echo "   ✅ H4：${r2_cred}"
     else
         echo "   ❌ H4 没有 PASS 行（行='${r2_cred}'）"; bad=1
     fi
     [ "${nfail}" = "0" ] || { echo "   ❌ 明细里有 ${nfail} 个 FAIL 项（见上）"; bad=1; }
+    [ "${bad_h3}" = "0" ] || { echo "   ❌ 有 H3/CRED 段报 FAIL（见上）"; bad=1; }
     [ "${bad}" = "0" ] || die "❌ H3/H4 自检未通过（原始输出见上；**不要**把 FAIL 当 SKIP 放过）"
     echo
     echo "✅ H3（网络端口）+ H4（HUKS 凭证端口）自检通过（明细 FAIL=0）"
