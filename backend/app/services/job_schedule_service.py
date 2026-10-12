@@ -135,7 +135,10 @@ def filter_layer_jobs(
         if include_any and not any(k in title for k in include_any):
             _drop("不含 include_any")
             continue
-        if exclude and any(k in title for k in exclude):
+        # exclude 同时匹配「标题」与「公司」：像「北京加拿大国际学校」这种噪声只出现在公司名上，
+        # 只查标题会让这类排除词形同虚设（公司名不会包含「产品经理」等词，所以放宽无副作用）。
+        haystack = title + " " + (j.get("company") or "")
+        if exclude and any(k in haystack for k in exclude):
             _drop("命中 exclude")
             continue
         if require_ai and not any(k in title for k in ai_exempt):
@@ -155,17 +158,82 @@ def filter_layer_jobs(
 
 
 # ============================================================
+# 标题归一化与去重
+# ============================================================
+
+#: 官方直招源（这些源的岗位信息更准，去重冲突时优先保留）
+_OFFICIAL_SOURCES = ("字节", "阿里", "腾讯", "百度", "小米", "小红书", "美团", "京东", "快手")
+#: 匿名公司前缀（猎聘的「某北京互联网公司」这类）——此时公司名无区分度，只能按标题去重
+_ANON_COMPANY_RE = re.compile(r"^某")
+
+
+def normalize_title(title: str) -> str:
+    """标题归一化，用于跨源/跨关键词判重。"""
+    s = (title or "").strip().lower()
+    # 统一各种连字符与括号，避免「FDE‑AI」与「FDE-AI」被当成两个岗位
+    s = s.replace("‑", "-").replace("–", "-").replace("—", "-")
+    s = s.replace("（", "(").replace("）", ")").replace("【", "[").replace("】", "]")
+    s = re.sub(r"[\s·・]+", "", s)
+    return s
+
+
+def job_identity(job: dict[str, Any]) -> str:
+    """职位的判重身份。
+
+    **不要用 job_url**：智联/猎聘的 URL 带搜索上下文，同一个岗位在不同关键词下
+    URL 不同 —— 实测「纷美(北京)贸易 FDE工程师」因此在缓存里重复了 11 次。
+    改用「标题 + 公司」；公司的匿名写法（「某北京互联网公司」）没有区分度，
+    此时退化为只按标题判重（与 2026-09-23 手工策展的口径一致）。
+    """
+    title = normalize_title(job.get("title") or "")
+    if not title:
+        return ""  # 无标题无法判重，交由 dedupe_jobs 丢弃
+    company = (job.get("company") or "").strip()
+    if not company or _ANON_COMPANY_RE.match(company):
+        return title
+    return f"{title}@{company.lower()}"
+
+
+def dedupe_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按 :func:`job_identity` 去重；同一岗位多源出现时**优先保留官方直招源**。
+
+    官方站的信息更准（薪资/职责/是否下线），猎聘/智联多为转载且 URL 易变。
+    """
+    best: dict[str, dict[str, Any]] = {}
+    for j in jobs:
+        key = job_identity(j)
+        if not key:
+            continue
+        cur = best.get(key)
+        if cur is None:
+            best[key] = j
+            continue
+        cur_official = any(s in (cur.get("source") or "") for s in _OFFICIAL_SOURCES)
+        new_official = any(s in (j.get("source") or "") for s in _OFFICIAL_SOURCES)
+        if new_official and not cur_official:
+            best[key] = j
+    return list(best.values())
+
+
+# ============================================================
 # 单层刷新 / 全部刷新
 # ============================================================
 
 
 async def refresh_one_layer(
-    ctx: Any, user_id: str, layer: Any, *, force_analyze: bool = True
+    ctx: Any,
+    user_id: str,
+    layer: Any,
+    *,
+    force_analyze: bool = True,
+    source_jobs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """刷新单层：采集 → 筛选 → 落库 → 重跑分析 → 存档。"""
-    from app.agents.job.archive import save_report
-    from app.agents.job.market import analyze_market, delete_report
+    """刷新单层：采集 → 筛选 → 去重 → 落库 → 重跑分析 → 存档。
 
+    ``source_jobs`` 提供时**跳过采集**，直接对给定职位套用当前筛选/去重规则。
+    用途：调整了层规则（include/exclude/薪资等）后，想立刻让线上列表按新规则生效，
+    又不想为此再抓一遍站点（重复抓取正是猎聘封禁的成因）。
+    """
     cfg = ctx.config.job
     label = str(layer.label).strip()
     city = (getattr(layer, "city", "") or cfg.default_city).strip()
@@ -181,6 +249,15 @@ async def refresh_one_layer(
     kept: list[dict[str, Any]] = []
     dropped: dict[str, int] = {}
     pages = 0
+    if source_jobs is not None:
+        # 复用模式：不再采集，只重新套用规则
+        kept, dropped = filter_layer_jobs(source_jobs, layer)
+        collected = len(source_jobs)
+        unique = dedupe_jobs(kept)
+        return await _finalize_layer(
+            ctx, user_id, layer, label, city, min_salary_k, keywords,
+            collected, pages, dropped, unique, force_analyze,
+        )
     for kw in keywords:
         collector = JobCollector(
             city=city,
@@ -208,15 +285,31 @@ async def refresh_one_layer(
         for k, v in d.items():
             dropped[k] = dropped.get(k, 0) + v
 
-    # 跨关键词去重（按 job_url，其次 title+company）
-    seen: set[str] = set()
-    unique: list[dict[str, Any]] = []
-    for j in kept:
-        key = j.get("job_url") or f"{j.get('title', '')}@{j.get('company', '')}"
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(j)
+    # 跨关键词去重：按「标题+公司」（**不能用 job_url**，原因见 job_identity）
+    unique = dedupe_jobs(kept)
+    return await _finalize_layer(
+        ctx, user_id, layer, label, city, min_salary_k, keywords,
+        collected, pages, dropped, unique, force_analyze,
+    )
+
+
+async def _finalize_layer(
+    ctx: Any,
+    user_id: str,
+    layer: Any,
+    label: str,
+    city: str,
+    min_salary_k: int,
+    keywords: list[str],
+    collected: int,
+    pages: int,
+    dropped: dict[str, int],
+    unique: list[dict[str, Any]],
+    force_analyze: bool,
+) -> dict[str, Any]:
+    """落库 + 重跑分析 + 存档（采集与复用两条路径共用）。"""
+    from app.agents.job.archive import save_report
+    from app.agents.job.market import analyze_market, delete_report
 
     key = cache_key(user_id, label, city, min_salary_k)
     search_id = make_search_id(key)
