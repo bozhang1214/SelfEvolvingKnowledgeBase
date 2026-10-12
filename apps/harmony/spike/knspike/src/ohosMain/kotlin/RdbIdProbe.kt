@@ -51,6 +51,12 @@ fun sekbSpikeRdbIdProbe(databaseDir: String, runTag: String): String {
     val dbName = "sekb_idp_${(runTag.hashCode() and 0xFFFFFF).toString(16)}.db"
     r.note("库=$dbName dir=$databaseDir")
 
+    // ⚠️ **`delete` 之后再 `open`：实测删不干净**（2026-10-26 主线取证）：
+    //    探针库名每轮唯一（`sekb_idp_<tag>`），但打开后 `all()` 却读到 **3 条上一轮的 `__selftest__` 行**
+    //    （`dim=512`，来自自检库 `sekb_docs.db`）→ 说明 `OH_Rdb_DeleteStore` 没真的清掉，
+    //    或者屏幕内的句柄仍指向旧文件。这是"自检库跨轮带脏数据"的**直接证据**，
+    //    也是 `rag_retrieve` 看起来能命中（0.696）的原因之一：它命中的是**残留行**。
+    //    这里把 open 后的**初始条数**报出来（期望 0）——它就是"库是否干净"的判据。
     RdbStore.delete(databaseDir, dbName)
     var (store, err) = RdbStore.open(databaseDir, dbName)
     if (store == null) {
@@ -80,6 +86,15 @@ fun sekbSpikeRdbIdProbe(databaseDir: String, runTag: String): String {
 
     val vs = RdbVectorStore(databaseDir, com.sekb.shared.embed.EmbeddingSpace("probe@3", 3), dbName)
     r.note("space=${vs.space.id} dim=${vs.space.dim}")
+    // **库干净性判据**（期望 0）：delete+open 之后不该有任何行。非 0 说明删除没生效/句柄仍指旧数据。
+    val initRows = runCatching { vs.size() }.getOrElse { -1 }
+    val initAll = runCatching { vs.all().map { it.id } }.getOrElse { emptyList() }
+    r.check(
+        "fresh_db_is_empty",
+        initRows == 0 && initAll.isEmpty(),
+        "delete+open 后条数=$initRows（期望 0）内容=${initAll.take(4)}" +
+            (if (initRows != 0) " ⇒ **库不干净**：上表所有断言都会被残留数据污染" else ""),
+    )
 
     // ① 写：一条已知记录（走生产路径 upsert → 纯 SQL INSERT OR REPLACE）
     vs.upsert(
