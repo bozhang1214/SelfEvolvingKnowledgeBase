@@ -184,10 +184,12 @@ PY
 }
 
 f_ios() {
-    step "iOS：framework + Swift 冒烟"
+    step "iOS：framework 冒烟 + **真 app 自检**"
     if ! have scripts/ios.sh; then
         record SKIP iOS "scripts/ios.sh smoke" "脚本不存在"; return
     fi
+
+    # ① framework + Swift 冒烟（秒级，验的是共享层纯逻辑跨到 iOS 框架）
     local log=/tmp/sekb-ios-smoke.log
     if bash scripts/ios.sh smoke >"$log" 2>&1; then
         local line; line="$(grep -E 'SMOKE (OK|FAIL)' "$log" | tail -1)"
@@ -197,11 +199,31 @@ f_ios() {
             record FAIL iOS "scripts/ios.sh smoke" "${line:-未见 SMOKE 结果行}"
         fi
     else
-        # 缺 Xcode/缺 ORT 属于环境限制 → SKIP 并写清缺什么
         if grep -qE 'requires Xcode|xcodebuild|缺少 ONNX Runtime|Operation not permitted' "$log"; then
             record SKIP iOS "scripts/ios.sh smoke" "环境限制：$(grep -m1 -oE 'requires Xcode|缺少 ONNX Runtime|Operation not permitted' "$log")"
         else
             record FAIL iOS "scripts/ios.sh smoke" "见 $log"
+        fi
+    fi
+
+    # ② **真 app 自检**（`ios_app.sh run`：起模拟器 → 装 → 跑 → 抓 `SEKB_IOS_SELFTEST`）
+    #    ⚠️ 2026-10-13 补：此前 iOS 只跑 ①，而 Mac 跑的是"真 app 自检"——**两端验收强度不对等**，
+    #    于是"IOS 测了吗"这个问题的诚实答案是"只测了 framework，没测 app"。
+    #    两个脚本都已 `export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`
+    #    （本机 `xcode-select` 指向 CommandLineTools，不设置的话 `xcrun simctl` 直接报
+    #    "unable to find utility simctl" —— 这正是我一开始误判"没有 iOS 模拟器"的原因）。
+    if ! have scripts/ios_app.sh; then
+        record SKIP iOS "scripts/ios_app.sh run" "脚本不存在"; return
+    fi
+    local alog=/tmp/sekb-ios-app.log
+    if bash scripts/ios_app.sh run >"$alog" 2>&1; then
+        local aline; aline="$(grep -oE 'SEKB_IOS_SELFTEST PASS=[0-9]+ FAIL=[0-9]+ SKIP=[0-9]+' "$alog" | tail -1)"
+        record PASS iOS "scripts/ios_app.sh run" "${aline:-自检已跑（未打印汇总行，见 $alog）}"
+    else
+        if grep -qE 'requires Xcode|unable to find utility|缺少 ONNX Runtime|Operation not permitted' "$alog"; then
+            record SKIP iOS "scripts/ios_app.sh run" "环境限制（见 ${alog}）"
+        else
+            record FAIL iOS "scripts/ios_app.sh run" "见 $alog"
         fi
     fi
 }
