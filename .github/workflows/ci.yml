@@ -228,18 +228,33 @@ jobs:
           pip install --upgrade pip
           pip install -e ".[dev]"
           pip install -r requirements.txt
-      - name: Run eval on golden dataset
+      # ⚠️ 这一步是**真门禁**（2026-10-15 起）。此前写的是
+      #   `python -m app.cli.main eval … || echo "eval non-blocking"`
+      # —— 无论通过率多少都 exit 0，评测接进 CI 了却拦不住任何退化（假门禁）。
+      # 现在：判据来自 eval-baseline.json（比对通过率与各指标，不允许下降超过
+      # --max-regression），基线缺失/读不出来时**同样判失败** —— 无法执行的门禁不算通过。
+      # 基线由 `python -m app.cli.main eval … --baseline eval-baseline.json --update-baseline`
+      # 建立；评测稳定后可用 --fail-under 再叠加绝对下限。
+      # --max-regression 0.1：评测依赖实时外部 LLM，503 抖动会让个别用例失败，
+      # 这不是代码退化。留 1/10 的容差以免门禁变成随机红；稳定后应收紧到 0。
+      - name: Run eval on golden dataset (blocking gate)
         working-directory: backend
+        timeout-minutes: 25
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
           JWT_SECRET: eval-secret
         run: |
-          if [ -f tests/fixtures/golden_qa.json ] || [ -f app/eval/datasets/golden_qa.json ]; then
-            python -m app.cli.main eval --dataset app/eval/datasets/golden_qa.json || echo "eval non-blocking"
-          else
-            echo "golden dataset not found, skipping eval"
+          if [ ! -f app/eval/datasets/golden_qa.json ]; then
+            echo "::error::golden dataset 缺失，评测门禁无法执行（不允许静默通过）"
+            exit 1
           fi
+          python -m app.cli.main eval \
+            --dataset app/eval/datasets/golden_qa.json \
+            --output tests/reports/eval_report.md \
+            --baseline eval-baseline.json \
+            --max-regression 0.1 \
+            --fail-under 0.1
 
   # ============ 构建并推送 Docker 镜像 ============
   build:

@@ -1,0 +1,37 @@
+{
+  "pass_rate": 0.1,
+  "total": 10,
+  "passed": 1,
+  "metrics": {
+    "intent_confidence": 0.95,
+    "plan_step_count": 0.0,
+    "replan_count": 0.0,
+    "tool_success_rate": 1.0,
+    "answer_groundedness": 1.0,
+    "critic_coherence_score": 10.0,
+    "answer_relevance": 1.0,
+    "e2e_latency_ms": 16120.0,
+    "total_input_tokens": 1019.0,
+    "total_output_tokens": 390.0,
+    "total_cost_usd": 0.0003
+  },
+  "fingerprint": {
+    "commit": "unknown",
+    "prompt_md5": "dba7aebeb6af",
+    "prompt_files": 18,
+    "job_profile_md5": "ec734afc3c5b",
+    "dataset_md5": "5b6e4f433244",
+    "dataset_name": "golden_qa.json"
+  },
+  "_note": [
+    "本基线由 2026-10-15 在腾讯云生产容器内实测生成（python -m app.cli.main eval --update-baseline）。",
+    "⚠️ 当前评测**本身不可靠**：10 个用例耗时 1636s，9 个因单用例超时失败（默认 180s），",
+    "   期间 DeepSeek 返回 503「Service is too busy」并触发重试退避 —— 因此 pass_rate 只有 0.1。",
+    "   这不代表应用质量如此，而是评测依赖的实时外部 LLM 不稳定 + 工具调用挂起。",
+    "含义：门禁目前是**防『比现状更差』**（回归门禁），不是质量下限。",
+    "下一步（提高门槛的必要前提）：① 定位挂起的工具/调用并加超时与快速失败；",
+    "   ② LLM 503 用指数退避重试；③ 评测稳定后跑 --update-baseline 把基线拉回真实水平，",
+    "   再考虑叠加 --fail-under 绝对下限。",
+    "commit 字段为 unknown 是因为容器镜像内没有 .git（非缺陷）。"
+  ]
+}
