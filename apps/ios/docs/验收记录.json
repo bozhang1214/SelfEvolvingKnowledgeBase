@@ -21,6 +21,18 @@
         "keychain_roundtrip"
       ],
       "设备": "ED4902A5-8BF0-48BA-9FC2-73CCD53AAE7D"
+    },
+    {
+      "commit": "b632325fe08a6427c9e1216517d1a43435b9cac8",
+      "时间": "2026-10-15T09:34:37+08:00",
+      "命令": "bash scripts/ios_app.sh run",
+      "pass": 42,
+      "fail": 0,
+      "skip": 1,
+      "SKIP项": [
+        "keychain_roundtrip"
+      ],
+      "设备": "ED4902A5-8BF0-48BA-9FC2-73CCD53AAE7D"
     }
   ]
 }
