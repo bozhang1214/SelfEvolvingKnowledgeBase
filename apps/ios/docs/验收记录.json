@@ -1,0 +1,26 @@
+{
+  "_说明": [
+    "iOS app 级自检的**实测记录**（方案 C：登记式，不做 CI 门禁）。",
+    "为什么需要它：iOS/Mac/鸿蒙 三端都需要 Xcode/模拟器这类重环境，Linux CI 上跑不了；",
+    "所以它们的验收只能靠人跑——但'靠人记'容易漏（本项目真漏过：我汇报过 iOS，实际只跑了 framework 冒烟）。",
+    "这份记录把'跑过没有'变成**机器可判**：每条带 commit SHA，校验脚本会检查",
+    "'自那次通过以来，iOS 相关文件有没有再被改过'。改了就是陈旧，校验会报出来。",
+    "",
+    "写入方式（不要手写，避免格式漂移）：bash scripts/ios_record.py run",
+    "校验方式：bash scripts/ios_record.py check   （已挂进 scripts/verify_all_ends.sh quick）"
+  ],
+  "记录": [
+    {
+      "commit": "dd383dbfa0e2bc7e5651b7c89d1a590e3cd00d69",
+      "时间": "2026-10-15T09:26:42+08:00",
+      "命令": "bash scripts/ios_app.sh run",
+      "pass": 42,
+      "fail": 0,
+      "skip": 1,
+      "SKIP项": [
+        "keychain_roundtrip"
+      ],
+      "设备": "ED4902A5-8BF0-48BA-9FC2-73CCD53AAE7D"
+    }
+  ]
+}

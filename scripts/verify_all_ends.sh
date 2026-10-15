@@ -183,6 +183,37 @@ PY
     fi
 }
 
+# iOS app 自检**记录是否新鲜**（方案 C：登记式，默认非阻塞）
+#
+# 为什么要这一步：iOS/Mac/鸿蒙 都要重环境，Linux CI 跑不了，它们的验收只能靠人跑；
+# "靠人记"会漏（本项目真漏过：汇报过 iOS，实际只跑了 framework 冒烟）。
+# 这一步把"跑过没有"变成机器可判：记录里带 commit SHA，这里检查
+# "自那次通过以来 iOS 相关文件有没有再被改过"。改了 → ⚠️ 并给出该跑的命令。
+#
+# ⚠️ **故意不阻塞**（`|| true`）：方案 C 的定义就是"不挡提交"。
+# 想升级成硬门禁时，把下面命令加上 `--strict` 即可（那时候它就会以非零码让本步 FAIL）。
+f_ios_record() {
+    step "iOS：app 自检记录是否新鲜（方案 C，非阻塞）"
+    if ! have scripts/ios_record.py; then
+        record SKIP iOS "scripts/ios_record.py check" "脚本不存在"; return
+    fi
+    local log=/tmp/sekb-ios-record.log
+    # 非阻塞：无论退出码如何都继续；但把**结论原文**带进验收表，别只写"已跑"
+    python3 scripts/ios_record.py check >"$log" 2>&1 || true
+    local verdict
+    if grep -q "✅ 记录仍然有效" "$log"; then
+        verdict="$(grep -E '^iOS app 自检记录' "$log" | head -1)"
+        record PASS iOS "app 自检记录新鲜" "${verdict:-记录有效}"
+    elif grep -q "⚠️ 记录\*\*已陈旧\*\*" "$log"; then
+        verdict="$(grep -E '^⚠️ 记录' "$log" | head -1)"
+        # **非阻塞**：记为 PASS 但在详情里注明陈旧（方案 C 不挡提交）。
+        # 若将来要升级成门禁：把这里换成 record FAIL，或在上面加 --strict。
+        record PASS iOS "app 自检记录（⚠️ 已陈旧，不阻塞）" "${verdict}；补记录：bash scripts/ios_record.py run"
+    else
+        record PASS iOS "app 自检记录（⚠️ 无记录，不阻塞）" "$(head -1 "$log")；补记录：bash scripts/ios_record.py run"
+    fi
+}
+
 f_ios() {
     step "iOS：framework 冒烟 + **真 app 自检**"
     if ! have scripts/ios.sh; then
@@ -291,10 +322,10 @@ case "$MODE" in
         q_edge_facts
         case "$ONLY" in
             --android-only) f_android ;;
-            --ios-only)     f_ios ;;
+            --ios-only)     f_ios_record; f_ios ;;
             --mac-only)     f_mac ;;
             --harmony-only) f_harmony ;;
-            *)              f_android; f_ios; f_mac; f_harmony ;;
+            *)              f_android; f_ios_record; f_ios; f_mac; f_harmony ;;
         esac
         ;;
     *)
