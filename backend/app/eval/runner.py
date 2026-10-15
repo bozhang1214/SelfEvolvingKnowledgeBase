@@ -24,7 +24,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -40,6 +42,16 @@ from app.eval.metrics import MetricsCollector
 from app.graph.state import ConversationMetrics, GraphState, create_initial_state
 
 logger = get_logger(__name__)
+
+
+#: 单条用例的**硬超时**（秒），可用环境变量覆盖。
+#:
+#: 2026-10-12 加：实测评测会在某条用例上**永久挂起**（第 2 条卡死 5 分钟以上、报告永不生成、
+#: 进程一直存活在 ep_poll）。没有超时的话这不是"慢"，是"永远不结束"——
+#: 在 CI 里 job 会一直挂着（GitHub Actions 默认上限 6 小时）。
+#: 挂住必须降级为"该用例失败"，让评测**一定终止**并给出可判定的结果。
+_CASE_TIMEOUT_S = float(os.getenv("SEKB_EVAL_CASE_TIMEOUT_S", "180"))
+
 
 
 # ============================================================
@@ -153,7 +165,9 @@ class EvalRunner:
         for case in test_cases:
             test_id = str(case.get("test_id", "unknown"))
             try:
-                result, metrics = await self._run_single_case(graph, case)
+                result, metrics = await asyncio.wait_for(
+                    self._run_single_case(graph, case), timeout=_CASE_TIMEOUT_S
+                )
                 results.append(result)
                 if metrics:
                     metrics_list.append(metrics)
@@ -162,6 +176,16 @@ class EvalRunner:
                     "用例执行完成",
                     test_id=test_id,
                     passed=result.passed,
+                )
+            except (asyncio.TimeoutError, TimeoutError):
+                # 超时也要有可读的失败原因（否则只看到"用例失败"不知道是挂住）
+                logger.error("用例执行超时", test_id=test_id, timeout_s=_CASE_TIMEOUT_S)
+                results.append(
+                    AssertionResult(
+                        test_id=test_id,
+                        passed=False,
+                        error=f"用例执行超时（>{_CASE_TIMEOUT_S:.0f}s）：疑似工具/外部调用挂起",
+                    )
                 )
             except Exception as e:
                 logger.error(

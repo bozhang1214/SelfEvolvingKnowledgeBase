@@ -26,6 +26,8 @@ CLI 主入口模块
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -110,9 +112,55 @@ def eval(
     config_path: str = typer.Option(
         "config.yaml", "--config", help="配置文件路径"
     ),
+    fail_under: float = typer.Option(
+        0.0, "--fail-under",
+        help="通过率下限（0=不检查）。不满足则退出码 1 —— 这就是「门禁」。",
+    ),
+    baseline: str = typer.Option(
+        "", "--baseline",
+        help="基线文件路径（比对通过率与各指标，防渐进退化；空=不比对）",
+    ),
+    max_regression: float = typer.Option(
+        0.0, "--max-regression",
+        help="相对基线允许的最大下降幅度（0=不允许下降）",
+    ),
+    metric_min: list[str] = typer.Option(
+        [], "--metric-min",
+        help="关键指标均值下限，可重复：--metric-min answer_groundedness=0.8",
+    ),
+    no_fail: bool = typer.Option(
+        False, "--no-fail",
+        help="只报告不阻断（本地调试用；CI 不要加这个）",
+    ),
+    update_baseline: bool = typer.Option(
+        False, "--update-baseline",
+        help="把本次结果写回基线文件（人工确认无退化后再用）",
+    ),
 ) -> None:
-    """运行评估测试。"""
-    from app.cli.eval import run_eval
+    """运行评估测试，并按判据执行门禁。"""
+    from app.cli.eval import print_gate_result, run_eval
+    from app.eval.gate import (
+        GateThresholds,
+        build_fingerprint,
+        evaluate_gate,
+        load_baseline,
+        make_baseline,
+    )
+
+    _baseline_path = Path(baseline) if baseline else None
+
+    # 解析 --metric-min name=value
+    metric_mins: dict[str, float] = {}
+    for item in metric_min:
+        if "=" not in item:
+            console.print(f"[red]--metric-min 格式应为 name=value，收到: {item}[/red]")
+            raise typer.Exit(code=1)
+        k, v = item.split("=", 1)
+        try:
+            metric_mins[k.strip()] = float(v)
+        except ValueError:
+            console.print(f"[red]--metric-min 的数值无法解析: {item}[/red]")
+            raise typer.Exit(code=1) from None
 
     async def _run() -> None:
         try:
@@ -121,10 +169,46 @@ def eval(
             console.print(f"[red]初始化失败: {e.message}[/red]")
             raise typer.Exit(code=1)
         try:
-            await run_eval(dataset, output, ctx)
+            fingerprint = build_fingerprint(dataset)
+            report = await run_eval(dataset, output, ctx, fingerprint)
+
+            base = load_baseline(baseline) if baseline else None
+            if baseline and base is None:
+                # 门禁跑不起来必须算失败 —— 否则又是「假门禁」
+                console.print(
+                    f"[red]❌ 基线文件无法读取: {baseline}；门禁无法执行，判失败[/red]"
+                )
+                if not no_fail:
+                    raise typer.Exit(code=1)
+            thresholds = GateThresholds(
+                pass_rate_min=fail_under,
+                metric_mins=metric_mins,
+                baseline=base,
+                max_regression=max_regression,
+                baseline_path=baseline,
+            )
+
+            if update_baseline and baseline:
+                payload = make_baseline(report, fingerprint)
+                _baseline_path.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                console.print(f"[green]基线已更新: {baseline}[/green]")
+
+            gate = evaluate_gate(report, thresholds)
+            print_gate_result(gate)
+            if gate.checks and not gate.ok:
+                console.print("[red]❌ 评测门禁未通过[/red]")
+                if not no_fail:
+                    raise typer.Exit(code=1)
+            elif gate.checks:
+                console.print("[green]✅ 评测门禁通过[/green]")
         except SEKBError as e:
             console.print(f"[red]评估失败: {e.message}[/red]")
             raise typer.Exit(code=1)
+        except typer.Exit:
+            raise
         except Exception as e:
             console.print(f"[red]评估意外错误: {e}[/red]")
             raise typer.Exit(code=1)

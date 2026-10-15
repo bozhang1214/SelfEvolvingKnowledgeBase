@@ -20,7 +20,9 @@ LLM 工厂模块
 """
 
 import asyncio
+import os
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
@@ -80,6 +82,16 @@ class LLMCallRecord:
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+#: 单次调用记录（``LLMCallStats.records``）的**保留上限**。
+#:
+#: 2026-10-12 修：原先用无界 ``list`` 且每次调用 ``append``，长期运行的服务只增不减
+#: （内存持续增长）。改为定长 ``deque``。
+#: 但**不能只换成 deque**——原快照用 ``records[snapshot.records_len:]`` 下标切片取差值，
+#: 而定长队列会淘汰旧元素、下标随之错位。故 ``delta_stats`` 改用
+#: **单调递增的 total_calls 差值**定位（见该函数注释）。
+_RECORDS_MAXLEN = int(os.getenv("SEKB_LLM_RECORDS_MAXLEN", "2000"))
+
+
 @dataclass
 class LLMCallStats:
     """LLM 调用统计（累计）"""
@@ -93,7 +105,7 @@ class LLMCallStats:
     reasoner_calls: int = 0            # reasoner 模型调用次数（用于占比计算）
     retry_count: int = 0               # 总重试次数
     degradation_count: int = 0         # 总降级次数
-    records: list[LLMCallRecord] = field(default_factory=list)
+    records: deque[LLMCallRecord] = field(default_factory=lambda: deque(maxlen=_RECORDS_MAXLEN))
 
     @property
     def success_rate(self) -> float:
@@ -109,9 +121,15 @@ class LLMCallStats:
 
     @property
     def retry_rate(self) -> float:
-        """重试率：发生过重试的调用占总调用的比例"""
-        retried_calls = sum(1 for r in self.records if r.retried)
-        return retried_calls / self.total_calls if self.total_calls > 0 else 0.0
+        """重试率：**保留窗口内**发生过重试的调用占比。
+
+        分母用窗口长度（``len(records)``）而非 ``total_calls`` —— ``records`` 有上限后
+        两者口径不同，混用会得到一个既不是"全量"也不是"窗口"的数。
+        """
+        window = len(self.records)
+        if window == 0:
+            return 0.0
+        return sum(1 for r in self.records if r.retried) / window
 
     @property
     def degradation_rate(self) -> float:
@@ -137,7 +155,7 @@ class StatsSnapshot:
     reasoner_calls: int
     retry_count: int
     degradation_count: int
-    records_len: int
+    records_len: int  # 兼容保留；差值计算已改用 total_calls 单调计数（见 delta_stats）
 
 
 # ============================================================
@@ -741,7 +759,16 @@ class LLMFactory:
         Returns:
             包含 token 数、成本、延迟、重试/降级信息的差值字典
         """
-        delta_records = self.stats.records[snapshot.records_len:]
+        # 用**调用次数差值**定位本次请求新增的记录，而不是下标切片：
+        # records 现在是定长 deque（见 _RECORDS_MAXLEN），旧元素会被淘汰，
+        # `records[records_len:]` 会错位切到不属于本次请求的记录。
+        # 每次调用恰好 append 一条，所以"最近 delta_calls 条"就是本次新增的记录；
+        # 若本次新增超过窗口上限（极端情况），只能看到窗口内那部分——这几个字段只用于
+        # 展示与重试判定，截断不影响正确性。
+        delta_calls = self.stats.total_calls - snapshot.total_calls
+        delta_records: list[LLMCallRecord] = (
+            list(self.stats.records)[-delta_calls:] if delta_calls > 0 else []
+        )
         delta_retried = sum(1 for r in delta_records if r.retried)
         delta_degraded = sum(1 for r in delta_records if r.degraded)
         delta_models = list({r.model for r in delta_records})

@@ -19,6 +19,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -37,6 +39,7 @@ async def run_eval(
     dataset_path: str,
     output_path: str,
     ctx: AppContext,
+    fingerprint: dict | None = None,
 ) -> EvalReport:
     """
     运行评估流程并生成报告。
@@ -52,6 +55,7 @@ async def run_eval(
         dataset_path: 黄金数据集 JSON 文件路径
         output_path: 报告输出路径（Markdown）
         ctx: 应用上下文（提供所有已初始化的组件）
+        fingerprint: 评测指纹（commit / 提示词 / 画像 / 数据集），写入报告便于追溯退化来源
 
     Returns:
         EvalReport：评估报告对象
@@ -93,7 +97,7 @@ async def run_eval(
     # 3. 生成 Markdown 报告
     reporter = EvalReporter()
     markdown_body = reporter.generate_report(report.results, report.metrics_list)
-    full_report = _build_full_report(markdown_body, report, ctx)
+    full_report = _build_full_report(markdown_body, report, ctx, fingerprint)
 
     # 4. 保存报告
     try:
@@ -118,6 +122,7 @@ def _build_full_report(
     markdown_body: str,
     report: EvalReport,
     ctx: AppContext,
+    fingerprint: dict | None = None,
 ) -> str:
     """
     构建完整的 Markdown 报告。
@@ -129,10 +134,19 @@ def _build_full_report(
         markdown_body: EvalReporter 生成的 Markdown 主体
         report: EvalReport 对象
         ctx: 应用上下文
+        fingerprint: 评测指纹（可选）
 
     Returns:
         完整的 Markdown 报告字符串
     """
+    fp_lines = ""
+    if fingerprint:
+        # 没有指纹就无法判断「退化来自代码」还是「来自提示词/画像改动」
+        fp_lines = (
+            "\n## 评测指纹（判据可追溯）\n\n"
+            + "".join(f"- {k}: `{v}`\n" for k, v in fingerprint.items())
+            + "\n"
+        )
     header = (
         "# 自迭代个人知识库 Agent 评估报告\n\n"
         "## 运行环境\n\n"
@@ -144,7 +158,8 @@ def _build_full_report(
         f"## 摘要\n\n"
         f"{report.summary}\n\n"
         f"- 总耗时: {report.total_latency_ms} ms\n"
-        f"- 通过率: {report.pass_rate:.1%}\n\n"
+        f"- 通过率: {report.pass_rate:.1%}\n"
+        f"{fp_lines}\n"
     )
     return header + markdown_body
 
@@ -210,3 +225,23 @@ def _print_summary(report: EvalReport, output_path: str) -> None:
         console.print(agg_table)
 
     console.print()
+
+
+def print_gate_result(result: Any, *, thresholds: Any = None) -> None:
+    """把门禁逐项检查打到控制台（绿色通过 / 红色失败）。"""
+    table = Table(title="评测门禁", show_lines=False)
+    table.add_column("检查项", style="cyan", no_wrap=True)
+    table.add_column("实际", justify="right")
+    table.add_column("要求", justify="right")
+    table.add_column("结果", no_wrap=True)
+    for c in result.checks:
+        actual = "—" if c.actual is None else f"{c.actual}"
+        mark = "[green]✅ 通过[/green]" if c.ok else "[red]❌ 失败[/red]"
+        table.add_row(c.name, actual, c.expected, mark)
+    console.print(table)
+    for c in result.failures:
+        if c.detail:
+            console.print(f"  [red]· {c.name}: {c.detail}[/red]")
+    if not result.checks:
+        console.print("[yellow]⚠️ 未配置任何判据（--fail-under/--baseline 均未给）——"
+                      "本次评测**不构成门禁**[/yellow]")

@@ -75,14 +75,14 @@ llm_calls_total = Counter(
 llm_tokens_total = Counter(
     "sekb_llm_tokens_total",
     "Total LLM tokens used",
-    ["model", "direction"],  # direction: input | output
+    ["model", "direction", "role"],  # direction: input | output；role: 便于按 Agent 归因成本
 )
 
 # LLM 累计成本（美元），单调递增
 llm_cost_usd_total = Counter(
     "sekb_llm_cost_usd_total",
     "Total LLM cost in USD",
-    ["model"],
+    ["model", "role"],  # role: 回答"哪个 Agent 最烧钱"
 )
 
 # LLM 重试次数
@@ -257,27 +257,12 @@ def record_chat_metrics(result: dict) -> None:
         # 消息计数
         messages_total.labels(user_id="default", intent=intent, status="success").inc()
 
-        # LLM 指标（从 metrics 提取聚合数据）
-        total_input = metrics.get("total_input_tokens", 0)
-        total_output = metrics.get("total_output_tokens", 0)
+        # ⚠️ LLM 的 token / 成本 / 调用数 / 重试 / 降级**不在这里写**。
+        # 2026-10-12 修：本函数原先按"每次请求的聚合值"再写一遍这些指标，
+        # 而 LLMFactory._record_call 已经按"每次调用"写过同一批序列 —— 写的是**同一个
+        # Prometheus 序列**，于是同一笔 token/成本被记两次（聊天路径下虚高约 2×）。
+        # 唯一事实源 = record_llm_call（单次粒度、带 role，可归因到 Agent）。
         total_cost = metrics.get("total_cost_usd", 0.0)
-        models_used = metrics.get("model_used") or ["unknown"]
-
-        for model in models_used:
-            llm_tokens_total.labels(model=model, direction="input").inc(total_input)
-            llm_tokens_total.labels(model=model, direction="output").inc(total_output)
-            if total_cost > 0:
-                llm_cost_usd_total.labels(model=model).inc(total_cost)
-            llm_calls_total.labels(model=model, role="aggregate", status="success").inc()
-
-        # 重试与降级
-        if metrics.get("llm_retried"):
-            for model in models_used:
-                llm_retries_total.labels(model=model).inc(metrics.get("llm_retry_count", 1))
-        if metrics.get("llm_degraded"):
-            llm_degradations_total.labels(role="aggregate").inc(
-                metrics.get("llm_degradation_count", 1)
-            )
 
         # 质量指标
         groundedness = metrics.get("answer_groundedness")
@@ -359,11 +344,11 @@ def record_llm_call(
         llm_calls_total.labels(model=model, role=role, status=status).inc()
         llm_call_latency_seconds.labels(model=model, role=role).observe(latency_ms / 1000.0)
         if input_tokens > 0:
-            llm_tokens_total.labels(model=model, direction="input").inc(input_tokens)
+            llm_tokens_total.labels(model=model, direction="input", role=role).inc(input_tokens)
         if output_tokens > 0:
-            llm_tokens_total.labels(model=model, direction="output").inc(output_tokens)
+            llm_tokens_total.labels(model=model, direction="output", role=role).inc(output_tokens)
         if cost_usd > 0:
-            llm_cost_usd_total.labels(model=model).inc(cost_usd)
+            llm_cost_usd_total.labels(model=model, role=role).inc(cost_usd)
         if retried:
             llm_retries_total.labels(model=model).inc()
         if degraded:
